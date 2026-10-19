@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-server/
+*.log
+.env*
+.pseudoharness/
+tmp/
+playwright-report/
+test-results/
+docs/design/
