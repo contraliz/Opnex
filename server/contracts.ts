@@ -71,6 +71,7 @@ export const workerOutcomeSchema = z.object({
 });
 
 export const userTaskSchema = z.object({ message: text, taskId: z.string().uuid().optional() }).strict();
+export const sessionTitleSchema = z.object({ title: z.string().trim().min(1, 'Session name cannot be empty.').max(120, 'Session name must be 120 characters or fewer.') }).strict();
 export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(), z.number()]), decision: z.enum(['accept','decline','cancel']) }).strict();
 export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never';
 export const settingsSchema = z.object({
