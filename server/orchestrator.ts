@@ -20,7 +20,7 @@ export async function initialize(){
   codex.on('connected',()=>{codexState='connected';codexError=''; void refreshModels();});
   codex.on('disconnected',(e:string)=>{codexState='disconnected';codexError=safeError(e); void mutate(s=>s.tasks.forEach(t=>{if(['worker_running','planning','reviewing'].includes(t.phase)){t.phase='needs_attention';t.error='Codex app-server disconnected. Inspect the existing thread before resuming.';}}));});
   codex.on('serverRequest',(id:string|number,method:string,params:any)=>{void onServerRequest(id,method,params);});
-  codex.on('notification',(method:string,params:any)=>{if(method==='turn/completed') void onTurnCompleted(params); else if(method==='turn/started') void onTurnStarted(params); else if(method==='item/agentMessage/delta') void onProgress(params); else if(method==='item/reasoning/summaryTextDelta'||method==='item/reasoning/summaryPartAdded'||method==='item/completed'||method==='model/rerouted') void onReasoningSummary(method,params); if(method==='item/started'||method==='item/completed') void onProgress(params);});
+  codex.on('notification',(method:string,params:any)=>{if(method==='turn/completed') void onTurnCompleted(params); else if(method==='turn/started') void onTurnStarted(params); else if(method==='item/agentMessage/delta') void onProgress(params); else if(method==='item/reasoning/summaryTextDelta'||method==='item/reasoning/summaryPartAdded'||method==='item/reasoning/textDelta'||method==='item/completed'||method==='model/rerouted') void onReasoningSummary(method,params); if(method==='item/started'||method==='item/completed') void onProgress(params);});
   void codex.connect().catch(e=>{codexState='disconnected';codexError=safeError(e);});
   await refreshAgentMem();
 }
