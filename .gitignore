@@ -8,3 +8,4 @@ tmp/
 playwright-report/
 test-results/
 docs/design/
+.vitest/
