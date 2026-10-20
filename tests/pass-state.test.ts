@@ -24,7 +24,7 @@ describe('per-pass task state',()=>{
     expect(state.tasks.find(t=>t.id==='legacy-task')?.agentmemProjectId).toBe('configured-project');
   });
   it('preserves role-labeled visible answers for follow-ups while excluding assignments, receipts, and worker output',()=>{
-    const direct={...taskFixture().passes![0],id:'direct',index:1,userInput:'What is 1+1?',userInputs:['What is 1+1?','Do not delegate.'],resolution:'direct' as const,publicAnswer:'1 + 1 = 2.',reasoningSummaries:[{role:'orchestrator' as const,threadId:'orch',turnId:'turn',itemId:'reason',summaryIndex:0,text:'PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD',passId:'direct'}],assignment:{...assignment,outcome:'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD'},receipt:{...receipt,result:'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD'}};
+    const direct={...taskFixture().passes![0],id:'direct',index:1,userInput:'What is 1+1?',userInputs:['What is 1+1?','Do not delegate.'],resolution:'direct' as const,publicAnswer:'1 + 1 = 2.',reasoningSummaries:[{role:'orchestrator' as const,threadId:'orch',turnId:'turn',itemId:'reason',summaryIndex:0,text:'PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD',passId:'direct'}],reasoningRawContent:[{role:'orchestrator' as const,threadId:'orch',turnId:'turn',itemId:'reason',contentIndex:0,text:'PRIVATE_RAW_REASONING_SHOULD_NOT_FORWARD',passId:'direct'}],assignment:{...assignment,outcome:'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD'},receipt:{...receipt,result:'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD'}};
     const delegated={...taskFixture().passes![0],id:'delegated',index:2,userInput:'Return my requested result.',userInputs:['Return my requested result.'],reviewNote:'The requested result is 2.',resolution:'delegated' as const,phase:'accepted' as const,assignment:{...assignment,outcome:'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD'},receipt:{...receipt,result:'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD'}};
     const context=buildPriorConversationContext([direct,delegated],'current');
     const text=formatCurrentPassConversation('Double that result.',context);
@@ -36,6 +36,8 @@ describe('per-pass task state',()=>{
     expect(context[1].conversation_history).toEqual([{role:'user',content:'Return my requested result.'},{role:'assistant',content:'The requested result is 2.'}]);
     expect(text).not.toContain('PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD');
     expect(text).not.toContain('PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD');
+    expect(text).not.toContain('PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD');
+    expect(text).not.toContain('PRIVATE_RAW_REASONING_SHOULD_NOT_FORWARD');
     expect(text).not.toContain('PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD');
     expect(text).not.toContain('worker-one');
     expect(text).not.toContain('PRIVATE_WORKER_RESULT');

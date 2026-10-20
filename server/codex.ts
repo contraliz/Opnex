@@ -45,7 +45,7 @@ export class AppServer extends EventEmitter {
     await this.connect(); const params=makeThreadParams({role,root,model,approvalPolicy,ownedPolicy});
     const r=await this.request('thread/start',params); return String(r.thread.id);
   }
-  async resumeThread(threadId:string){await this.connect();const r=await this.request('thread/resume',{threadId,excludeTurns:true});return String(r.thread.id);}
+  async resumeThread(threadId:string){await this.connect();const r=await this.request('thread/resume',makeThreadResumeParams(threadId));return String(r.thread.id);}
   async startTurn(threadId:string,input:string,role:'orchestrator'|'worker',model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',root:string,writeRoots:string[]=[],approvalPolicy:ApprovalPolicy='on-request',schemaOverride?:unknown) {
     const schema=schemaOverride??(role==='orchestrator'? initialOrchestratorJsonSchema:workerOutcomeJsonSchema);
     const params=makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema});
@@ -59,9 +59,11 @@ export class AppServer extends EventEmitter {
 export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema}:{threadId:string;input:string;role:'orchestrator'|'worker';model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown}) {
   return {threadId,input:[{type:'text',text:input}],model,effort,summary:'detailed',outputSchema:schema,sandboxPolicy:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false},approvalPolicy};
 }
+export const REASONING_THREAD_CONFIG={model_reasoning_summary:'detailed',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true} as const;
 export function makeThreadParams({role,root,model,approvalPolicy,ownedPolicy}:{role:'orchestrator'|'worker';root:string;model:string;approvalPolicy:ApprovalPolicy;ownedPolicy?:string}){
-  return {cwd:root,model,approvalPolicy,sandbox:'read-only',allowProviderModelFallback:false,config:{model_reasoning_summary:'detailed',model_supports_reasoning_summaries:true},developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
+  return {cwd:root,model,approvalPolicy,sandbox:'read-only',allowProviderModelFallback:false,config:REASONING_THREAD_CONFIG,developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
 }
+export function makeThreadResumeParams(threadId:string){return {threadId,excludeTurns:true,config:REASONING_THREAD_CONFIG};}
 export function approvalResponse(method:string,requested:unknown,decision:'accept'|'decline'|'cancel'){
   if(method==='item/permissions/requestApproval')return {permissions:decision==='accept'&&requested&&typeof requested==='object'?requested:{},scope:'turn'};
   return {decision};
