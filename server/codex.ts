@@ -42,7 +42,7 @@ export class AppServer extends EventEmitter {
   respondServerError(id:string|number,code:number,message:string){ if(!this.child||this.child.killed) throw new Error('Codex app-server is not connected.'); this.child.stdin.write(JSON.stringify({id,error:{code,message}})+'\n'); }
   async models():Promise<Model[]> { await this.connect(); const all:Model[]=[]; let cursor:string|undefined; for(let i=0;i<10;i++){const r=await this.request('model/list',{cursor:cursor??null,limit:100,includeHidden:false}); all.push(...(r.data||[])); if(!r.nextCursor)break; cursor=r.nextCursor;} return all; }
   async startThread(role:'orchestrator'|'worker',root:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request',ownedPolicy?:string) {
-    await this.connect(); const params:any={cwd:root,model,approvalPolicy,sandbox:'read-only',allowProviderModelFallback:false,developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
+    await this.connect(); const params=makeThreadParams({role,root,model,approvalPolicy,ownedPolicy});
     const r=await this.request('thread/start',params); return String(r.thread.id);
   }
   async resumeThread(threadId:string){await this.connect();const r=await this.request('thread/resume',{threadId,excludeTurns:true});return String(r.thread.id);}
@@ -58,6 +58,9 @@ export class AppServer extends EventEmitter {
 
 export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema}:{threadId:string;input:string;role:'orchestrator'|'worker';model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown}) {
   return {threadId,input:[{type:'text',text:input}],model,effort,summary:'detailed',outputSchema:schema,sandboxPolicy:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false},approvalPolicy};
+}
+export function makeThreadParams({role,root,model,approvalPolicy,ownedPolicy}:{role:'orchestrator'|'worker';root:string;model:string;approvalPolicy:ApprovalPolicy;ownedPolicy?:string}){
+  return {cwd:root,model,approvalPolicy,sandbox:'read-only',allowProviderModelFallback:false,config:{model_reasoning_summary:'detailed',model_supports_reasoning_summaries:true},developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
 }
 export function approvalResponse(method:string,requested:unknown,decision:'accept'|'decline'|'cancel'){
   if(method==='item/permissions/requestApproval')return {permissions:decision==='accept'&&requested&&typeof requested==='object'?requested:{},scope:'turn'};

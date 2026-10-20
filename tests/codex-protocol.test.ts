@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AppServer, approvalResponse, buildOrchestratorDeveloperInstructions, makeTurnParams } from '../server/codex.js';
+import { AppServer, approvalResponse, buildOrchestratorDeveloperInstructions, makeThreadParams, makeTurnParams } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
 
 describe('Codex approval and turn configuration',()=>{
@@ -12,6 +12,16 @@ describe('Codex approval and turn configuration',()=>{
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
     for(const approvalPolicy of ['on-request','untrusted','never'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
     expect(settingsSchema.safeParse({...base,approvalPolicy:'custom'}).success).toBe(false);
+    expect(settingsSchema.parse({...base,agentmemProjectId:''}).agentmemProjectId).toBe('');
+    expect(settingsSchema.parse({...base,agentmemProjectId:'   '}).agentmemProjectId).toBe('');
+    expect(settingsSchema.safeParse({...base,agentmemProjectId:'x'.repeat(129)}).success).toBe(false);
+  });
+  it('requests readable reasoning summaries in each role thread without changing global configuration',()=>{
+    const orchestrator=makeThreadParams({role:'orchestrator',root:'D:/repo',model:'gpt-6-sol',approvalPolicy:'on-request',ownedPolicy:'policy'});
+    const worker=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request'});
+    expect(orchestrator.config).toEqual({model_reasoning_summary:'detailed',model_supports_reasoning_summaries:true});
+    expect(worker.config).toEqual(orchestrator.config);
+    expect(orchestrator.developerInstructions).toContain('policy');
   });
   it('serializes selected approval mode with read-only or bounded write sandbox',()=>{
     const readOnly=makeTurnParams({threadId:'t',input:'answer',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'}});

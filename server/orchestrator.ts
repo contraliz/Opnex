@@ -7,6 +7,7 @@ import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestr
 import { applyCodexReasoningNotification, beginReasoningTurn } from './reasoning.js';
 import { dispatchIntakeOutcome } from './intake.js';
 import { buildPriorConversationContext, formatCurrentPassConversation } from './pass-context.js';
+import { isAgentMemEnabled, scopedAgentMemContext } from './optional-agentmem.js';
 import path from 'node:path';
 
 const codex=new AppServer(); const agentmem=new AgentMem();
@@ -24,8 +25,8 @@ export async function initialize(){
   await refreshAgentMem();
 }
 async function refreshModels(){try{catalog=await codex.models();codexState='connected';codexError='';}catch(e){codexError=safeError(e);}}
-async function refreshAgentMem(){const s=getState();if(!s.settings.agentmemProjectId||!s.settings.projectRoot){agentmem.status={connected:false,projectVerified:false,detail:'Choose a project root and registered AgentMem ID in Settings.'};return;}try{await agentmem.connect(s.settings.agentmemProjectId,s.settings.projectRoot);}catch{}}
-async function taskContext(task:Task,query:string){await agentmem.connect(task.agentmemProjectId,task.userRoot);return agentmem.context(task.agentmemProjectId,query);}
+async function refreshAgentMem(){const s=getState();if(!s.settings.projectRoot){agentmem.status={connected:false,projectVerified:false,detail:'Choose a project root in Settings.'};return;}if(!s.settings.agentmemProjectId){agentmem.status={connected:false,projectVerified:false,detail:'Disabled · no AgentMem project selected'};return;}try{await agentmem.connect(s.settings.agentmemProjectId,s.settings.projectRoot);}catch{}}
+async function taskContext(task:Task,query:string){return scopedAgentMemContext(task.agentmemProjectId,async projectId=>{await agentmem.connect(projectId,task.userRoot);return agentmem.context(projectId,query);});}
 function model(id:string){return catalog.find(m=>m.id===id);}
 function requireModel(id:string,effort:string){const found=model(id);if(!found)throw new Error(`Model ${id} is not in the local Codex model catalog.`);if(!effortList(found).includes(effort))throw new Error(`Model ${id} does not advertise ${effort} reasoning effort.`);}
 function jsonFromTurn(turn:any){const raw=extractAssistantText(turn); if(!raw)throw new Error('Codex completed without a structured final message.'); try{return JSON.parse(raw);}catch{throw new Error('Codex final message was not valid JSON. No follow-up work was scheduled.');}}
@@ -81,6 +82,7 @@ async function onReasoningSummary(method:string,params:any){
 async function completeDirectAnswer(task:Task,answer:string,policyBasis:string){
   const criterion='The orchestrator answered the trivial request directly under the app-owned delegation policy.';
   await mutate(s=>{const x=s.tasks.find(a=>a.id===task.id)!;x.phase='accepted';x.resolution='direct';x.allowDirectResponse=false;x.routingNote=policyBasis;x.reviewNote='Answered directly by the orchestrator under the delegation policy. No Luna worker was started.';const p=currentPass(x);if(p)p.publicAnswer=answer;addMessage(x,'orchestrator',answer);});
+  if(!isAgentMemEnabled(task.agentmemProjectId))return;
   try{
     const work=await agentmem.createWork(task.agentmemProjectId,task.title,'Direct response under the app-owned delegation policy.',[],[criterion]);
     await mutate(s=>{const x=s.tasks.find(a=>a.id===task.id)!;x.agentmemTaskId=work.taskId;x.agentmemLease=work.lease;});
@@ -93,8 +95,8 @@ async function completeDirectAnswer(task:Task,answer:string,policyBasis:string){
 }
 async function completeDelegatedAssignment(task:Task,assignment:Assignment){
   const roots=assignmentWriteRoots(assignment,task.userRoot);
-  const work=task.agentmemTaskId&&task.agentmemLease?{taskId:task.agentmemTaskId,lease:task.agentmemLease}:await agentmem.createWork(task.agentmemProjectId,titleFor(task),assignment.outcome,roots.map(x=>path.relative(task.userRoot,x)||'.'),assignment.acceptance);
-  await mutate(s=>{const x=s.tasks.find(a=>a.id===task.id)!;x.assignment=assignment;x.resolution='delegated';x.allowDirectResponse=false;x.agentmemTaskId=work.taskId;x.agentmemLease=work.lease;addMessage(x,'orchestrator','Prepared a complete assignment.');});
+  const work=isAgentMemEnabled(task.agentmemProjectId)?(task.agentmemTaskId&&task.agentmemLease?{taskId:task.agentmemTaskId,lease:task.agentmemLease}:await agentmem.createWork(task.agentmemProjectId,titleFor(task),assignment.outcome,roots.map(x=>path.relative(task.userRoot,x)||'.'),assignment.acceptance)):undefined;
+  await mutate(s=>{const x=s.tasks.find(a=>a.id===task.id)!;x.assignment=assignment;x.resolution='delegated';x.allowDirectResponse=false;if(work){x.agentmemTaskId=work.taskId;x.agentmemLease=work.lease;}addMessage(x,'orchestrator','Prepared a complete assignment.');});
   await startWorker(getTask(task.id)!,assignment);
 }
 async function onTurnCompleted(params:any){
@@ -199,7 +201,7 @@ async function applyReview(task:Task,review:any){
   }
   await mutate(s=>{const x=s.tasks.find(a=>a.id===task.id)!;x.phase='needs_attention';x.reviewNote=review.note;x.error=`${review.outcome}: ${review.note}`;addMessage(x,'orchestrator',review.note);});await recordWork(task.id,review.outcome);
 }
-async function recordWork(taskId:string,reviewOutcome='',receiptOverride?:Receipt|Record<string,unknown>){const t=getTask(taskId);if(!t)return;const receipt=(receiptOverride||t.receipt) as (Receipt&Record<string,unknown>)|undefined;if(!t.agentmemTaskId||!t.agentmemLease||!receipt)return;try{await agentmem.connect(t.agentmemProjectId,t.userRoot);const saved=await agentmem.recordReceipt(t.agentmemProjectId,t.agentmemTaskId,t.agentmemLease,{...receipt,app_task_id:t.id,assignment:t.assignment,review:t.reviewNote,review_outcome:reviewOutcome});const record=agentMemRecordState(saved,receipt.status);await mutate(st=>{const x=st.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemReceiptId=record.receiptId;x.agentmemRecordError=record.error;if(record.ownershipReleased)x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(st=>{const x=st.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=record.error;if(agentMemFailureReleased(e))x.agentmemLease=undefined;});}}
+async function recordWork(taskId:string,reviewOutcome='',receiptOverride?:Receipt|Record<string,unknown>){const t=getTask(taskId);if(!t)return;const receipt=(receiptOverride||t.receipt) as (Receipt&Record<string,unknown>)|undefined;if(!t.agentmemProjectId||!t.agentmemTaskId||!t.agentmemLease||!receipt)return;await mutate(st=>{const x=st.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus='saving';x.agentmemRecordError=undefined;});try{await agentmem.connect(t.agentmemProjectId,t.userRoot);const saved=await agentmem.recordReceipt(t.agentmemProjectId,t.agentmemTaskId,t.agentmemLease,{...receipt,app_task_id:t.id,assignment:t.assignment,review:t.reviewNote,review_outcome:reviewOutcome});const record=agentMemRecordState(saved,receipt.status);await mutate(st=>{const x=st.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemReceiptId=record.receiptId;x.agentmemRecordError=record.error;if(record.ownershipReleased)x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(st=>{const x=st.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=record.error;if(agentMemFailureReleased(e))x.agentmemLease=undefined;});}}
 
 export async function retryAgentMemCompletion(taskId:string,passId:string){
   const task=getTask(taskId);const pass=task?.passes?.find(p=>p.id===passId);
@@ -222,7 +224,7 @@ export async function retryAgentMemCompletion(taskId:string,passId:string){
 }
 
 export async function submitTask(message:string,existingTaskId?:string){
-  const state=getState(); if(!state.settings.projectRoot||!state.settings.agentmemProjectId)throw new Error('Set a project root and its already-registered AgentMem project ID in Settings before starting a task.');if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
+  const state=getState(); if(!state.settings.projectRoot)throw new Error('Set a project root in Settings before starting a task.');if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
   if(!shouldWakeOrchestrator('explicit_user_input'))throw new Error('Orchestrator wake policy rejected explicit input.');
   if(existingTaskId){const t=getTask(existingTaskId);if(!t)throw new Error('Task not found.'); if(['planning','reviewing','worker_running'].includes(t.phase)){await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);const p=currentPass(x);if(p){p.userInputs.push(message);p.userMessageIds.push(m.id);}x.pendingRevision=true;});const row=getTask(t.id)!;if(row.activeRole&&row.activeTurnId){await codex.interrupt(row.activeRole==='worker'?row.workerThreadId!:row.orchestratorThreadId!,row.activeTurnId);}return row;}
     await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);beginPass(x,message,m.id);s.activeTaskId=x.id;});
@@ -245,8 +247,9 @@ export async function submitEscalationDecision(taskId:string,message:string){
 export async function cancelTask(taskId:string){const task=getTask(taskId);if(!task)throw new Error('Task not found.');const role=task.activeRole,turn=task.activeTurnId,thread=role==='worker'?task.workerThreadId:task.orchestratorThreadId;await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.phase='cancelled';x.activeRole=undefined;x.activeTurnId=undefined;x.error=undefined;addMessage(x,'system','Task cancelled. Late Codex events will be ignored.');});if(role&&turn&&thread)try{await codex.interrupt(thread,turn);}catch{}if(task.agentmemTaskId&&task.agentmemLease)try{await agentmem.connect(task.agentmemProjectId,task.userRoot);await agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId,task.agentmemLease);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus='released';x.agentmemRecordError=undefined;x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(e)}`;});}return getTask(taskId)!;}
 export async function saveSettings(input:any){
   const {settingsSchema}=await import('./contracts.js');const v=settingsSchema.parse(input);const resolved=await import('node:fs/promises').then(fs=>fs.realpath(v.projectRoot));
-  await mutate(s=>{s.settings={...v,projectRoot:resolved};});await refreshModels();try{await agentmem.connect(v.agentmemProjectId,resolved);}catch{}return runtimeStatus();
+  const projectId=v.agentmemProjectId.trim();if(projectId)await agentmem.connect(projectId,resolved);else agentmem.status={connected:false,projectVerified:false,detail:'Disabled · no AgentMem project selected'};
+  await mutate(s=>{s.settings={...v,projectRoot:resolved,agentmemProjectId:projectId};});await refreshModels();return runtimeStatus();
 }
 export function getRuntimeStatus(){return runtimeStatus();}
-export async function refreshConnections(){try{await codex.connect();await refreshModels();}catch(e){codexState='disconnected';codexError=safeError(e);}const s=getState();if(s.settings.agentmemProjectId&&s.settings.projectRoot)try{await agentmem.connect(s.settings.agentmemProjectId,s.settings.projectRoot);}catch{}else agentmem.status={connected:false,projectVerified:false,detail:'Choose a project root and registered AgentMem ID in Settings.'};return runtimeStatus();}
+export async function refreshConnections(){try{await codex.connect();await refreshModels();}catch(e){codexState='disconnected';codexError=safeError(e);}const s=getState();if(s.settings.agentmemProjectId&&s.settings.projectRoot)try{await agentmem.connect(s.settings.agentmemProjectId,s.settings.projectRoot);}catch{}else agentmem.status={connected:false,projectVerified:false,detail:s.settings.projectRoot?'Disabled · no AgentMem project selected':'Choose a project root in Settings.'};return runtimeStatus();}
 export function shutdown(){codex.close();agentmem.close();}

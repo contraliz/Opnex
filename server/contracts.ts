@@ -74,7 +74,7 @@ export const userTaskSchema = z.object({ message: text, taskId: z.string().uuid(
 export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(), z.number()]), decision: z.enum(['accept','decline','cancel']) }).strict();
 export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never';
 export const settingsSchema = z.object({
-  projectRoot: z.string().trim().min(1).max(1024), agentmemProjectId: z.string().trim().min(1).max(128),
+  projectRoot: z.string().trim().min(1).max(1024), agentmemProjectId: z.string().trim().max(128).default(''),
   orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   approvalPolicy: z.enum(['on-request','untrusted','never']).default('on-request'),
 }).strict();
