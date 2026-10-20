@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import type { ApprovalPolicy, Assignment, Receipt } from './contracts.js';
+import { stateDirectory } from './paths.js';
 
 export type TaskPhase = 'intake' | 'planning' | 'worker_running' | 'escalated' | 'reviewing' | 'accepted' | 'needs_attention' | 'cancelled' | 'paused_after_restart';
 export type Message = { id: string; role: 'user'|'orchestrator'|'worker'|'system'; text: string; createdAt: string; passId?:string };
@@ -14,7 +14,7 @@ export type TaskPass = { id:string; index:number; createdAt:string; userInput:st
 export type Task = { id: string; title: string; phase: TaskPhase; createdAt: string; updatedAt: string; userRoot: string; agentmemProjectId: string; userMessages: string[]; messages: Message[]; passes?:TaskPass[]; currentPassId?:string; assignment?: Assignment; receipt?: Receipt; reviewNote?: string; resolution?:'direct'|'delegated'; allowDirectResponse?:boolean; routingNote?:string; reasoningSummaries?:ReasoningSummary[]; reasoningRawContent?:ReasoningRawContent[]; reasoningTurns?:ReasoningTurn[]; activeModelId?:string; activeEffort?:string; correctionCount: number; orchestratorThreadId?: string; workerThreadId?: string; activeTurnId?: string; activeRole?:'orchestrator'|'worker'; processedTurns: string[]; error?: string; escalation?: unknown; approvalRequests?: ApprovalRequest[]; agentmemTaskId?: string; agentmemLease?: string; agentmemRecordStatus?: string; agentmemRecordError?: string; agentmemReceiptId?: string; pendingRevision?: boolean };
 export type Settings = { projectRoot: string; agentmemProjectId: string; orchestratorModel: string; orchestratorEffort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'; approvalPolicy: ApprovalPolicy };
 export type State = { version: 2; settings: Settings; tasks: Task[]; activeTaskId: string|null; };
-const dataDir = process.env.PSEUDOHARNESS_DATA_DIR || path.join(process.env.LOCALAPPDATA || os.homedir(), 'Pseudoharness');
+const dataDir = stateDirectory();
 const statePath = path.join(dataDir, 'state.json');
 const defaults: State = { version: 2, settings: { projectRoot: '', agentmemProjectId: '', orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request' }, tasks: [], activeTaskId: null };
 let current = structuredClone(defaults);

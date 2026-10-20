@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { initialOrchestratorJsonSchema, reviewJsonSchema, workerOutcomeJsonSchema, type ApprovalPolicy, type Assignment } from './contracts.js';
+import { initialOrchestratorJsonSchema, reviewJsonSchema, workerOutcomeJsonSchema, type ApprovalPolicy } from './contracts.js';
 
 type RpcMessage = { id?: string|number; method?: string; params?: any; result?: any; error?: { message?: string; code?: number } };
 export type Model = { id: string; displayName?: string; supportedReasoningEfforts?: { reasoningEffort: string }[]; isDefault?: boolean; [k: string]: unknown };

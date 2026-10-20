@@ -3,12 +3,34 @@
   "version": "1.0.0",
   "description": "Local Codex delegation harness with app-server and AgentMem integrations",
   "main": "dist-server/index.js",
+  "bin": {
+    "pseudoharness": "bin/pseudoharness.js"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "bin/",
+    "dist/",
+    "dist-server/",
+    "policy/CODEX_DELEGATION_POLICY.md"
+  ],
+  "bundledDependencies": [
+    "@modelcontextprotocol/sdk",
+    "express",
+    "zod"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch server/index.ts",
     "dev:web": "vite --host 127.0.0.1",
-    "build": "tsc -p tsconfig.server.json && vite build",
-    "start": "node dist-server/index.js",
+    "build": "node scripts/clean-build.mjs && tsc -p tsconfig.server.json && vite build",
+    "start": "node bin/pseudoharness.js",
+    "package": "npm run build && node scripts/package.mjs",
+    "lint": "oxlint --deny-warnings src server tests scripts bin vite.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json"
   },
@@ -16,22 +38,17 @@
   "author": "",
   "type": "module",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "express": "^5.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.13.1",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
     "@lezer/markdown": "^1.8.1",
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "express": "^5.3.0",
-    "lucide-react": "^1.59.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "zod": "^4.6.7"
-  },
-  "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.8",
@@ -42,9 +59,20 @@
     "@vitejs/plugin-react": "^6.1.2",
     "concurrently": "^10.0.6",
     "jsdom": "^30.1.3",
+    "lucide-react": "^1.59.0",
+    "oxlint": "^1.76.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.5"
-  }
+  },
+  "bundleDependencies": [
+    "@modelcontextprotocol/sdk",
+    "express",
+    "zod"
+  ]
 }

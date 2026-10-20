@@ -1,13 +1,14 @@
 import express from 'express';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadState, getState, mutate, getTask, subscribe, renameTaskInState, deleteTaskInState } from './state.js';
 import { cancelTask, getRuntimeStatus, initialize, refreshConnections, resolveApproval, retryAgentMemCompletion, saveSettings, submitEscalationDecision, submitTask, shutdown } from './orchestrator.js';
 import { approvalDecisionSchema, sessionTitleSchema, settingsSchema, userTaskSchema } from './contracts.js';
 
-const app=express();const server=createServer(app);const port=Number(process.env.PORT||4174);const host='127.0.0.1';
+const app=express();const server=createServer(app);const port=Number(process.env.PORT||4174);const host='127.0.0.1';const version=createRequire(import.meta.url)('../package.json').version as string;
 const nonce=randomBytes(24).toString('base64url');
 const here=path.dirname(fileURLToPath(import.meta.url));
 const production=process.env.NODE_ENV==='production';
@@ -33,7 +34,7 @@ app.post('/api/tasks/:id/rename',async(req,res)=>{try{const {title}=sessionTitle
 app.post('/api/tasks/:id/delete',async(req,res)=>{try{await mutate(s=>{deleteTaskInState(s,req.params.id);});res.json({ok:true,id:req.params.id});}catch(e){const message=error(e);res.status(message==='Session not found.'?404:message.startsWith('Stop or finish')||message.startsWith('Wait for AgentMem')?409:400).json({error:message});}});
 app.post('/api/settings',async(req,res)=>{try{const settings=settingsSchema.parse(req.body);res.json({runtime:await saveSettings(settings)});}catch(e){res.status(400).json({error:error(e)});}});
 app.post('/api/runtime/refresh',async(_req,res)=>res.json({runtime:await refreshConnections()}));
-app.get('/api/health',(_req,res)=>res.json({ok:true,host,version:'0.1.0'}));
+app.get('/api/health',(_req,res)=>res.json({ok:true,host,version}));
 if(production) app.use(express.static(path.resolve(here,'../dist'),{fallthrough:true}));
 app.use((req,res)=>{if(production)res.sendFile(path.resolve(here,'../dist/index.html'));else res.status(404).send('Open the Vite development server on port 5173.');});
 function error(e:unknown){return (e instanceof Error?e.message:String(e)).slice(0,1000);}

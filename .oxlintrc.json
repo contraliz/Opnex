@@ -1,0 +1,6 @@
+{
+  "$schema": "https://oxc.rs/schemas/oxlintrc.json",
+  "rules": {
+    "typescript/no-this-alias": "off"
+  }
+}
