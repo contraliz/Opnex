@@ -1,8 +1,8 @@
 import { AppServer, approvalResponse, extractAssistantText, type Model } from './codex.js';
 import { AgentMem, agentMemFailureReleased, agentMemRecordFailure, agentMemRecordState, safeError } from './agentmem.js';
-import { assignmentJsonSchema, initialOrchestratorJsonSchema, receiptSchema, reviewSchema, workerOutcomeSchema, type ApprovalPolicy, type Assignment, type Receipt } from './contracts.js';
+import { assignmentJsonSchema, initialOrchestratorJsonSchema, receiptSchema, reviewSchema, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
 import { addMessage, beginPass, currentPass, getState, getTask, isCurrentPassThread, mutate, type Task } from './state.js';
-import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, completionDisposition, correctionWorker, isCancelled, shouldWakeOrchestrator } from './policy.js';
+import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, completionDisposition, correctionWorker, shouldWakeOrchestrator } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
 import { applyCodexReasoningNotification, beginReasoningTurn } from './reasoning.js';
 import { dispatchIntakeOutcome } from './intake.js';
@@ -48,7 +48,7 @@ async function startOrchestrator(task:Task,payload:string,action:'assignment'|'r
   const id=response.turn?.id||response.turnId;if(id) await processDeferred(task.id,id);
 }
 async function beginAssignment(task:Task,context:any,userInput:string){
-  const root=task.userRoot; const mem=task.agentmemProjectId;
+  const root=task.userRoot;
   let memCtx=''; try{const c=context??await taskContext(task,`${userInput} project implementation requirements and current decisions`);memCtx=JSON.stringify(c).slice(0,12000);}catch(e){throw new Error(`AgentMem context is unavailable: ${safeError(e)}`);}
   const current=currentPass(task);const conversation=buildPriorConversationContext(task.passes,current?.id);
   const runtimeModel=getState().settings.orchestratorModel;const runtimeEffort=getState().settings.orchestratorEffort;

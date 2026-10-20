@@ -8,4 +8,8 @@ tmp/
 playwright-report/
 test-results/
 docs/design/
+ROADMAP.md
+docs/architecture.md
+docs/design-system.md
 .vitest/
+artifacts/
