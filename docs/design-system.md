@@ -9,6 +9,8 @@ This desktop-only interface uses a familiar developer-tool layout without Codex 
 - Top bar: current project, selected task, app-server state, AgentMem state, inspector toggle, settings.
 - Main area: user message, collapsible assignment, worker or orchestrator response, visible phase label, anchored multiline composer.
 - Receipt state: compact expandable outcome with acceptance, verification, risk, and review state. Blocked states use a calm warning surface with a real retry or settings action.
+- If app-server emits readable reasoning summaries, show live, role-labeled summary panels in the task conversation. Raw reasoning is never shown. A trivial direct response is labeled as an orchestrator answer with no worker session.
+- Scrollable desktop regions use a thin slate thumb on a dark track with native arrow buttons suppressed where Chromium supports it. Forced-colors mode uses system scrollbar colors.
 - Desktop resizing: the inspector can collapse and is hidden at smaller desktop widths so the conversation retains usable space. There is no mobile client or mobile-specific navigation.
 
 ## Tokens

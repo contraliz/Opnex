@@ -12,6 +12,33 @@ export const assignmentSchema = z.object({
 }).strict();
 export type Assignment = z.infer<typeof assignmentSchema>;
 
+export const directAnswerSchema = z.object({
+  type:z.literal('direct_answer'), answer:text, policy_basis:z.string().trim().min(1).max(400),
+}).strict();
+export const delegationPlanSchema = z.object({
+  type:z.literal('delegate'), assignment:assignmentSchema,
+}).strict();
+const initialOrchestratorWireSchema = z.object({
+  type: z.enum(['direct_answer','delegate']),
+  answer: z.string().nullable(),
+  policy_basis: z.string().nullable(),
+  assignment: assignmentSchema.nullable(),
+}).strict();
+export const initialOrchestratorSchema = initialOrchestratorWireSchema.transform((value,ctx)=>{
+  if(value.type==='direct_answer'){
+    if(!value.answer?.trim())ctx.addIssue({code:'custom',path:['answer'],message:'Direct answers require answer text.'});
+    if(!value.policy_basis?.trim())ctx.addIssue({code:'custom',path:['policy_basis'],message:'Direct answers require a policy basis.'});
+    if(value.assignment!==null)ctx.addIssue({code:'custom',path:['assignment'],message:'Direct answers cannot include a delegated assignment.'});
+    if(ctx.issues.length)return z.NEVER;
+    return {type:'direct_answer' as const,answer:value.answer!.trim(),policy_basis:value.policy_basis!.trim()};
+  }
+  if(value.answer!==null||value.policy_basis!==null)ctx.addIssue({code:'custom',path:['type'],message:'Delegation cannot include a direct answer.'});
+  if(!value.assignment)ctx.addIssue({code:'custom',path:['assignment'],message:'Delegation requires a complete assignment.'});
+  if(ctx.issues.length)return z.NEVER;
+  return {type:'delegate' as const,assignment:value.assignment!};
+});
+export type InitialOrchestratorOutcome = z.infer<typeof initialOrchestratorSchema>;
+
 export const receiptSchema = z.object({
   status: z.enum(['complete', 'incomplete', 'blocked', 'failed']),
   result: text,
@@ -54,6 +81,14 @@ export const settingsSchema = z.object({
 
 export const assignmentJsonSchema = { type: 'object', additionalProperties: false, required: ['outcome','deliverable','read_scope','write_scope','exclusions','constraints','context_refs','acceptance','verification','ordinary_authority','escalation_conditions','receipt_requirements'], properties: {
   outcome: { type: 'string' }, deliverable: { type: 'string' }, read_scope: { type: 'array', items: { type: 'string' } }, write_scope: { type: 'array', items: { type: 'string' } }, exclusions: { type: 'array', items: { type: 'string' } }, constraints: { type: 'array', items: { type: 'string' } }, context_refs: { type: 'array', items: { type: 'string' } }, acceptance: { type: 'array', items: { type: 'string' } }, verification: { type: 'array', items: { type: 'string' } }, ordinary_authority: { type: 'array', items: { type: 'string' } }, escalation_conditions: { type: 'array', items: { type: 'string' } }, receipt_requirements: { type: 'array', items: { type: 'string' } },
+}};
+// Codex structured outputs require a top-level object. Branch-exclusive fields
+// are nullable in the wire shape; initialOrchestratorSchema enforces exclusivity.
+export const initialOrchestratorJsonSchema = { type:'object',additionalProperties:false,required:['type','answer','policy_basis','assignment'],properties:{
+  type:{type:'string',enum:['direct_answer','delegate']},
+  answer:{type:['string','null']},
+  policy_basis:{type:['string','null']},
+  assignment:{anyOf:[assignmentJsonSchema,{type:'null'}]},
 }};
 const receiptJsonSchema = { type:'object',additionalProperties:false,required:['status','result','changes','acceptance','verification','risks','knowledge','decision_required'],properties:{status:{type:'string',enum:['complete','incomplete','blocked','failed']},result:{type:'string'},changes:{type:'array',items:{type:'string'}},acceptance:{type:'object',additionalProperties:false,required:['met','unmet'],properties:{met:{type:'array',items:{type:'string'}},unmet:{type:'array',items:{type:'string'}}}},verification:{type:'array',items:{type:'object',additionalProperties:false,required:['check','result','evidence'],properties:{check:{type:'string'},result:{type:'string',enum:['passed','failed','not_run']},evidence:{type:['string','null']}}}},risks:{type:'array',items:{type:'string'}},knowledge:{type:'object',additionalProperties:false,required:['consulted','updated'],properties:{consulted:{type:'array',items:{type:'string'}},updated:{type:'array',items:{type:'string'}}}},decision_required:{type:['string','null']}}};
 export const workerOutcomeJsonSchema = { type:'object',additionalProperties:false,required:['type','receipt','decision_needed','evidence','options','recommendation','consequences'],properties:{type:{type:'string',enum:['receipt','escalation']},receipt:{anyOf:[receiptJsonSchema,{type:'null'}]},decision_needed:{type:['string','null']},evidence:{type:'array',items:{type:'string'}},options:{type:'array',items:{type:'string'}},recommendation:{type:['string','null']},consequences:{type:'array',items:{type:'string'}}} };

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { AppServer, approvalResponse, makeTurnParams } from '../server/codex.js';
+import { AppServer, approvalResponse, buildOrchestratorDeveloperInstructions, makeTurnParams } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
 
 describe('Codex approval and turn configuration',()=>{
+  it('loads the app-owned delegation policy into orchestrator developer instructions',()=>{
+    const instructions=buildOrchestratorDeveloperInstructions('ORCHESTRATOR POLICY COPY');
+    expect(instructions).toContain('ORCHESTRATOR POLICY COPY');expect(instructions).toContain('policy-bound orchestration model');
+  });
   it('accepts only supported approval presets and keeps the safe default',()=>{
     const base={projectRoot:'D:/repo',agentmemProjectId:'demo',orchestratorModel:'gpt-6-sol',orchestratorEffort:'high'};
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
@@ -12,6 +16,7 @@ describe('Codex approval and turn configuration',()=>{
   it('serializes selected approval mode with read-only or bounded write sandbox',()=>{
     const readOnly=makeTurnParams({threadId:'t',input:'answer',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'}});
     expect(readOnly.approvalPolicy).toBe('on-request');expect(readOnly.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
+    expect(readOnly.summary).toBe('detailed');
     const write=makeTurnParams({threadId:'t',input:'edit',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:['D:/repo/src'],approvalPolicy:'untrusted',schema:{type:'object'}});
     expect(write.approvalPolicy).toBe('untrusted');expect(write.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['D:/repo/src'],networkAccess:false});
     const orchestration=makeTurnParams({threadId:'t',input:'plan',role:'orchestrator',model:'gpt-6-sol',effort:'high',writeRoots:['D:/ignored'],approvalPolicy:'never',schema:{type:'object'}});
