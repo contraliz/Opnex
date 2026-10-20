@@ -1,46 +1,39 @@
-# Design system
+# Desktop design system
 
-This desktop-only interface uses a familiar developer-tool layout without Codex or OpenAI logos or claims of affiliation. Visual concept and QA images are kept outside the public source tree.
-
-## Layout and hierarchy
-
-- Desktop application shell: compact left navigation rail, central conversation workspace, optional right assignment/session inspector. Target desktop first at 1440 × 1000.
-- Sidebar: Pseudoharness wordmark, one prominent New task action, recent task list, project identity, AgentMem and Settings entries. Task counts and connection states come from real data.
-- Top bar: current project, selected task, app-server state, AgentMem state, inspector toggle, settings.
-- Main area: user message, collapsible assignment, worker or orchestrator response, visible phase label, anchored multiline composer.
-- Receipt state: compact expandable outcome with acceptance, verification, risk, and review state. Blocked states use a calm warning surface with a real retry or settings action.
-- If app-server emits readable reasoning summaries, show live, role-labeled summary panels in the task conversation. Raw reasoning is never shown. A trivial direct response is labeled as an orchestrator answer with no worker session.
-- Scrollable desktop regions use a thin slate thumb on a dark track with native arrow buttons suppressed where Chromium supports it. Forced-colors mode uses system scrollbar colors.
-- Desktop resizing: the inspector can collapse and is hidden at smaller desktop widths so the conversation retains usable space. There is no mobile client or mobile-specific navigation.
+The approved Codex-inspired concepts define the visual direction for the local Pseudoharness app. The interface uses neutral graphite surfaces, thin separators, and a restrained violet action accent. It is an independent product and does not use official Codex or OpenAI branding.
 
 ## Tokens
 
-Approximate from the generated concepts and refined only where required for contrast:
-
 | Token | Value | Use |
 | --- | --- | --- |
-| `--bg` | `#11161D` | App canvas |
-| `--sidebar` | `#171D26` | Navigation |
-| `--surface` | `#1A222D` | Assignment and composer surfaces |
-| `--surface-raised` | `#202A37` | Hover, selected, and grouped detail |
-| `--border` | `#2B3544` | Thin separators and outlines |
-| `--text` | `#EDF0F7` | Primary text |
-| `--muted` | `#A4AEC0` | Secondary text |
-| `--subtle` | `#778396` | Timestamps and helper text |
-| `--accent` | `#7587FF` | Primary action, selected navigation, focus |
-| `--success` | `#55C99A` | Verified completion |
-| `--warning` | `#E8AD54` | Connection and user-action warnings |
-| `--danger` | `#E97882` | Cancelled or failed status |
+| Canvas | `#141414` | Main conversation background |
+| Sidebar | `#191919` | Navigation and task list |
+| Surface | `#1B1B1B` | Details and dialog surfaces |
+| Raised surface | `#202020` | Composer, selected items, code blocks |
+| Divider | `#303030` | Hairline borders and separators |
+| Primary text | `#ECECEC` | Conversation copy |
+| Secondary text | `#A6A6A6` | Labels and supporting text |
+| Accent | `#A99AFF` | Primary actions, selected navigation, focus |
+| Success | `#88C9A5` | Small completion status indicators |
+| Radius | `6–9px` | Compact controls and dialog corners |
+| Spacing | `4 / 8 / 12 / 16 / 24px` | Consistent layout scale |
 
-## Typography, spacing, and components
+Use a system sans-serif stack, with 14–15px conversation text and 11–12px chrome labels. Lucide outline icons use restrained strokes. Semantic states use text as well as color.
 
-- UI text uses `Inter` where available, then system sans-serif. User and agent messages use the same sans family; only code/dense identifiers use `ui-monospace`.
-- Compact chrome: 12–14 px; body: 14–15 px; section title: 16 px; page/task title: 18–20 px. Use 1.45–1.6 body line-height.
-- Spacing follows a 4 px base: 4, 8, 12, 16, 24, 32. Borders are 1 px. Component radius is 6 px; the composer and assignment panel can use 8 px.
-- Icons are small outline symbols from Lucide with muted slate strokes. Status uses text plus a small colored dot so color is never the only signal.
-- Focus rings are visible and accent-colored. Buttons, navigation, disclosure rows, select fields, and dialogs provide keyboard and hover states.
-- Motion is limited to short (120–180 ms) opacity/rotation transitions for disclosure and streaming status; reduced-motion preference disables it.
+## Layout
 
-## Visible copy rules
+- A 330px left sidebar holds the app name, New task, recent tasks, project identity, service status, and bottom-pinned Settings. The main top-bar control fully collapses it to zero width and stays at the left edge of the chat pane so it can reopen in place.
+- A 68px top bar shows the selected project and task, Codex connection state, Stop while active, and a Details toggle.
+- The conversation and optional 292px task inspector share the workspace above the composer. The inspector closes to zero width, allowing the conversation to expand without covering the composer.
+- A 210px composer dock stays anchored to the bottom of the central chat column. It contains the multiline prompt, actual model/effort/approval selectors, Luna availability, and send control; it does not extend beneath the task inspector.
+- The centered Settings dialog configures project root, optional AgentMem project identity, orchestrator model and effort, approval preset, and real connection status.
 
-Use concrete task language and honest states such as “Planning”, “Worker running · orchestrator idle”, “Reviewing receipt”, “Blocked before worker start”, and “AgentMem unavailable”. Never display fabricated model replies, progress, task counts, connection success, or verification results. The model catalog populates model selectors; the worker remains pinned to `gpt-6-luna` at `high` and blocks visibly when unavailable.
+## Behavior and accessibility
+
+Conversation content scrolls independently of the sidebar, inspector, and anchored composer. Task history and long sidebar lists have their own scroll areas. Scrollbars use a slim muted charcoal thumb on a transparent track; forced-colors mode follows system colors. Markdown, code blocks, and tables remain bounded by the conversation width.
+
+Reasoning groups contain only provider-supplied readable summaries, separately labeled by role and turn. Empty, waiting, and unavailable states are truthful. Raw reasoning is never shown. Assignment and receipt disclosures remain bound to the pass that produced them.
+
+Controls provide visible keyboard focus, native selector behavior, and concise labels. The left sidebar toggle stays in the main top bar in either state. The New task action has no macOS shortcut badge; the existing Ctrl+N keyboard action remains available on Windows. Sidebar, inspector, assignment, and receipt transitions use short opacity/position or grid-size animations; `prefers-reduced-motion` minimizes them. Settings closes with Escape or Cancel; forced-colors preferences are respected. The layout is desktop-first and has no mobile client.
+
+The approved visual concepts and local fidelity record are development-only review artifacts and are not included in the public source tree.
