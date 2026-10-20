@@ -2,6 +2,10 @@
 
 These are recorded as future requests, not release promises or completed features.
 
+## TODO: figure out AgentMem integration
+
+The user asked to “figure out AgentMem integration.” Pseudoharness already has an optional AgentMem connector through the configured MCP stdio service, with project-root verification, scoped retrieval, and evidence-backed task receipts. This TODO is a future review of the integration's setup, reliability, and user experience; it does not assert that the existing connector is missing or broken, and it does not change the current implementation.
+
 ## Custom approval policies
 
 Let users define and review custom Codex approval policies beyond the supported presets. The current app only exposes app-server's built-in `on-request`, `untrusted`, and `never` modes. Any future policy editor must preserve the separate sandbox/write-root boundary and make the effect of each rule explicit.

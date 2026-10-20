@@ -3,9 +3,9 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadState, getState, mutate, getTask, subscribe } from './state.js';
+import { loadState, getState, mutate, getTask, subscribe, renameTaskInState, deleteTaskInState } from './state.js';
 import { cancelTask, getRuntimeStatus, initialize, refreshConnections, resolveApproval, retryAgentMemCompletion, saveSettings, submitEscalationDecision, submitTask, shutdown } from './orchestrator.js';
-import { approvalDecisionSchema, settingsSchema, userTaskSchema } from './contracts.js';
+import { approvalDecisionSchema, sessionTitleSchema, settingsSchema, userTaskSchema } from './contracts.js';
 
 const app=express();const server=createServer(app);const port=Number(process.env.PORT||4174);const host='127.0.0.1';
 const nonce=randomBytes(24).toString('base64url');
@@ -29,6 +29,8 @@ app.post('/api/tasks/:id/cancel',async(req,res)=>{try{res.json(await cancelTask(
 app.post('/api/tasks/:id/passes/:passId/agentmem/retry',async(req,res)=>{try{res.json(await retryAgentMemCompletion(req.params.id,req.params.passId));}catch(e){res.status(400).json({error:error(e)});}});
 app.post('/api/tasks/:id/approval',async(req,res)=>{try{const body=approvalDecisionSchema.parse(req.body);res.json(await resolveApproval(req.params.id,body.requestId,body.decision));}catch(e){res.status(400).json({error:error(e)});}});
 app.post('/api/tasks/:id/select',async(req,res)=>{const task=getTask(req.params.id);if(!task){res.status(404).json({error:'Task not found.'});return;}await mutate(s=>{s.activeTaskId=task.id;});res.json(task);});
+app.post('/api/tasks/:id/rename',async(req,res)=>{try{const {title}=sessionTitleSchema.parse(req.body);let renamed;await mutate(s=>{renamed=renameTaskInState(s,req.params.id,title);});res.json(renamed);}catch(e){const message=error(e);res.status(message==='Session not found.'?404:400).json({error:message});}});
+app.post('/api/tasks/:id/delete',async(req,res)=>{try{await mutate(s=>{deleteTaskInState(s,req.params.id);});res.json({ok:true,id:req.params.id});}catch(e){const message=error(e);res.status(message==='Session not found.'?404:message.startsWith('Stop or finish')||message.startsWith('Wait for AgentMem')?409:400).json({error:message});}});
 app.post('/api/settings',async(req,res)=>{try{const settings=settingsSchema.parse(req.body);res.json({runtime:await saveSettings(settings)});}catch(e){res.status(400).json({error:error(e)});}});
 app.post('/api/runtime/refresh',async(_req,res)=>res.json({runtime:await refreshConnections()}));
 app.get('/api/health',(_req,res)=>res.json({ok:true,host,version:'0.1.0'}));

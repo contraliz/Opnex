@@ -45,6 +45,21 @@ export function upgradeStoredState(value:any):State{
 }
 export function getState() { return structuredClone(current); }
 export function getTask(id: string) { return current.tasks.find(t => t.id === id); }
+export function taskDeletionBlockReason(task:Task){
+  if(['intake','planning','worker_running','reviewing','escalated'].includes(task.phase)||task.activeTurnId||task.activeRole)return 'Stop or finish the active turn before deleting this session.';
+  const records=[task,...(task.passes||[])];
+  if(records.some(x=>x.agentmemRecordStatus==='saving'||!!x.agentmemLease))return 'Wait for AgentMem receipt completion before deleting this session.';
+  return null;
+}
+export function renameTaskInState(state:State,id:string,title:string){
+  const task=state.tasks.find(x=>x.id===id);if(!task)throw new Error('Session not found.');
+  task.title=title;task.updatedAt=new Date().toISOString();return task;
+}
+export function deleteTaskInState(state:State,id:string){
+  const task=state.tasks.find(x=>x.id===id);if(!task)throw new Error('Session not found.');
+  const blocked=taskDeletionBlockReason(task);if(blocked)throw new Error(blocked);
+  state.tasks=state.tasks.filter(x=>x.id!==id);if(state.activeTaskId===id)state.activeTaskId=null;return task;
+}
 export function subscribe(fn: (s: State) => void) { listeners.add(fn); return () => listeners.delete(fn); }
 export async function mutate(fn: (state: State) => void) {
   await loadState(); fn(current); current.version=2; current.tasks.forEach(syncCurrentPass); current.tasks.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
