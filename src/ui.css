@@ -30,3 +30,42 @@
 .task-list{flex:1 1 auto;min-height:0}
 .sidebar-spacer{flex:0 0 8px;min-height:8px}
 .conversation{min-height:0}
+/* Dark, compact scrollbars keep the Windows/browser chrome consistent with the app. */
+*{scrollbar-width:thin;scrollbar-color:#657285 #191f28}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:#191f28}
+::-webkit-scrollbar-thumb{background:#657285;border:2px solid #191f28;border-radius:999px}
+::-webkit-scrollbar-thumb:hover{background:#8290a4}
+::-webkit-scrollbar-button{display:none;width:0;height:0}
+::-webkit-scrollbar-corner{background:#191f28}
+.reasoning-summary{margin:4px 0 18px 37px;max-width:780px;border:1px solid #303a49;border-radius:7px;background:#171e27;overflow:hidden;color:#aeb9c8}
+.reasoning-summary>summary{display:flex;align-items:center;gap:8px;min-height:38px;padding:0 11px;cursor:pointer;list-style:none;font-size:10px}
+.reasoning-summary>summary::-webkit-details-marker{display:none}
+.reasoning-summary>summary>svg{color:#8c9bff;flex:none}
+.reasoning-summary>summary strong{font-weight:550;color:#cbd4e0}
+.reasoning-summary>summary span{color:#8995a7}
+.reasoning-summary>summary i{margin-left:auto;font-size:9px;font-style:normal;color:#778497}
+.reasoning-summary>summary i.summary-live{color:#7acba4}
+.reasoning-summary-text{max-height:280px;overflow:auto;overscroll-behavior:contain;border-top:1px solid #29323e;padding:11px 13px;color:#b9c4d1;font-size:10px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+.reasoning-summary>small{display:block;border-top:1px solid #222b36;padding:6px 13px;color:#707d8f;font-size:8px}
+.reasoning-summary>summary code{margin-left:auto;color:#78869a;font-family:inherit;font-size:9px;font-weight:400}
+.reasoning-summary>summary i{margin-left:0!important}
+.reasoning-turn-status{margin:4px 0 10px 37px;max-width:780px;min-height:38px;box-sizing:border-box;display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid #303a49;border-radius:7px;background:#171e27;color:#8794a6;font-size:9px}
+.reasoning-turn-status>svg{flex:none;color:#7d8b9f}
+.reasoning-turn-status>span{display:flex;flex-direction:column;gap:2px}.reasoning-turn-status strong{color:#b9c4d1;font-size:9px;font-weight:550}.reasoning-turn-status small{color:#7d8a9b;font-size:9px}
+.reasoning-turn-status code{margin-left:auto;color:#6e7c90;font-family:inherit;font-size:9px;text-align:right}.reasoning-turn-status.is-live{border-color:#38435d;background:#191f2c}.reasoning-turn-status.is-live>svg{color:#8c9bff}
+.routing-note{display:block;margin-top:5px;color:#91a0b2;font-size:9px;line-height:1.5}
+.pass-panel{margin:0 0 24px;padding:14px 14px 2px;border:1px solid #27313e;border-radius:9px;background:#141b24;min-width:0}
+.pass-heading{display:flex;align-items:center;gap:9px;margin:-1px 0 15px;padding-bottom:9px;border-bottom:1px solid #242e3a;color:#9eabbd;font-size:10px}
+.pass-heading>span:first-child{font-weight:650;color:#c8d0dc;letter-spacing:.1px}
+.pass-heading time{margin-left:auto;color:#728094;font-size:9px}
+.pass-status{border:1px solid #303b49;border-radius:999px;padding:3px 7px;color:#9ca8b8;font-size:8px}
+.pass-status.accepted{border-color:#315448;color:#82c9a7}.pass-status.needs_attention,.pass-status.escalated{border-color:#655435;color:#e0bd74}.pass-status.planning,.pass-status.reviewing{border-color:#3d4775;color:#a6b2ff}
+.pass-panel>.message:last-of-type{margin-bottom:17px}
+.pass-panel .reasoning-summary,.pass-panel .system-event,.pass-panel .worker-status,.pass-panel .escalation-card,.pass-panel .review-outcome,.pass-panel .error-card,.pass-panel .disclosure{margin-left:37px}
+.agentmem-pass-status{margin:0 0 14px 37px;padding:8px 10px;border:1px solid #4b4230;border-radius:6px;background:#211f1a;color:#d7be87;font-size:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.agentmem-pass-status small{flex-basis:100%;color:#aa9e83;line-height:1.45}
+.agentmem-pass-status .text-button{margin-left:auto}
+.legacy-pass{border-style:dashed;background:#171c23}
+.legacy-association-note{margin:0 0 14px 37px;padding:8px 10px;border-left:2px solid #7d683d;color:#c2ab74;background:#242117;font-size:9px;line-height:1.5}
+@media(forced-colors:active){*{scrollbar-color:auto}::-webkit-scrollbar-thumb{background:ButtonText;border-color:Canvas}}

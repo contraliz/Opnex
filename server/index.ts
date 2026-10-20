@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadState, getState, mutate, getTask, subscribe } from './state.js';
-import { cancelTask, getRuntimeStatus, initialize, refreshConnections, resolveApproval, saveSettings, submitEscalationDecision, submitTask, shutdown } from './orchestrator.js';
+import { cancelTask, getRuntimeStatus, initialize, refreshConnections, resolveApproval, retryAgentMemCompletion, saveSettings, submitEscalationDecision, submitTask, shutdown } from './orchestrator.js';
 import { approvalDecisionSchema, settingsSchema, userTaskSchema } from './contracts.js';
 
 const app=express();const server=createServer(app);const port=Number(process.env.PORT||4174);const host='127.0.0.1';
@@ -26,6 +26,7 @@ app.post('/api/tasks/new',async(_req,res)=>{await mutate(s=>{s.activeTaskId=null
 app.post('/api/tasks/:id/messages',async(req,res)=>{try{const {message}=userTaskSchema.parse(req.body);const task=await submitTask(message,req.params.id);res.json(task);}catch(e){res.status(400).json({error:error(e)});}});
 app.post('/api/tasks/:id/escalation',async(req,res)=>{try{const {message}=userTaskSchema.parse(req.body);const task=await submitEscalationDecision(req.params.id,message);res.json(task);}catch(e){res.status(400).json({error:error(e)});}});
 app.post('/api/tasks/:id/cancel',async(req,res)=>{try{res.json(await cancelTask(req.params.id));}catch(e){res.status(400).json({error:error(e)});}});
+app.post('/api/tasks/:id/passes/:passId/agentmem/retry',async(req,res)=>{try{res.json(await retryAgentMemCompletion(req.params.id,req.params.passId));}catch(e){res.status(400).json({error:error(e)});}});
 app.post('/api/tasks/:id/approval',async(req,res)=>{try{const body=approvalDecisionSchema.parse(req.body);res.json(await resolveApproval(req.params.id,body.requestId,body.decision));}catch(e){res.status(400).json({error:error(e)});}});
 app.post('/api/tasks/:id/select',async(req,res)=>{const task=getTask(req.params.id);if(!task){res.status(404).json({error:'Task not found.'});return;}await mutate(s=>{s.activeTaskId=task.id;});res.json(task);});
 app.post('/api/settings',async(req,res)=>{try{const settings=settingsSchema.parse(req.body);res.json({runtime:await saveSettings(settings)});}catch(e){res.status(400).json({error:error(e)});}});

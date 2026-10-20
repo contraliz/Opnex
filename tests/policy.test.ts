@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assignmentSchema, workerOutcomeSchema } from '../server/contracts.js';
-import { assignmentWriteRoots, claimCompletion, completionDisposition, consolidatedUserRequest, correctionWorker, shouldWakeOrchestrator, isCancelled } from '../server/policy.js';
+import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, completionDisposition, consolidatedUserRequest, correctionWorker, shouldWakeOrchestrator, isCancelled } from '../server/policy.js';
 import type { Receipt } from '../server/contracts.js';
 
 const assignment={outcome:'Fix scoped issue',deliverable:'Updated files',read_scope:['D:/repo'],write_scope:['D:/repo/src'],exclusions:['No deploy'],constraints:['Use local runtime'],context_refs:['docs/architecture.md'],acceptance:['Build passes'],verification:['Run tests'],ordinary_authority:['Choose implementation details'],escalation_conditions:['Need user decision'],receipt_requirements:['Structured receipt']};
@@ -28,6 +28,11 @@ describe('workflow contracts and scheduling policy',()=>{
   });
   it('claims each completion once across duplicate delivery and persisted reload',()=>{
     const id='turn-123';expect(claimCompletion('task-a',id,[])).toBe(true);expect(claimCompletion('task-a',id,[])).toBe(false);expect(claimCompletion('task-b',id,[])).toBe(true);expect(claimCompletion('task-z','old',['old'])).toBe(false);
+  });
+  it('reconciles accepted work with AgentMem even when the persisted lease token is stale',()=>{
+    expect(canRetryAcceptedAgentMemPass({phase:'accepted',agentmemTaskId:'task',agentmemLease:'stale-token'})).toBe(true);
+    expect(canRetryAcceptedAgentMemPass({phase:'worker_running',agentmemTaskId:'task'})).toBe(false);
+    expect(canRetryAcceptedAgentMemPass({phase:'accepted'})).toBe(false);
   });
   it('reuses the same worker for the single correction and ignores cancelled completion',()=>{
     expect(correctionWorker({workerThreadId:'worker-7',correctionCount:0},receipt)).toBe('worker-7');

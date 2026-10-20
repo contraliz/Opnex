@@ -68,6 +68,67 @@ describe('AgentMem receipt boundary',()=>{
     expect(serviceTask).toEqual({status:'done',owner:'',lease_until:0});
   });
 
+  it('paginates mandatory task requirements before completing an accepted work record',async()=>{
+    const adapter=new AgentMem();
+    const requirement=(id:string)=>({id,title:id,revision:1,fulfilled:true,criteria:[],scope:{project_wide:true}});
+    const firstPage={...context,requirements:{requirements_revision:19,applicable_requirements:[requirement('REQ-0001')],applicable_count:2,requirements_complete:false,next_requirement_offset:1}};
+    const lastPage={...context,requirements:{requirements_revision:19,applicable_requirements:[requirement('REQ-0002')],applicable_count:2,requirements_complete:true,next_requirement_offset:null}};
+    const serviceTask={status:'in_progress',owner:'pseudoharness-local',lease_until:12345};
+    const call=vi.fn(async(name:string,args:any)=>{
+      if(name==='task_context'&&args.requirement_offset===0)return firstPage;
+      if(name==='task_context'&&args.requirement_offset===1)return lastPage;
+      if(name==='record_work'&&args.action==='receipt'){
+        expect(args.receipt.status).toBe('done');
+        expect(args.receipt.requirement_checks.map((x:any)=>x.requirement_id)).toEqual(['REQ-0001','REQ-0002']);
+        expect(args.receipt.requirement_checks.every((x:any)=>x.met&&x.evidence)).toBe(true);
+        serviceTask.status='done';serviceTask.owner='';serviceTask.lease_until=0;
+        return {status:'done',receipt_id:'receipt-paged',completion_accepted:true};
+      }
+      throw new Error(`Unexpected AgentMem action ${name}:${args.action}`);
+    });
+    (adapter as any).call=call;
+    const saved=await adapter.recordReceipt('pseudoharness','task-paged','lease-paged',{...receipt,review_outcome:'accept'});
+    expect(saved.status).toBe('done');
+    expect(call.mock.calls.filter(([name])=>name==='task_context').map(([,args])=>args.requirement_offset)).toEqual([0,1]);
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(serviceTask).toEqual({status:'done',owner:'',lease_until:0});
+  });
+
+  it('reclaims an app-owned open work record and completes it with the supported schema',async()=>{
+    const adapter=new AgentMem();
+    const serviceTask={status:'in_progress',owner:'pseudoharness-local',lease_until:12345};
+    const call=vi.fn(async(name:string,args:any)=>{
+      if(name==='tasks')return {...serviceTask,id:'task-retry'};
+      if(name==='claim_task')return {lease_token:'new-lease'};
+      if(name==='task_context')return context;
+      if(name==='record_work'&&args.action==='receipt'){
+        expect(args.lease_token).toBe('new-lease');
+        expect(args.idempotency_key).toBe('pseudoharness-task-retry-receipt-v2');
+        expect(args.receipt.status).toBe('done');
+        serviceTask.status='done';serviceTask.owner='';serviceTask.lease_until=0;
+        return {status:'done',receipt_id:'receipt-retry',completion_accepted:true};
+      }
+      throw new Error(`Unexpected AgentMem action ${name}:${args.action}`);
+    });
+    (adapter as any).call=call;
+    const saved=await adapter.retryReceipt('pseudoharness','task-retry',{...receipt,review_outcome:'accept'});
+    expect(saved.status).toBe('done');
+    expect(call.mock.calls.map(([name,args])=>name==='task_context'?args.requirement_offset:name)).toEqual(['tasks','claim_task',0,'record_work']);
+    expect(serviceTask).toEqual({status:'done',owner:'',lease_until:0});
+  });
+
+  it('keeps the completion pending and releases ownership when requirement pagination is incomplete',async()=>{
+    const adapter=new AgentMem();
+    const call=vi.fn()
+      .mockResolvedValueOnce({...context,requirements:{requirements_revision:19,applicable_requirements:[],requirements_complete:false,next_requirement_offset:null}})
+      .mockResolvedValueOnce({status:'in_progress',owner:''});
+    (adapter as any).call=call;
+    await expect(adapter.recordReceipt('pseudoharness','task-page-error','lease-page-error',{...receipt,review_outcome:'accept'}))
+      .rejects.toThrow(/safe continuation/);
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[1][1]).toMatchObject({action:'release',task_id:'task-page-error',lease_token:'lease-page-error'});
+  });
+
   it('releases an unaccepted completion and returns an actionable failure state',async()=>{
     const adapter=new AgentMem();
     const call=vi.fn().mockResolvedValueOnce(context).mockResolvedValueOnce({status:'in_progress',receipt_id:'receipt-2',note:'Done also requires current requirements_revision and evidence-backed checks.'}).mockResolvedValueOnce({status:'open'});
@@ -97,7 +158,7 @@ describe('AgentMem receipt boundary',()=>{
 
   it('surfaces API failures rather than claiming a successful save',async()=>{
     const adapter=new AgentMem();
-    (adapter as any).call=vi.fn().mockResolvedValueOnce(context).mockRejectedValueOnce(new Error('MCP receipt call failed'));
+    (adapter as any).call=vi.fn().mockResolvedValueOnce(context).mockRejectedValueOnce(new Error('MCP receipt call failed')).mockResolvedValueOnce({status:'in_progress',owner:''});
     await expect(adapter.recordReceipt('pseudoharness','task-3','lease-3',{...receipt,review_outcome:'accept'})).rejects.toThrow('MCP receipt call failed');
   });
 
