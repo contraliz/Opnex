@@ -8,19 +8,22 @@ import { applyCodexReasoningNotification, beginReasoningTurn } from './reasoning
 import { dispatchIntakeOutcome } from './intake.js';
 import { buildPriorConversationContext, formatCurrentPassConversation } from './pass-context.js';
 import { isAgentMemEnabled, scopedAgentMemContext } from './optional-agentmem.js';
+import { applyAllowanceDelta, applyThreadEstimatedUsage, applyThreadTokenUsage, beginThreadUsageRead, markThreadEstimatedUsageUnavailable, markThreadTokenUsageUnavailable, normalizeAllowanceSnapshot, type AllowanceSnapshot } from './usage.js';
 import path from 'node:path';
 
 const codex=new AppServer(); const agentmem=new AgentMem();
 let catalog:Model[]=[]; let codexState='connecting'; let codexError='';
 const deferredCompletions=new Map<string,any[]>();
 const attachedThreads=new Set<string>();
+const usageReadSequence=new Map<string,number>();
+const allowanceBaselines=new Map<string,AllowanceSnapshot|null>();
 const effortList=(m:Model)=>((m as any).supportedReasoningEfforts||[]).map((x:any)=>typeof x==='string'?x:x.reasoningEffort);
 export function runtimeStatus(){return {codex:{state:codexState,error:codexError,models:catalog.map(m=>({id:m.id,displayName:m.displayName,efforts:effortList(m)})),workerAvailable:catalog.some(m=>m.id==='gpt-6-luna'&&effortList(m).includes('high'))},agentmem:agentmem.status};}
 export async function initialize(){
   codex.on('connected',()=>{codexState='connected';codexError=''; void refreshModels();});
   codex.on('disconnected',(e:string)=>{codexState='disconnected';codexError=safeError(e); void mutate(s=>s.tasks.forEach(t=>{if(['worker_running','planning','reviewing'].includes(t.phase)){t.phase='needs_attention';t.error='Codex app-server disconnected. Inspect the existing thread before resuming.';}}));});
   codex.on('serverRequest',(id:string|number,method:string,params:any)=>{void onServerRequest(id,method,params);});
-  codex.on('notification',(method:string,params:any)=>{if(method==='turn/completed') void onTurnCompleted(params); else if(method==='turn/started') void onTurnStarted(params); else if(method==='item/agentMessage/delta') void onProgress(params); else if(method==='item/reasoning/summaryTextDelta'||method==='item/reasoning/summaryPartAdded'||method==='item/reasoning/textDelta'||method==='item/completed'||method==='model/rerouted') void onReasoningSummary(method,params); if(method==='item/started'||method==='item/completed') void onProgress(params);});
+  codex.on('notification',(method:string,params:any)=>{if(method==='turn/completed') void onTurnCompleted(params); else if(method==='turn/started') void onTurnStarted(params); else if(method==='thread/tokenUsage/updated') void onThreadTokenUsageUpdated(params); else if(method==='item/agentMessage/delta') void onProgress(params); else if(method==='item/reasoning/summaryTextDelta'||method==='item/reasoning/summaryPartAdded'||method==='item/reasoning/textDelta'||method==='item/completed'||method==='model/rerouted') void onReasoningSummary(method,params); if(method==='item/started'||method==='item/completed') void onProgress(params);});
   void codex.connect().catch(e=>{codexState='disconnected';codexError=safeError(e);});
   await refreshAgentMem();
 }
@@ -40,6 +43,7 @@ async function startOrchestrator(task:Task,payload:string,action:'assignment'|'r
   attachedThreads.add(task.orchestratorThreadId);
   task.phase=action==='assignment'?'planning':'reviewing'; task.activeRole='orchestrator'; task.activeModelId=modelId;task.activeEffort=state.settings.orchestratorEffort;task.activeTurnId=undefined; task.error=undefined;task.allowDirectResponse=action==='assignment'&&allowDirectResponse;
   await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
+  allowanceBaselines.set(task.orchestratorThreadId!,await readAllowanceSnapshot());
   const response=action==='review'
     ? await codex.reviewTurn(task.orchestratorThreadId,input,modelId,state.settings.orchestratorEffort,state.settings.approvalPolicy)
     : await codex.startTurn(task.orchestratorThreadId,input,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],state.settings.approvalPolicy,allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema);
@@ -65,6 +69,7 @@ async function startWorker(task:Task,assignment:Assignment){
   attachedThreads.add(task.workerThreadId);
   task.phase='worker_running';task.activeRole='worker';task.activeModelId='gpt-6-luna';task.activeEffort='high';task.activeTurnId=undefined;task.error=undefined;
   await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
+  allowanceBaselines.set(task.workerThreadId,await readAllowanceSnapshot());
   const response=await codex.startTurn(task.workerThreadId,workerPrompt,'worker','gpt-6-luna','high',task.userRoot,writeRoots,approvalPolicy);
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled')return;t.activeTurnId=id;t.activeRole='worker';if(id)beginReasoningTurn(t,'worker',task.workerThreadId!,id,'gpt-6-luna','high');});
@@ -79,6 +84,28 @@ async function onReasoningSummary(method:string,params:any){
   if(task.phase==='cancelled')return;
   void mutate(s=>{const current=s.tasks.find(x=>x.id===task.id);if(current)applyCodexReasoningNotification(current,method,params);});
 }
+function usageTarget(threadId:unknown){
+  if(typeof threadId!=='string'||!threadId)return;
+  for(const task of getState().tasks)for(const pass of task.passes||[]){
+    if(pass.orchestratorThreadId===threadId)return {taskId:task.id,passId:pass.id,role:'orchestrator' as const,threadId};
+    if(pass.workerThreadId===threadId)return {taskId:task.id,passId:pass.id,role:'worker' as const,threadId};
+  }
+}
+async function onThreadTokenUsageUpdated(params:any){
+  const target=usageTarget(params?.threadId);if(!target||typeof params?.turnId!=='string')return;
+  await mutate(s=>{const task=s.tasks.find(x=>x.id===target.taskId);const pass=task?.passes?.find(x=>x.id===target.passId);if(pass)applyThreadTokenUsage(pass,target.role,target.threadId,params.tokenUsage);});
+}
+async function refreshThreadUsage(taskId:string,passId:string,role:'orchestrator'|'worker',threadId:string){
+  const key=`${taskId}:${passId}:${threadId}`;const sequence=(usageReadSequence.get(key)||0)+1;usageReadSequence.set(key,sequence);
+  await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass)beginThreadUsageRead(pass,role,threadId);});
+  try{
+    const threadUsage=await codex.threadUsage(threadId);
+    await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(!pass||usageReadSequence.get(key)!==sequence)return;if(!threadUsage||!applyThreadEstimatedUsage(pass,role,threadId,threadUsage))markThreadEstimatedUsageUnavailable(pass,role,threadId);});
+  }catch{
+    await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass&&usageReadSequence.get(key)===sequence)markThreadEstimatedUsageUnavailable(pass,role,threadId);});
+  }finally{if(usageReadSequence.get(key)===sequence)usageReadSequence.delete(key);}
+}
+async function readAllowanceSnapshot():Promise<AllowanceSnapshot|null>{try{return normalizeAllowanceSnapshot(await codex.accountRateLimits());}catch{return null;}}
 async function completeDirectAnswer(task:Task,answer:string,policyBasis:string){
   const criterion='The orchestrator answered the trivial request directly under the app-owned delegation policy.';
   await mutate(s=>{const x=s.tasks.find(a=>a.id===task.id)!;x.phase='accepted';x.resolution='direct';x.allowDirectResponse=false;x.routingNote=policyBasis;x.reviewNote='Answered directly by the orchestrator under the delegation policy. No Luna worker was started.';const p=currentPass(x);if(p)p.publicAnswer=answer;addMessage(x,'orchestrator',answer);});
@@ -108,6 +135,11 @@ async function onTurnCompleted(params:any){
   await mutate(s=>{const row=s.tasks.find(x=>x.id===t.id);if(row)applyCodexReasoningNotification(row,'turn/completed',params);});
   if(!claimCompletion(t.id,params.turn.id,t.processedTurns))return;
   const taskId=t.id; const role=t.activeRole||(t.orchestratorThreadId===params.threadId?'orchestrator':'worker'); const endedStatus=params.turn.status;
+  const passId=currentPass(t)?.id;
+  const allowanceStart=allowanceBaselines.get(params.threadId)||null;allowanceBaselines.delete(params.threadId);
+  const allowanceEnd=await readAllowanceSnapshot();
+  if(passId)await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass)applyAllowanceDelta(pass,role,params.threadId,allowanceStart,allowanceEnd);});
+  if(passId){await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass)markThreadTokenUsageUnavailable(pass,role,params.threadId);});void refreshThreadUsage(taskId,passId,role,params.threadId);}
   await mutate(s=>{const row=s.tasks.find(x=>x.id===taskId)!;if(row.processedTurns.includes(params.turn.id))return;row.processedTurns.push(params.turn.id);row.activeTurnId=undefined;row.activeRole=undefined;});
   const live=getTask(taskId); if(!live)return;
   const disposition=completionDisposition(live,role,endedStatus);
@@ -244,7 +276,7 @@ export async function submitEscalationDecision(taskId:string,message:string){
   const fresh=getTask(taskId)!;const payload=`Resolve only this worker's explicit consequential decision using the human decision below. Then return a structured disposition: correction assignment (and correction count must remain at most one) or blocked/incomplete outcome.\n\nOriginal assignment: ${JSON.stringify(fresh.assignment)}\nEscalation: ${JSON.stringify(fresh.escalation)}\nHuman decision: ${message}`;
   await startOrchestrator(fresh,payload,'review');return getTask(taskId)!;
 }
-export async function cancelTask(taskId:string){const task=getTask(taskId);if(!task)throw new Error('Task not found.');const role=task.activeRole,turn=task.activeTurnId,thread=role==='worker'?task.workerThreadId:task.orchestratorThreadId;await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.phase='cancelled';x.activeRole=undefined;x.activeTurnId=undefined;x.error=undefined;addMessage(x,'system','Task cancelled. Late Codex events will be ignored.');});if(role&&turn&&thread)try{await codex.interrupt(thread,turn);}catch{}if(task.agentmemTaskId&&task.agentmemLease)try{await agentmem.connect(task.agentmemProjectId,task.userRoot);await agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId,task.agentmemLease);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus='released';x.agentmemRecordError=undefined;x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(e)}`;});}return getTask(taskId)!;}
+export async function cancelTask(taskId:string){const task=getTask(taskId);if(!task)throw new Error('Task not found.');const role=task.activeRole,turn=task.activeTurnId,thread=role==='worker'?task.workerThreadId:task.orchestratorThreadId;const passId=currentPass(task)?.id;const allowanceStart=thread?allowanceBaselines.get(thread)||null:null;if(thread)allowanceBaselines.delete(thread);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.phase='cancelled';x.activeRole=undefined;x.activeTurnId=undefined;x.error=undefined;addMessage(x,'system','Task cancelled. Late Codex events will be ignored.');});if(role&&turn&&thread)try{await codex.interrupt(thread,turn);}catch{}if(role&&thread&&passId){const allowanceEnd=await readAllowanceSnapshot();await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass){markThreadTokenUsageUnavailable(pass,role,thread);applyAllowanceDelta(pass,role,thread,allowanceStart,allowanceEnd);}});void refreshThreadUsage(taskId,passId,role,thread);}if(task.agentmemTaskId&&task.agentmemLease)try{await agentmem.connect(task.agentmemProjectId,task.userRoot);await agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId,task.agentmemLease);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus='released';x.agentmemRecordError=undefined;x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(e)}`;});}return getTask(taskId)!;}
 export async function saveSettings(input:any){
   const {settingsSchema}=await import('./contracts.js');const {resolveProjectDirectory}=await import('./directories.js');const v=settingsSchema.parse(input);const resolved=await resolveProjectDirectory(v.projectRoot);
   const projectId=v.agentmemProjectId.trim();if(projectId)await agentmem.connect(projectId,resolved);else agentmem.status={connected:false,projectVerified:false,detail:'Disabled · no AgentMem project selected'};
