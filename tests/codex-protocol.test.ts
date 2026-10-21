@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AppServer, approvalResponse, buildOrchestratorDeveloperInstructions, makeThreadParams, makeThreadResumeParams, makeTurnParams } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
 
@@ -54,5 +54,16 @@ describe('Codex approval and turn configuration',()=>{
     client.respondServerRequest(request.id,{decision:'accept'});
     expect(JSON.parse(writes[0])).toEqual({id:'server-approval-7',result:{decision:'accept'}});
     client.close();
+  });
+  it('requests usage for the exact thread rather than reading account-wide activity',async()=>{
+    const client=new AppServer();(client as any).ready=true;
+    const request=vi.fn().mockResolvedValue({threadUsage:{threadId:'worker-thread',estimatedUsageCreditsMicros:125000,groups:[]}});(client as any).request=request;
+    await expect(client.threadUsage('worker-thread')).resolves.toEqual({threadId:'worker-thread',estimatedUsageCreditsMicros:125000,groups:[]});
+    expect(request).toHaveBeenCalledWith('account/usage/read',{threadId:'worker-thread'},10000);
+  });
+  it('reads Codex rate limits without requesting reset-credit detail calls',async()=>{
+    const client=new AppServer();(client as any).ready=true;const request=vi.fn().mockResolvedValue({rateLimits:{limitId:'codex'}});(client as any).request=request;
+    await expect(client.accountRateLimits()).resolves.toEqual({rateLimits:{limitId:'codex'}});
+    expect(request).toHaveBeenCalledWith('account/rateLimits/read',{excludeResetCreditDetails:true},10000);
   });
 });

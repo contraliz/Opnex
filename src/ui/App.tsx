@@ -118,9 +118,59 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
     {p.reviewNote&&<div className={`review-outcome ${p.phase}`}><span>{p.phase==='accepted'?<Check size={15}/>:<AlertCircle size={15}/>}</span><div><strong>{p.phase==='accepted'?(p.resolution==='direct'?'Direct answer':'Receipt accepted'):phaseText[p.phase]}</strong><div className="markdown-body"><Markdown>{p.reviewNote}</Markdown></div>{p.resolution==='direct'&&p.routingNote&&<small className="routing-note">Routing basis: {p.routingNote}</small>}</div></div>}
     {p.phase==='accepted'&&task.agentmemProjectId&&recordStatus&&recordStatus!=='done'&&<div className={`agentmem-pass-status ${recordStatus==='failed'?'is-error':''}`} role="status"><span>{recordStatus==='saving'?'Saving AgentMem receipt…':recordStatus==='failed'?'AgentMem save failed':recordStatus==='in_progress'?'Receipt saved · AgentMem task still open':recordStatus==='released'?'AgentMem lease released':'Checking AgentMem receipt status…'}</span>{recordError&&<small>{recordError}</small>}{p.agentmemTaskId&&(recordStatus==='failed'&&!p.agentmemLease||(recordStatus==='in_progress'&&!p.agentmemLease))&&<button className="text-button" disabled={retrying} onClick={onRetryAgentMem}>{retrying?'Retrying…':'Retry AgentMem completion'}</button>}</div>}
     {p.error&&<div className="error-card"><AlertCircle size={16}/><div><strong>{p.phase==='needs_attention'?'Action needed':'Workflow error'}</strong><p>{p.error}</p>{p.phase==='paused_after_restart'&&<small>Send an explicit update to reattach the saved threads and continue.</small>}</div></div>}
+    <PassUsagePanel pass={p}/>
   </section>;
 }
 
+const tokenCount=(value:number)=>new Intl.NumberFormat(undefined).format(value);
+function formatMicros(value:string|undefined,unit:'credits'|'USD'){
+  if(value===undefined)return null;
+  try{
+    const amount=BigInt(value);const whole=amount/1_000_000n;const fraction=(amount%1_000_000n).toString().padStart(6,'0').replace(/0+$/,'');
+    const numeric=`${whole.toLocaleString()}${fraction?`.${fraction}`:''}`;
+    return unit==='USD'?`~$${numeric}`:`~${numeric} credits`;
+  }catch{return null;}
+}
+function PassUsagePanel({pass}:{pass:TaskPass}){
+  const usage=pass.usage||{};const allRoles:[keyof typeof usage,string][]=[['orchestrator','Orchestrator'],['worker','Luna worker']];
+  const expected=allRoles.filter(([role])=>role==='orchestrator'?!!pass.orchestratorThreadId:!!pass.workerThreadId||pass.resolution==='delegated');
+  const roles=allRoles.filter(([role])=>expected.some(([candidate])=>candidate===role)||!!usage[role]);
+  const complete=['accepted','cancelled','escalated','needs_attention','paused_after_restart'].includes(pass.phase);
+  if(!complete)return null;
+  const availableTokens=expected.map(([role,label])=>({role,label,value:usage[role]})).filter(x=>x.value?.tokens&&x.value.tokenStatus==='available');
+  const availableCredits=expected.map(([role,label])=>({role,label,value:usage[role]})).filter(x=>x.value?.creditStatus==='available'&&x.value.estimatedCreditsMicros!==undefined);
+  const allTokensAvailable=expected.length>0&&availableTokens.length===expected.length;
+  const allCreditsAvailable=expected.length>0&&availableCredits.length===expected.length;
+  const totalTokens=availableTokens.reduce((sum,row)=>sum+(row.value?.tokens?.totalTokens||0),0);
+  const credits=availableCredits.reduce((sum,row)=>sum+BigInt(row.value!.estimatedCreditsMicros!),0n).toString();
+  const dollars=allCreditsAvailable&&availableCredits.every(row=>row.value?.estimatedUsdMicros!==null&&row.value?.estimatedUsdMicros!==undefined)?availableCredits.reduce((sum,row)=>sum+BigInt(row.value!.estimatedUsdMicros!),0n).toString():undefined;
+  const tokenPending=expected.some(([role])=>usage[role]?.tokenStatus==='pending');
+  const creditPending=expected.some(([role])=>usage[role]?.creditStatus==='pending');
+  const tokenHeadline=availableTokens.length?`${pass.phase==='accepted'&&allTokensAvailable?'':'Recorded '}${tokenCount(totalTokens)} tokens`:tokenPending?'Collecting…':'Unavailable';
+  const creditValue=(dollars?formatMicros(dollars,'USD'):formatMicros(credits,'credits'))||'Unavailable';
+  const creditHeadline=pass.phase==='accepted'&&allCreditsAvailable?creditValue:availableCredits.length?`Recorded so far · ${creditValue}`:creditPending?'Collecting…':'Unavailable';
+  const fiveHourValues=expected.map(([role])=>usage[role]?.allowance?.fiveHourPercent).filter((value):value is number=>value!==null&&value!==undefined);
+  const weeklyValues=expected.map(([role])=>usage[role]?.allowance?.weeklyPercent).filter((value):value is number=>value!==null&&value!==undefined);
+  const allowanceValue=(values:number[])=>values.length?`~${values.reduce((sum,value)=>sum+value,0).toFixed(2)}%${values.length<expected.length?' partial':''}`:'unavailable';
+  const allowanceHeadline=`5-hour ${allowanceValue(fiveHourValues)} · weekly ${allowanceValue(weeklyValues)}`;
+  const detail=(role:keyof typeof usage,label:string,metric:'tokens'|'cost'|'allowance')=>{
+    const entry=usage[role];const expectedRole=expected.some(([candidate])=>candidate===role);
+    if(!expectedRole)return `${label}: not used`;
+    if(metric==='tokens')return entry?.tokens&&entry.tokenStatus==='available'?`${label}: ${tokenCount(entry.tokens.totalTokens)} tokens`:`${label}: ${entry?.tokenStatus==='unavailable'?'unavailable':'not reported'}`;
+    if(metric==='cost')return entry?.creditStatus==='available'?`${label}: ${formatMicros(entry.estimatedUsdMicros||undefined,'USD')||formatMicros(entry.estimatedCreditsMicros,'credits')} (Codex estimate${entry.groups?.length?`; ${entry.groups.map(group=>[group.model,group.reasoningEffort,group.speed].filter(Boolean).join(' · ')).join(', ')}`:''})`:`${label}: ${entry?.creditStatus==='unavailable'?'unavailable':'not reported'}`;
+    const allowance=entry?.allowance;
+    return `${label}: 5-hour ${allowance?.fiveHourPercent===null||allowance?.fiveHourPercent===undefined?'unavailable':`~${allowance.fiveHourPercent.toFixed(2)}%`}; weekly ${allowance?.weeklyPercent===null||allowance?.weeklyPercent===undefined?'unavailable':`~${allowance.weeklyPercent.toFixed(2)}%`}`;
+  };
+  const Datum=({label,value,metric}:{label:string;value:string;metric:'tokens'|'cost'|'allowance'})=>{const tooltipId=`pass-usage-${pass.id}-${metric}`;return <span className="pass-usage-datum" tabIndex={0} aria-label={`${label}: ${value}`} aria-describedby={tooltipId}><strong>{label}</strong><span>{value}</span><span id={tooltipId} className="pass-usage-tooltip" role="tooltip">{roles.map(([role,name])=><span key={`${metric}-${role}`}>{detail(role,name,metric)}</span>)}{metric==='allowance'&&<small>Approximate change in the shared Codex account snapshot during each role’s turns; activity in other Codex clients can affect it.</small>}</span></span>;};
+  return <section className="pass-usage" aria-label={`Usage summary for pass ${pass.index}`}>
+    <strong className="pass-usage-title">Pass usage</strong><div className="pass-usage-summary">
+      <Datum label="Total tokens" value={tokenHeadline} metric="tokens"/>
+      <Datum label="Estimated cost" value={creditHeadline} metric="cost"/>
+      <Datum label="Codex allowance" value={allowanceHeadline} metric="allowance"/>
+      <small>Codex-reported estimates; allowance percentages are approximate shared-account snapshot changes.</small>
+    </div>
+  </section>;
+}
 function ApprovalCard({request,onDecision}:{request:any;onDecision:(decision:'accept'|'decline'|'cancel')=>void}){const permission=request.method==='item/permissions/requestApproval';return <section className="approval-card" aria-label="Codex approval needed"><div className="approval-heading"><ShieldCheck size={15}/><strong>Approval needed</strong><span>{permission?'Permission request':request.method.includes('fileChange')?'File change':'Command execution'}</span></div>{request.reason&&<p>{request.reason}</p>}{request.command&&<pre>{request.command}</pre>}{request.networkHost&&<div className="approval-meta">Network destination: {request.networkHost} ({request.networkProtocol})</div>}{request.cwd&&<div className="approval-meta">Working directory: {request.cwd}</div>}{request.grantRoot&&<div className="approval-meta">Requested write root: {request.grantRoot}</div>}{permission&&<pre className="permission-preview">{JSON.stringify(request.permissionRequest,null,2)}</pre>}<div className="approval-actions"><button onClick={()=>onDecision('decline')}>Decline</button><button onClick={()=>onDecision('cancel')}>Cancel turn</button><button className="approval-accept" onClick={()=>onDecision('accept')}>{permission?'Grant requested permissions':'Approve once'}</button></div></section>}
 function Disclosure({title,icon,open,onToggle,children}:{title:string;icon:React.ReactNode;open:boolean;onToggle:()=>void;children:React.ReactNode}){return <div className={`disclosure ${open?'open':''}`}><button className="disclosure-head" onClick={onToggle} aria-expanded={open}><span className="disclosure-icon">{icon}</span><strong>{title}</strong><ChevronDown size={14} className="disclosure-chevron"/><span className="disclosure-spacer"/></button><div className="disclosure-panel" aria-hidden={!open} inert={!open}><div className="disclosure-panel-inner"><div className="disclosure-content">{children}</div></div></div></div>}
 function AssignmentView({assignment:a}:{assignment:Assignment}){const data:[string,string[]][]=[['Outcome',[a.outcome,a.deliverable]],['Authorized read scope',a.read_scope],['Authorized write scope',a.write_scope],['Constraints',a.constraints],['Acceptance',a.acceptance],['Verification',a.verification],['Escalate when',a.escalation_conditions],['Exclusions',a.exclusions]];return <div className="assignment-grid">{data.map(([label,items])=><div key={label} className="assignment-block"><span>{label}</span><ul>{items.map((x,i)=><li key={i}>{x}</li>)}</ul></div>)}</div>;}

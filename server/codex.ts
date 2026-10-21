@@ -41,6 +41,8 @@ export class AppServer extends EventEmitter {
   respondServerRequest(id:string|number,result:unknown){ if(!this.child||this.child.killed) throw new Error('Codex app-server is not connected.'); this.child.stdin.write(JSON.stringify({id,result})+'\n'); }
   respondServerError(id:string|number,code:number,message:string){ if(!this.child||this.child.killed) throw new Error('Codex app-server is not connected.'); this.child.stdin.write(JSON.stringify({id,error:{code,message}})+'\n'); }
   async models():Promise<Model[]> { await this.connect(); const all:Model[]=[]; let cursor:string|undefined; for(let i=0;i<10;i++){const r=await this.request('model/list',{cursor:cursor??null,limit:100,includeHidden:false}); all.push(...(r.data||[])); if(!r.nextCursor)break; cursor=r.nextCursor;} return all; }
+  async threadUsage(threadId:string):Promise<any>{await this.connect();const response=await this.request('account/usage/read',{threadId},10000);return response?.threadUsage??null;}
+  async accountRateLimits():Promise<any>{await this.connect();return this.request('account/rateLimits/read',{excludeResetCreditDetails:true},10000);}
   async startThread(role:'orchestrator'|'worker',root:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request',ownedPolicy?:string) {
     await this.connect(); const params=makeThreadParams({role,root,model,approvalPolicy,ownedPolicy});
     const r=await this.request('thread/start',params); return String(r.thread.id);
