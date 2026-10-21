@@ -16,10 +16,10 @@ describe('Codex approval and turn configuration',()=>{
     expect(settingsSchema.parse({...base,agentmemProjectId:'   '}).agentmemProjectId).toBe('');
     expect(settingsSchema.safeParse({...base,agentmemProjectId:'x'.repeat(129)}).success).toBe(false);
   });
-  it('requests detailed summaries and available provider raw text for new and resumed role threads',()=>{
+  it('requests the most detailed supported summaries and available provider text for new and resumed role threads',()=>{
     const orchestrator=makeThreadParams({role:'orchestrator',root:'D:/repo',model:'gpt-6-sol',approvalPolicy:'on-request',ownedPolicy:'policy'});
     const worker=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request'});
-    expect(orchestrator.config).toEqual({model_reasoning_summary:'detailed',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true});
+    expect(orchestrator.config).toEqual({model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true});
     expect(worker.config).toEqual(orchestrator.config);
     expect(makeThreadResumeParams('thread-1')).toEqual({threadId:'thread-1',excludeTurns:true,config:orchestrator.config});
     expect(orchestrator.developerInstructions).toContain('policy');
@@ -31,7 +31,7 @@ describe('Codex approval and turn configuration',()=>{
   it('serializes selected approval mode with read-only or bounded write sandbox',()=>{
     const readOnly=makeTurnParams({threadId:'t',input:'answer',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'}});
     expect(readOnly.approvalPolicy).toBe('on-request');expect(readOnly.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
-    expect(readOnly.summary).toBe('detailed');
+    expect(readOnly.summary).toBe('auto');
     const write=makeTurnParams({threadId:'t',input:'edit',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:['D:/repo/src'],approvalPolicy:'untrusted',schema:{type:'object'}});
     expect(write.approvalPolicy).toBe('untrusted');expect(write.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['D:/repo/src'],networkAccess:false});
     const orchestration=makeTurnParams({threadId:'t',input:'plan',role:'orchestrator',model:'gpt-6-sol',effort:'high',writeRoots:['D:/ignored'],approvalPolicy:'never',schema:{type:'object'}});

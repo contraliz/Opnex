@@ -6,6 +6,7 @@ import type { Receipt } from './contracts.js';
 import os from 'node:os';
 
 type Status = { connected:boolean; projectVerified:boolean; detail:string };
+export type AgentMemProject = { id:string; name:string; description?:string; sourceRoot:string };
 export class AgentMem {
   private client?:Client; private transport?:StdioClientTransport;
   status:Status={connected:false,projectVerified:false,detail:'Not connected'};
@@ -24,21 +25,34 @@ export class AgentMem {
   }
   async connect(projectId:string,expectedRoot:string) {
     try {
-      if(!this.client) {
-        await this.configure();
-        this.client=new Client({name:'pseudoharness',version:'0.1.0'});
-        this.transport=new StdioClientTransport({command:this.command!,args:this.args,env:{...process.env,...this.env} as Record<string,string>,stderr:'ignore'});
-        await this.client.connect(this.transport);
-      }
-      const r:any=await this.call('projects',{action:'list'});
-      const rows=r.projects||r.items||[];
-      const project=rows.find((x:any)=>x.id===projectId);
+      await this.ensureConnected();
+      const projects=await this.listProjects();
+      const project=projects.find(x=>x.id===projectId);
       if(!project) throw new Error(`AgentMem project "${projectId}" is not registered.`);
-      const root=project.source_root||project.root||project.cwd;
+      const root=project.sourceRoot;
       if(!root) throw new Error('AgentMem did not return a registered source root, so project identity cannot be verified.');
       if(path.resolve(root).toLowerCase()!==path.resolve(expectedRoot).toLowerCase()) throw new Error('AgentMem project root does not match the selected project root.');
-      this.status={connected:true,projectVerified:true,detail:`Connected · ${projectId}`}; return r;
+      this.status={connected:true,projectVerified:true,detail:`Connected · ${projectId}`}; return project;
     } catch(e) {this.status={connected:!!this.client,projectVerified:false,detail:safeError(e)};throw e;}
+  }
+  private async ensureConnected(){
+    if(this.client)return;
+    await this.configure();
+    const client=new Client({name:'pseudoharness',version:'0.1.0'});
+    const transport=new StdioClientTransport({command:this.command!,args:this.args,env:{...process.env,...this.env} as Record<string,string>,stderr:'ignore'});
+    try{await client.connect(transport);this.client=client;this.transport=transport;}
+    catch(error){try{await transport.close();}catch{}this.client=undefined;this.transport=undefined;throw error;}
+  }
+  async listProjects():Promise<AgentMemProject[]> {
+    await this.ensureConnected();
+    const result:any=await this.call('projects',{action:'list'});
+    const rows=Array.isArray(result)?result:result?.projects||result?.items||result?.data?.projects;
+    if(!Array.isArray(rows))throw new Error('AgentMem project list did not contain a projects array.');
+    return rows.flatMap((row:any)=>{
+      if(!row||typeof row.id!=='string'||!row.id.trim())return [];
+      const sourceRoot=row.source_root||row.root||row.cwd;
+      return [{id:row.id,name:typeof row.name==='string'&&row.name.trim()?row.name:row.id,...(typeof row.description==='string'&&row.description?{description:row.description}:{}),...(typeof sourceRoot==='string'&&sourceRoot?{sourceRoot}:{sourceRoot:''})}];
+    }).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})||a.id.localeCompare(b.id));
   }
   private async call(name:string,args:Record<string,unknown>) {
     if(!this.client) throw new Error('AgentMem is not connected.');

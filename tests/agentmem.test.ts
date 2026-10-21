@@ -6,6 +6,20 @@ const receipt:Receipt={status:'complete',result:'The adapter completion task is 
 const context={task:{acceptance:['Adapter submits completion schema','AgentMem releases completed task']},requirements:{requirements_revision:7,requirements_complete:true,applicable_requirements:[{id:'REQ-0001',revision:7}]}};
 
 describe('AgentMem receipt boundary',()=>{
+  it('lists registered knowledge bases from supported MCP list result shapes and verifies project roots',async()=>{
+    const adapter=new AgentMem();(adapter as any).client={};
+    const call=vi.fn(async()=>({projects:[{id:'other',name:'Other',root:'D:/other',memory_root:'D:/private/other'},{id:'demo',root:'D:/workspace/demo'}]}));(adapter as any).call=call;
+    await expect(adapter.listProjects()).resolves.toEqual([{id:'demo',name:'demo',sourceRoot:'D:/workspace/demo'},{id:'other',name:'Other',sourceRoot:'D:/other'}]);
+    await expect(adapter.connect('demo','d:/workspace/demo')).resolves.toMatchObject({id:'demo'});
+    await expect(adapter.connect('other','D:/workspace/demo')).rejects.toThrow(/root does not match/);
+    expect(call).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects malformed project listings instead of presenting invented choices',async()=>{
+    const adapter=new AgentMem();(adapter as any).client={};(adapter as any).call=vi.fn(async()=>({registered:[{id:'missing-schema'}]}));
+    await expect(adapter.listProjects()).rejects.toThrow(/did not contain a projects array/);
+  });
+
   it('builds the actual completion contract without changing project fulfillment',()=>{
     const stored=toAgentMemReceipt({...receipt,review_outcome:'accept'},context);
     expect(stored.status).toBe('done');
