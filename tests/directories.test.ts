@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { listDirectories, resolveProjectDirectory, validateProjectDirectory } from '../server/directories.js';
+import { createChildDirectory, listDirectories, resolveProjectDirectory, validateProjectDirectory } from '../server/directories.js';
 
 let temporary:string|undefined;
 afterEach(async()=>{if(temporary){await rm(temporary,{recursive:true,force:true});temporary=undefined;}});
@@ -47,6 +47,32 @@ describe('local directory browsing',()=>{
     expect(result.path).toBe(await realPath(path.join(temporary,'child')));
     expect(result.parent).toBe(await realPath(temporary));
     expect(result.entries).toEqual([]);
+  });
+
+  it('creates one child folder under the canonical selected parent without recursion',async()=>{
+    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    const parent=path.join(temporary,'Projects');await mkdir(parent);
+    const created=await createChildDirectory(parent,'New project');
+    expect(created).toEqual({parent:await realPath(parent),entry:{name:'New project',path:path.join(await realPath(parent),'New project')}});
+    expect((await listDirectories(parent)).entries.map(entry=>entry.name)).toEqual(['New project']);
+    await expect(createChildDirectory(parent,'nested/child')).rejects.toThrow('single folder name');
+    await expect(access(path.join(temporary,'nested'))).rejects.toThrow();
+  });
+
+  it('rejects empty, traversal, separator and control-character names',async()=>{
+    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    for(const name of ['', '   ','.','..','../outside','nested/child',`nested\\child`,'bad\u0000name'])await expect(createChildDirectory(temporary,name)).rejects.toThrow();
+    if(process.platform==='win32')for(const name of ['CON','folder.','folder ','bad:name'])await expect(createChildDirectory(temporary,name)).rejects.toThrow('not valid for a Windows folder');
+    await expect(createChildDirectory(path.join(temporary,'missing'),'New')).rejects.toThrow('does not exist');
+  });
+
+  it('does not overwrite an existing file or folder',async()=>{
+    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    const existing=path.join(temporary,'same');await writeFile(existing,'keep this file');
+    await expect(createChildDirectory(temporary,'same')).rejects.toThrow('already exists');
+    expect(await readFile(existing,'utf8')).toBe('keep this file');
+    await mkdir(path.join(temporary,'folder'));
+    await expect(createChildDirectory(temporary,'folder')).rejects.toThrow('already exists');
   });
 });
 

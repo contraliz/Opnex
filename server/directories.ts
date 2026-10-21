@@ -1,4 +1,4 @@
-import { realpath, readdir, stat } from 'node:fs/promises';
+import { mkdir, realpath, readdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -34,6 +34,32 @@ export async function resolveProjectDirectory(input:string){
 export async function validateProjectDirectory(input:string){
   const canonical=await resolveProjectDirectory(input);
   return {path:canonical,parent:path.dirname(canonical)===canonical?null:path.dirname(canonical),entries:[],truncated:false};
+}
+
+function validateFolderName(input:string){
+  const name=input;
+  if(!name.trim())throw new Error('Enter a folder name.');
+  if(name==='.'||name==='..'||name.includes('/')||name.includes('\\')||path.isAbsolute(name)||path.basename(name)!==name)throw new Error('Use a single folder name without path separators.');
+  if(name.length>255)throw new Error('Folder names must be 255 characters or fewer.');
+  if(process.platform==='win32'&&(/[<>:"|?*]/.test(name)||/[. ]$/.test(name)||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(name)))throw new Error('That name is not valid for a Windows folder. Remove reserved characters, a trailing dot or space, or a reserved device name.');
+  if([...name].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127))throw new Error('Folder names cannot contain control characters.');
+  return name;
+}
+
+export async function createChildDirectory(parentInput:string,nameInput:string){
+  const parent=await resolveProjectDirectory(parentInput);
+  const name=validateFolderName(nameInput);
+  const folderPath=path.join(parent,name);
+  try{await mkdir(folderPath);}
+  catch(error){
+    const code=(error as NodeJS.ErrnoException).code;
+    if(code==='EEXIST')throw new Error('A folder or file with that name already exists. Choose another name.');
+    if(code==='EACCES'||code==='EPERM')throw new Error('You do not have permission to create a folder here. Choose a folder you can write to.');
+    if(code==='ENOENT'||code==='ENOTDIR')throw new Error('The selected parent folder is no longer available. Browse to it again and retry.');
+    if(code==='ENAMETOOLONG'||code==='EINVAL')throw new Error('That folder name is not valid on this system. Choose a shorter, simpler name.');
+    throw new Error('Could not create the folder. Check the selected location and try again.');
+  }
+  return {parent,entry:{name,path:folderPath}};
 }
 
 export async function listDirectories(input?:string,showRoots=false):Promise<DirectoryListing>{
