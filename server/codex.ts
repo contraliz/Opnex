@@ -53,15 +53,15 @@ export class AppServer extends EventEmitter {
     const params=makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema});
     return this.request('turn/start',params,30000);
   }
-  async reviewTurn(threadId:string,input:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request') {return this.request('turn/start',{threadId,input:[{type:'text',text:input}],model,effort,summary:'detailed',outputSchema:reviewJsonSchema,approvalPolicy},30000);}
+  async reviewTurn(threadId:string,input:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request') {return this.request('turn/start',{threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:reviewJsonSchema,approvalPolicy},30000);}
   async interrupt(threadId:string,turnId:string){return this.request('turn/interrupt',{threadId,turnId},15000);}
   close(){try{this.child?.stdin.end();this.child?.kill();}catch{} this.ready=false;}
 }
 
 export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema}:{threadId:string;input:string;role:'orchestrator'|'worker';model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown}) {
-  return {threadId,input:[{type:'text',text:input}],model,effort,summary:'detailed',outputSchema:schema,sandboxPolicy:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false},approvalPolicy};
+  return {threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:schema,sandboxPolicy:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false},approvalPolicy};
 }
-export const REASONING_THREAD_CONFIG={model_reasoning_summary:'detailed',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true} as const;
+export const REASONING_THREAD_CONFIG={model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true} as const;
 export function makeThreadParams({role,root,model,approvalPolicy,ownedPolicy}:{role:'orchestrator'|'worker';root:string;model:string;approvalPolicy:ApprovalPolicy;ownedPolicy?:string}){
   return {cwd:root,model,approvalPolicy,sandbox:'read-only',allowProviderModelFallback:false,config:REASONING_THREAD_CONFIG,developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
 }
