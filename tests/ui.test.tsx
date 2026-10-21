@@ -15,6 +15,107 @@ describe('local task shell',()=>{
   it('renders honest first-run empty state and opens project settings',async()=>{
     render(<App/>);expect(await screen.findByText('What are we working on?')).toBeTruthy();expect(screen.getByText(/Local workflow/)).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:/^Settings$/}));const dialog=await screen.findByRole('dialog');const backdrop=dialog.closest('.dialog-backdrop') as HTMLElement;expect(backdrop.dataset.open).toBe('true');expect(document.activeElement).toBe(screen.getByRole('textbox',{name:/Project root/}));expect(screen.getByText('AgentMem project ID (optional)')).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Cancel'}));expect(backdrop.dataset.open).toBe('false');expect(backdrop.hasAttribute('inert')).toBe(true);fireEvent.click(screen.getByRole('button',{name:/^Settings$/}));expect(backdrop.dataset.open).toBe('true');
   });
+  it('browses folders, applies the selected canonical path and retains AgentMem validation inputs on save',async()=>{
+    const apiMod=await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{
+      if(path==='/api/state')return fixture as any;
+      if(path.startsWith('/api/directories'))return path.includes('chosen')?{path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[{name:'nested',path:'D:/workspace/demo/chosen/nested'}],truncated:false} as any:{path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;
+      if(path==='/api/settings')return {runtime:fixture.runtime} as any;
+      return {} as any;
+    });
+    render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));
+    const root=screen.getByRole('textbox',{name:/Project root/}) as HTMLInputElement;expect(root.readOnly).toBe(true);
+    fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));
+    await screen.findByText('chosen');expect(root.value).toBe('D:/workspace/demo');const row=document.querySelector('.directory-entry-row')!;const arrow=row.querySelector('.directory-entry-expand')!;const folder=row.querySelector('.directory-entry-select')!;expect(arrow.compareDocumentPosition(folder)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();fireEvent.click(folder);expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();expect(screen.getByRole('button',{name:'Collapse chosen'}).getAttribute('aria-expanded')).toBe('true');fireEvent.click(arrow);expect(screen.getByRole('button',{name:'Expand chosen'}).getAttribute('aria-expanded')).toBe('false');expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button',{name:'Use this folder'}));
+    await waitFor(()=>expect(root.value).toBe('D:/workspace/demo/chosen'));
+    expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>String(url).startsWith('/api/directories?path='))).toBe(true);
+    fireEvent.click(screen.getByRole('button',{name:'Save settings'}));
+    await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url,body])=>url==='/api/settings'&&(body as any).projectRoot==='D:/workspace/demo/chosen'&&(body as any).agentmemProjectId==='demo-project')).toBe(true));
+  });
+  it('keeps the project root unchanged when browsing is cancelled and reports browse errors',async()=>{
+    const apiMod=await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{
+      if(path==='/api/state')return fixture as any;
+      if(path.startsWith('/api/directories'))throw Error('You do not have permission to browse that folder.');
+      return {} as any;
+    });
+    render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));
+    const root=screen.getByRole('textbox',{name:/Project root/}) as HTMLInputElement;expect(root.readOnly).toBe(true);
+    fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));const path=await screen.findByRole('textbox',{name:'Folder path'});fireEvent.change(path,{target:{value:'D:/manual/path'}});
+    expect((await screen.findByRole('alert')).textContent).toContain('You do not have permission');
+    expect((screen.getByRole('button',{name:'Use this folder'}) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));await waitFor(()=>expect(root.value).toBe('D:/workspace/demo'));
+  });
+  it('requires a final directory validation and reports failure without accepting a stale listing',async()=>{
+    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{
+      if(url==='/api/state')return fixture as any;
+      if(url.startsWith('/api/directories?resolve=1'))throw Error('That folder does not exist or is not a directory.');
+      if(url.startsWith('/api/directories?path=')&&decodeURIComponent(url.split('?path=')[1]).endsWith('/chosen'))return {path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[],truncated:false} as any;
+      if(url.startsWith('/api/directories'))return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;
+      return {} as any;
+    });
+    render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));const root=screen.getByRole('textbox',{name:/Project root/}) as HTMLInputElement;fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));await screen.findByText('chosen');fireEvent.click(document.querySelector('.directory-entry-select')!);fireEvent.click(screen.getByRole('button',{name:'Use this folder'}));expect((await screen.findByRole('alert')).textContent).toContain('does not exist');expect(screen.getByRole('button',{name:'No subfolders in chosen'}).hasAttribute('disabled')).toBe(true);expect(root.value).toBe('D:/workspace/demo');expect(screen.getByRole('dialog',{name:'Choose a folder'})).toBeTruthy();
+  });
+  it('shows the folder chooser as a dialog and closes it with Escape without changing the root',async()=>{
+    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.api).mockImplementation(async(path:string)=>path.startsWith('/api/directories')?{path:'D:/workspace/demo',parent:'D:/workspace',entries:[],truncated:false} as any:path==='/api/state'?fixture as any:{} as any);
+    render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));const root=screen.getByRole('textbox',{name:/Project root/}) as HTMLInputElement;
+    const browse=screen.getByRole('button',{name:/Browse project root folders/});fireEvent.click(browse);const picker=await screen.findByRole('dialog',{name:'Choose a folder'});expect(picker).toBeTruthy();expect(browse.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(screen.getByRole('textbox',{name:'Folder path'}),{key:'Escape'});await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());expect(root.value).toBe('D:/workspace/demo');await waitFor(()=>expect(document.activeElement).toBe(browse));
+  });
+  it('selects folders immediately and keeps cancel responsive during final path validation',async()=>{
+    const apiMod=await import('../src/ui/api.js');let finishValidation:(value:any)=>void=()=>{};
+    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{
+      if(path==='/api/state')return fixture as any;
+      if(path.startsWith('/api/directories?resolve=1'))return await new Promise(resolve=>{finishValidation=resolve;}) as any;
+      if(path.startsWith('/api/directories?path=')&&decodeURIComponent(path.split('?path=')[1]).endsWith('/chosen'))return {path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[],truncated:false} as any;
+      if(path.startsWith('/api/directories'))return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;
+      return {} as any;
+    });
+    render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));
+    await screen.findByText('chosen');fireEvent.click(document.querySelector('.directory-entry-select')!);
+    const list=document.querySelector('.directory-picker-list') as HTMLElement;expect(list.classList.contains('is-loading')).toBe(false);expect(list.getAttribute('aria-busy')).toBe('false');expect((document.querySelector('.directory-entry-select') as HTMLButtonElement).disabled).toBe(false);expect((screen.getByRole('button',{name:'Cancel folder selection'}) as HTMLButtonElement).disabled).toBe(false);expect(screen.getByRole('button',{name:'Use this folder'}).hasAttribute('disabled')).toBe(false);expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Use this folder'}));expect(await screen.findByRole('button',{name:'Checking folder…'})).toBeTruthy();expect((screen.getByRole('button',{name:'Cancel folder selection'}) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());await act(async()=>finishValidation({path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[],truncated:false}));expect((screen.getByRole('textbox',{name:/Project root/}) as HTMLInputElement).value).toBe('D:/workspace/demo');
+  });
+  it('shows a folder-specific read error and retries its lazy expansion',async()=>{
+    const apiMod=await import('../src/ui/api.js');let attempts=0;
+    vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{
+      if(url==='/api/state')return fixture as any;
+      if(url.startsWith('/api/directories')){const path=decodeURIComponent(url.split('?path=')[1]||'');if(path.endsWith('/chosen')){attempts++;if(attempts===1)throw Error('You do not have permission to browse that folder.');return {path,parent:'D:/workspace/demo',entries:[{name:'nested',path:path+'/nested'}],truncated:false} as any;}return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;}
+      return {} as any;
+    });
+    render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));await screen.findByText('chosen');fireEvent.click(screen.getByRole('button',{name:'Expand chosen'}));expect((await screen.findByRole('alert')).textContent).toContain('permission to browse');fireEvent.click(screen.getByRole('button',{name:'Retry'}));expect(await screen.findByText('nested')).toBeTruthy();expect(attempts).toBe(2);
+  });
+  it('ignores a late tree response after the picker is cancelled',async()=>{
+    const apiMod=await import('../src/ui/api.js');let finishExpand:(value:any)=>void=()=>{};
+    vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{
+      if(url==='/api/state')return fixture as any;
+      if(url.startsWith('/api/directories')){const path=decodeURIComponent(url.split('?path=')[1]||'');if(path.endsWith('/chosen'))return await new Promise(resolve=>{finishExpand=resolve;}) as any;return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;}
+      return {} as any;
+    });
+    render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));const root=screen.getByRole('textbox',{name:/Project root/}) as HTMLInputElement;fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));await screen.findByText('chosen');fireEvent.click(screen.getByRole('button',{name:'Expand chosen'}));expect((screen.getByRole('button',{name:'Cancel folder selection'}) as HTMLButtonElement).disabled).toBe(false);fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());await act(async()=>finishExpand({path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[{name:'late',path:'D:/workspace/demo/chosen/late'}],truncated:false}));expect(root.value).toBe('D:/workspace/demo');
+  });
+  it('expands nested folders inline from the row, keeps the arrow independent, and pages large listings',async()=>{
+    const apiMod=await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{
+      if(url==='/api/state')return fixture as any;
+      if(url.startsWith('/api/directories')){
+        const path=decodeURIComponent(url.split('?path=')[1]||'');
+        if(path==='D:/workspace/demo')return {path,parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;
+        if(path.endsWith('/chosen'))return {path,parent:'D:/workspace/demo',entries:[{name:'nested',path:path+'/nested'}],truncated:false} as any;
+        if(path.endsWith('/nested'))return {path,parent:path.slice(0,path.lastIndexOf('/')),entries:[{name:'deep',path:path+'/deep'}],truncated:false} as any;
+        return {path,parent:null,entries:[],truncated:false} as any;
+      }
+      return {} as any;
+    });
+    render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));
+    await screen.findByText('chosen');const chosen=[...document.querySelectorAll<HTMLButtonElement>('.directory-entry-select')].find(button=>button.textContent?.includes('chosen'))!;fireEvent.click(chosen);await waitFor(()=>expect(chosen.getAttribute('aria-pressed')).toBe('true'));expect(screen.getByRole('button',{name:'Collapse chosen'}).getAttribute('aria-expanded')).toBe('true');expect(await screen.findByText('nested')).toBeTruthy();fireEvent.click(chosen);expect(screen.getByRole('button',{name:'Collapse chosen'})).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Collapse chosen'}));expect(screen.queryByText('nested')).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Expand chosen'}));expect(await screen.findByText('nested')).toBeTruthy();
+    const nestedSelect=[...document.querySelectorAll<HTMLButtonElement>('.directory-entry-select')].find(button=>button.textContent?.includes('nested'))!;fireEvent.click(nestedSelect);await waitFor(()=>expect(nestedSelect.getAttribute('aria-pressed')).toBe('true'));expect(screen.getByRole('button',{name:'Collapse nested'}).getAttribute('aria-expanded')).toBe('true');expect(await screen.findByText('deep')).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Collapse nested'}));expect(screen.queryByText('deep')).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Expand nested'}));expect(await screen.findByText('deep')).toBeTruthy();expect((screen.getByRole('button',{name:'Use this folder'}) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());
+    const many=Array.from({length:500},(_,index)=>({name:`folder-${index}`,path:`D:/workspace/demo/folder-${index}`}));vi.mocked(apiMod.api).mockImplementation(async(url:string)=>url.startsWith('/api/directories')?{path:'D:/workspace/demo',parent:'D:/workspace',entries:many,truncated:false} as any:url==='/api/state'?fixture as any:{} as any);
+    fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));await waitFor(()=>expect(document.querySelectorAll('.directory-entry-select')).toHaveLength(100));fireEvent.click(screen.getByRole('button',{name:'Show 100 more folders'}));await waitFor(()=>expect(document.querySelectorAll('.directory-entry-select')).toHaveLength(200));fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));
+  });
   it('fully hides the sidebar behind an anchored main-pane toggle, removes the Mac shortcut badge, and starts a task with Ctrl+N',async()=>{
     render(<App/>);await screen.findByText('What are we working on?');const sidebar=screen.getByRole('complementary',{hidden:true});const toggle=screen.getByRole('button',{name:'Collapse sidebar'});expect(toggle.closest('.topbar')).toBeTruthy();expect(document.querySelector('kbd')).toBeNull();fireEvent.click(toggle);expect(screen.getByRole('button',{name:'Expand sidebar'}).getAttribute('aria-expanded')).toBe('false');expect(sidebar.getAttribute('aria-hidden')).toBe('true');expect(sidebar.hasAttribute('inert')).toBe(true);fireEvent.click(screen.getByRole('button',{name:'Expand sidebar'}));expect(screen.getByRole('button',{name:'Collapse sidebar'}).getAttribute('aria-expanded')).toBe('true');fireEvent.click(screen.getByRole('button',{name:'Settings'}));expect(await screen.findByRole('dialog')).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Cancel'}));fireEvent.keyDown(window,{key:'n',ctrlKey:true});const {api}=await import('../src/ui/api.js');await waitFor(()=>expect(vi.mocked(api).mock.calls.some(([url])=>url==='/api/tasks/new')).toBe(true));
   });
@@ -85,8 +186,8 @@ describe('local task shell',()=>{
     render(<App/>);await screen.findByText('What are we working on?');const editor=screen.getByRole('textbox',{name:'Task message'});const view=EditorView.findFromDOM(editor as HTMLElement);expect(view).toBeTruthy();const source='  **draft**\n\n- item  ';act(()=>view!.dispatch({changes:{from:0,to:view!.state.doc.length,insert:source}}));fireEvent.click(screen.getByRole('button',{name:'Send task'}));const {api}=await import('../src/ui/api.js');await waitFor(()=>expect(vi.mocked(api).mock.calls.filter(([url,body])=>url==='/api/tasks'&&(body as any).message===source)).toHaveLength(1));
   });
   it('updates current project details live while preserving the session snapshot',async()=>{
-    const now=new Date().toISOString();const oldId='old-project';const task={id:'snapshot-task',title:'Historical context',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/old',agentmemProjectId:oldId,correctionCount:0,currentPassId:'pass-a',passes:[{id:'pass-a',index:1,createdAt:now,userInput:'prior work',userInputs:['prior work'],userMessageIds:['u1'],phase:'accepted',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'prior work',createdAt:now,passId:'pass-a'}]};let latest:any={...fixture.state,settings:{...fixture.state.settings},tasks:[task],activeTaskId:task.id};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id},csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(path==='/api/settings'){latest={...latest,settings:body};return {} as any;}if(path==='/api/state')return {state:latest,runtime:fixture.runtime} as any;return {} as any;});
-    render(<App/>);await screen.findByText('Current project settings');expect(screen.getAllByText('D:/workspace/old').length).toBeGreaterThan(0);fireEvent.click(screen.getByRole('button',{name:'Project settings'}));const root=await screen.findByRole('textbox',{name:/Project root/});fireEvent.change(root,{target:{value:'D:/workspace/next'}});const kb=screen.getByRole('textbox',{name:/AgentMem project ID/});fireEvent.change(kb,{target:{value:''}});fireEvent.click(screen.getByRole('button',{name:'Save settings'}));await waitFor(()=>expect(screen.getAllByText('D:/workspace/next').length).toBeGreaterThan(0));expect(screen.getByText('old-project')).toBeTruthy();expect(screen.getByText('Disabled · no project selected')).toBeTruthy();
+    const now=new Date().toISOString();const oldId='old-project';const task={id:'snapshot-task',title:'Historical context',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/old',agentmemProjectId:oldId,correctionCount:0,currentPassId:'pass-a',passes:[{id:'pass-a',index:1,createdAt:now,userInput:'prior work',userInputs:['prior work'],userMessageIds:['u1'],phase:'accepted',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'prior work',createdAt:now,passId:'pass-a'}]};let latest:any={...fixture.state,settings:{...fixture.state.settings},tasks:[task],activeTaskId:task.id};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id},csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(path==='/api/settings'){latest={...latest,settings:body};return {} as any;}if(path==='/api/state')return {state:latest,runtime:fixture.runtime} as any;if(path.startsWith('/api/directories'))return path.includes('next')?{path:'D:/workspace/next',parent:'D:/workspace',entries:[],truncated:false} as any:{path:'D:/workspace/old',parent:'D:/workspace',entries:[{name:'next',path:'D:/workspace/next'}],truncated:false} as any;return {} as any;});
+    render(<App/>);await screen.findByText('Current project settings');expect(screen.getAllByText('D:/workspace/old').length).toBeGreaterThan(0);fireEvent.click(screen.getByRole('button',{name:'Project settings'}));const root=await screen.findByRole('textbox',{name:/Project root/});expect((root as HTMLInputElement).readOnly).toBe(true);fireEvent.click(screen.getByRole('button',{name:/Browse project root folders/}));await screen.findByText('next');fireEvent.click(document.querySelector('.directory-entry-select')!);fireEvent.click(await screen.findByRole('button',{name:'Use this folder'}));await waitFor(()=>expect((root as HTMLInputElement).value).toBe('D:/workspace/next'));const kb=screen.getByRole('textbox',{name:/AgentMem project ID/});fireEvent.change(kb,{target:{value:''}});fireEvent.click(screen.getByRole('button',{name:'Save settings'}));await waitFor(()=>expect(screen.getAllByText('D:/workspace/next').length).toBeGreaterThan(0));expect(screen.getByText('old-project')).toBeTruthy();expect(screen.getByText('Disabled · no project selected')).toBeTruthy();
   });
   it('renames and deletes only the selected local session through confirmed actions',async()=>{
     const now=new Date().toISOString();const task={id:'local-session',title:'Synthetic session',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',agentmemProjectId:'demo-project',correctionCount:0,messages:[{id:'m1',role:'user',text:'sample',createdAt:now}]};let latest:any={...fixture.state,tasks:[task],activeTaskId:task.id};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:latest,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(path==='/api/state')return {state:latest,runtime:fixture.runtime} as any;if(path==='/api/tasks/local-session/rename'){latest={...latest,tasks:[{...task,title:body.title}]};return {} as any;}if(path==='/api/tasks/local-session/delete'){latest={...latest,tasks:[],activeTaskId:null};return {ok:true,id:'local-session'} as any;}return {} as any;});
