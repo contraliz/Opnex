@@ -13,9 +13,33 @@ describe('browser API session recovery',()=>{
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls[3][1].headers['x-pseudoharness-token']).toBe('new');
   });
-  it('reports an invalid response without leaking raw server content',async()=>{
+  it('reports malformed responses without leaking raw server content',async()=>{
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('<internal detail>',{status:502})));
     vi.resetModules();const api=await import('../src/ui/api.js');
-    await expect(api.bootstrap()).rejects.toThrow('invalid response (502)');
+    await expect(api.bootstrap()).rejects.toThrow('local service could not complete the request');
+  });
+  it('turns structured validation errors into a readable message and preserves status metadata',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({error:JSON.stringify([{path:['projectRoot'],message:'Folder does not exist.'}] )}),{status:400,headers:{'content-type':'application/json'}})));
+    vi.resetModules();const api=await import('../src/ui/api.js');
+    let caught:unknown;try{await api.api('/api/settings',{});}catch(error){caught=error;}
+    expect(caught).toBeInstanceOf(api.ApiError);
+    expect(caught).toMatchObject({status:400,code:'HTTP_ERROR'});
+    expect(String(caught)).toContain('project root: Folder does not exist.');
+    expect(String(caught)).not.toContain('{');
+  });
+  it('gives a useful offline message when the local service cannot be reached',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+    vi.resetModules();const api=await import('../src/ui/api.js');
+    await expect(api.api('/api/directories')).rejects.toThrow('Check that it is running, then retry.');
+  });
+  it('explains plain text server errors without displaying object serialization',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('Folder access was denied.',{status:403})));
+    vi.resetModules();const api=await import('../src/ui/api.js');
+    await expect(api.api('/api/directories')).rejects.toThrow('Folder access was denied.');
+  });
+  it('explains when a stale server serves the app page for an unavailable API route',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('<!doctype html><html></html>',{status:200,headers:{'content-type':'text/html; charset=utf-8'}})));
+    vi.resetModules();const api=await import('../src/ui/api.js');
+    await expect(api.api('/api/directories?path=D%3A%5Cworkspace')).rejects.toThrow('Restart Pseudoharness and reload so its UI and backend versions match.');
   });
 });
