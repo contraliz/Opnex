@@ -24,6 +24,14 @@ describe('Codex approval and turn configuration',()=>{
     expect(makeThreadResumeParams('thread-1')).toEqual({threadId:'thread-1',excludeTurns:true,config:orchestrator.config});
     expect(orchestrator.developerInstructions).toContain('policy');
   });
+  it('requires both roles to verify public-source provenance instead of trusting local paths or KB claims',()=>{
+    const orchestrator=buildOrchestratorDeveloperInstructions();
+    const worker=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request'}).developerInstructions;
+    for(const instructions of [orchestrator,worker]){
+      expect(instructions).toContain('tracked and present in the relevant remote repository');
+      expect(instructions).toContain('local workspace path or project-knowledge statement alone does not establish publication');
+    }
+  });
   it('does not add reasoning config to turn parameters or send reasoning through the prompt',()=>{
     const params=makeTurnParams({threadId:'t',input:'safe user prompt',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'}});
     expect(params).not.toHaveProperty('config');expect(params.input).toEqual([{type:'text',text:'safe user prompt'}]);
