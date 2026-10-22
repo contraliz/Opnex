@@ -10,7 +10,7 @@ describe('Codex approval and turn configuration',()=>{
   it('accepts only supported approval presets and keeps the safe default',()=>{
     const base={projectRoot:'D:/repo',agentmemProjectId:'demo',orchestratorModel:'gpt-6-sol',orchestratorEffort:'high'};
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
-    for(const approvalPolicy of ['on-request','untrusted','never'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
+    for(const approvalPolicy of ['on-request','untrusted','never','full-access'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
     expect(settingsSchema.safeParse({...base,approvalPolicy:'custom'}).success).toBe(false);
     expect(settingsSchema.parse({...base,agentmemProjectId:''}).agentmemProjectId).toBe('');
     expect(settingsSchema.parse({...base,agentmemProjectId:'   '}).agentmemProjectId).toBe('');
@@ -36,6 +36,21 @@ describe('Codex approval and turn configuration',()=>{
     expect(write.approvalPolicy).toBe('untrusted');expect(write.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['D:/repo/src'],networkAccess:false});
     const orchestration=makeTurnParams({threadId:'t',input:'plan',role:'orchestrator',model:'gpt-6-sol',effort:'high',writeRoots:['D:/ignored'],approvalPolicy:'never',schema:{type:'object'}});
     expect(orchestration.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
+  });
+  it('maps full access to the installed app-server never-approve and danger-full-access policies for all roles',()=>{
+    for(const role of ['orchestrator','worker'] as const){
+      const thread=makeThreadParams({role,root:'D:/repo',model:role==='worker'?'gpt-6-luna':'gpt-6-sol',approvalPolicy:'full-access'});
+      expect(thread).toMatchObject({approvalPolicy:'never',sandbox:'danger-full-access'});
+      const turn=makeTurnParams({threadId:'thread',input:'work',role,model:'model',effort:'high',writeRoots:[],approvalPolicy:'full-access',schema:{type:'object'}});
+      expect(turn).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
+    }
+    expect(makeThreadResumeParams('thread','full-access')).toMatchObject({approvalPolicy:'never',sandbox:'danger-full-access'});
+    expect(makeThreadResumeParams('thread')).not.toHaveProperty('sandbox');
+  });
+  it('uses the full-access sandbox for review turns as well as ordinary turns',async()=>{
+    const client=new AppServer();const request=vi.fn().mockResolvedValue({turn:{id:'review'}});(client as any).request=request;
+    await client.reviewTurn('thread','review','gpt-6-sol','high','full-access');
+    expect(request.mock.calls[0][1]).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
   });
   it('converts user approval decisions into the app-server response schema',()=>{
     expect(approvalResponse('item/commandExecution/requestApproval',null,'accept')).toEqual({decision:'accept'});

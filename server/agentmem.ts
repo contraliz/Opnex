@@ -9,6 +9,7 @@ type Status = { connected:boolean; projectVerified:boolean; detail:string };
 export type AgentMemProject = { id:string; name:string; description?:string; sourceRoot:string; memoryDirectory:string };
 export class AgentMem {
   private client?:Client; private transport?:StdioClientTransport;
+  private connecting?:Promise<void>;
   status:Status={connected:false,projectVerified:false,detail:'Not connected'};
   private command?:string; private args:string[]=[]; private env:Record<string,string>={};
   async configure() {
@@ -25,7 +26,6 @@ export class AgentMem {
   }
   async connect(projectId:string,expectedRoot:string) {
     try {
-      await this.ensureConnected();
       const projects=await this.listProjects();
       const project=projects.find(x=>x.id===projectId);
       if(!project) throw new Error(`AgentMem project "${projectId}" is not registered.`);
@@ -36,15 +36,35 @@ export class AgentMem {
     } catch(e) {this.status={connected:!!this.client,projectVerified:false,detail:safeError(e)};throw e;}
   }
   private async ensureConnected(){
-    if(this.client)return;
+    if(this.connecting){await this.connecting;return;}
+    if(this.client&&this.transport)return;
+    const connection=this.openConnection();this.connecting=connection;
+    try{await connection;}finally{if(this.connecting===connection)this.connecting=undefined;}
+  }
+  private async openConnection(){
     await this.configure();
     const client=new Client({name:'pseudoharness',version:'0.1.0'});
     const transport=new StdioClientTransport({command:this.command!,args:this.args,env:{...process.env,...this.env} as Record<string,string>,stderr:'ignore'});
-    try{await client.connect(transport);this.client=client;this.transport=transport;}
-    catch(error){try{await transport.close();}catch{}this.client=undefined;this.transport=undefined;throw error;}
+    this.client=client;this.transport=transport;
+    transport.onclose=()=>this.invalidateConnection(client,transport);
+    transport.onerror=()=>this.invalidateConnection(client,transport);
+    try{await client.connect(transport);if(this.client!==client)throw new Error('AgentMem connection closed during startup.');}
+    catch(error){this.invalidateConnection(client,transport);try{await transport.close();}catch{}throw error;}
+  }
+  private invalidateConnection(client?:Client,transport?:StdioClientTransport){
+    if(client&&this.client!==client||transport&&this.transport!==transport)return;
+    const current=this.transport;this.client=undefined;this.transport=undefined;
+    this.status={connected:false,projectVerified:false,detail:'AgentMem connection closed; retry to reconnect.'};
+    if(current)void current.close().catch(()=>{});
+  }
+  private canReplay(name:string,args:Record<string,unknown>){
+    if(['projects','attach_project','requirements','lessons','retrieve_evidence','task_context'].includes(name))return true;
+    if(name==='tasks'&&['show','list'].includes(String(args.action||'')))return true;
+    if(name==='record_work'&&args.action==='receipt'&&typeof args.idempotency_key==='string'&&!!args.idempotency_key)return true;
+    if(name==='record_work'&&args.action==='release'&&typeof args.lease_token==='string'&&!!args.lease_token&&typeof args.task_id==='string'&&!!args.task_id)return true;
+    return false;
   }
   async listProjects():Promise<AgentMemProject[]> {
-    await this.ensureConnected();
     const result:any=await this.call('projects',{action:'list'});
     const rows=Array.isArray(result)?result:result?.projects||result?.items||result?.data?.projects;
     if(!Array.isArray(rows))throw new Error('AgentMem project list did not contain a projects array.');
@@ -57,12 +77,23 @@ export class AgentMem {
     }).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})||a.id.localeCompare(b.id));
   }
   private async call(name:string,args:Record<string,unknown>) {
-    if(!this.client) throw new Error('AgentMem is not connected.');
-    const result:any=await this.client.callTool({name,arguments:args});
-    if(result.isError) throw new Error(result.content?.map((x:any)=>x.text||'').join('\n')||`AgentMem ${name} failed`);
-    const text=result.content?.find((x:any)=>x.type==='text')?.text;
-    if(text) {try{return JSON.parse(text)}catch{}}
-    return result.structuredContent||result;
+    for(let attempt=0;attempt<2;attempt++){
+      let client:Client|undefined;
+      try{
+        await this.ensureConnected();client=this.client;
+        if(!client)throw new Error('AgentMem is not connected.');
+        const result:any=await client.callTool({name,arguments:args});
+        if(result.isError) throw new Error(result.content?.map((x:any)=>x.text||'').join('\n')||`AgentMem ${name} failed`);
+        const text=result.content?.find((x:any)=>x.type==='text')?.text;
+        if(text) {try{return JSON.parse(text)}catch{}}
+        return result.structuredContent||result;
+      }catch(error){
+        if(!isTransportFailure(error)||attempt>0)throw error;
+        if(client)this.invalidateConnection(client,this.transport);
+        if(!this.canReplay(name,args))throw error;
+      }
+    }
+    throw new Error(`AgentMem ${name} failed after reconnecting.`);
   }
   async context(projectId:string,query:string) {
     const [attached,requirements,lessons,evidence]=await Promise.all([
@@ -152,7 +183,7 @@ export class AgentMem {
   async releaseWork(projectId:string,taskId:string,lease:string){
     return this.call('record_work',{action:'release',project_id:projectId,task_id:taskId,lease_token:lease,owner:'pseudoharness-local'});
   }
-  close(){ void this.transport?.close();this.client=undefined;this.transport=undefined;this.status={connected:false,projectVerified:false,detail:'Disconnected'}; }
+  close(){this.invalidateConnection(this.client,this.transport);this.status={connected:false,projectVerified:false,detail:'Disconnected'};}
 }
 export function toAgentMemReceipt(receipt:Receipt & Record<string,unknown>,context:any){
   const scopedAcceptance=Array.isArray(context?.task?.acceptance)?context.task.acceptance:[];
@@ -190,6 +221,7 @@ export function toAgentMemReceipt(receipt:Receipt & Record<string,unknown>,conte
   note:accepted&&requirementsComplete?'Accepted app receipt; AgentMem task completion requested. Project requirement fulfillment remains independent.':'Application outcome did not meet the AgentMem task completion contract; preserve as in progress and release the lease.'
 };}
 export function safeError(e:unknown){return (e instanceof Error?e.message:String(e)).replace(/(?:[A-Z]:\\[^\s]+|\/[^\s]+\.toml)/gi,'[local path]').slice(0,500);}
+function isTransportFailure(error:unknown){return /connection closed|transport closed|not connected|client is closed|process exited|broken pipe|\bEPIPE\b|\bECONNRESET\b/i.test(error instanceof Error?error.message:String(error));}
 export function agentMemRecordState(saved:any,appStatus:string){
   return {status:saved.status,receiptId:saved.receipt_id,ownershipReleased:saved.status==='done'||saved.ownership_released===true,error:saved.actionable_error||((appStatus==='complete'&&saved.status!=='done')?saved.note||'AgentMem did not accept task completion. Review the saved receipt and task checks.':undefined)};
 }

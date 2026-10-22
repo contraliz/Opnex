@@ -1,5 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentMem, agentMemRecordFailure, agentMemRecordState, toAgentMemReceipt } from '../server/agentmem.js';
 import type { Receipt } from '../server/contracts.js';
@@ -176,6 +177,48 @@ describe('AgentMem receipt boundary',()=>{
     const adapter=new AgentMem();
     (adapter as any).call=vi.fn().mockResolvedValueOnce(context).mockRejectedValueOnce(new Error('MCP receipt call failed')).mockResolvedValueOnce({status:'in_progress',owner:''});
     await expect(adapter.recordReceipt('pseudoharness','task-3','lease-3',{...receipt,review_outcome:'accept'})).rejects.toThrow('MCP receipt call failed');
+  });
+
+  it('preserves both the receipt failure and a failed lease release for diagnosis',async()=>{
+    const adapter=new AgentMem();
+    (adapter as any).call=vi.fn().mockResolvedValueOnce(context).mockRejectedValueOnce(new Error('MCP error -32000: Connection closed')).mockRejectedValueOnce(new Error('AgentMem is not connected.'));
+    await expect(adapter.recordReceipt('pseudoharness','task-disconnected','lease-disconnected',{...receipt,review_outcome:'accept'}))
+      .rejects.toThrow(/Connection closed; lease release also failed: AgentMem is not connected/);
+  });
+
+  it('reconnects after an actual stdio transport closes and retries a read once',async()=>{
+    const directory=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-agentmem-'));
+    const configPath=path.join(directory,'config.toml');const serverPath=path.join(directory,'fixture.mjs');const statePath=path.join(directory,'state.json');
+    const server=`import {existsSync,readFileSync,writeFileSync} from 'node:fs';\nimport readline from 'node:readline';\nconst statePath=process.argv[2];\nconst mode=process.argv[3];\nconst load=()=>existsSync(statePath)?JSON.parse(readFileSync(statePath,'utf8')):{};\nconst save=value=>writeFileSync(statePath,JSON.stringify(value));\nconst reply=(id,result)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\\n');\nreadline.createInterface({input:process.stdin}).on('line',line=>{const msg=JSON.parse(line);if(msg.method==='initialize'){const current=load();if(mode==='startup-drop-once'&&!current.closedOnce){current.closedOnce=true;save(current);process.exit(0);}reply(msg.id,{protocolVersion:'2025-06-18',capabilities:{tools:{}},serverInfo:{name:'agentmem-fixture',version:'1'}});return;}if(msg.method!=='tools/call')return;const name=msg.params?.name;const args=msg.params?.arguments||{};if(name==='projects'){const current=load();if(mode==='projects-drop-once'&&!current.closedOnce){current.closedOnce=true;save(current);process.exit(0);}current.projectCalls=(current.projectCalls||0)+1;save(current);reply(msg.id,{content:[{type:'text',text:JSON.stringify({projects:[{id:'fixture',name:'Fixture',root:'D:/fixture',memory_root:'D:/projects/fixture'}]})}]});return;}if(name==='task_context'){reply(msg.id,{content:[{type:'text',text:JSON.stringify({task:{acceptance:['Criterion'],acceptance_revision:1,acceptance_complete:true},requirements:{requirements_revision:1,requirements_complete:true,applicable_requirements:[]}})}]});return;}if(name==='record_work'&&args.action==='receipt'){const current=load();if(!current.saved){save({saved:{key:args.idempotency_key,receipt:args.receipt},attempts:1});process.exit(0);}current.attempts++;current.samePayload=current.saved.key===args.idempotency_key&&JSON.stringify(current.saved.receipt)===JSON.stringify(args.receipt);save(current);reply(msg.id,{content:[{type:'text',text:JSON.stringify({status:'done',receipt_id:'fixture-receipt',completion_accepted:true})}]});return;}reply(msg.id,{content:[{type:'text',text:JSON.stringify({error:'unexpected fixture call'})}],isError:true});});`;
+    const config=`[mcp_servers.agentmem]\ncommand = ${JSON.stringify(process.execPath)}\nargs = ${JSON.stringify([serverPath,statePath,'startup-drop-once'])}\n`;
+    try{
+      await writeFile(serverPath,server,'utf8');await writeFile(configPath,config,'utf8');vi.stubEnv('CODEX_HOME',directory);
+      const adapter=new AgentMem();
+      try{
+        await expect(adapter.listProjects()).resolves.toEqual([{id:'fixture',name:'Fixture',sourceRoot:'D:/fixture',memoryDirectory:'fixture'}]);
+        const state=JSON.parse(await readFile(statePath,'utf8'));
+        expect(state).toMatchObject({closedOnce:true,projectCalls:1});
+        await expect(adapter.connect('fixture','D:/fixture')).resolves.toMatchObject({id:'fixture'});
+        expect(adapter.status).toMatchObject({connected:true,projectVerified:true});
+      }finally{adapter.close();vi.unstubAllEnvs();}
+    }finally{await rm(directory,{recursive:true,force:true});}
+  });
+
+  it('replays an interrupted receipt with the same idempotency key and payload',async()=>{
+    const directory=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-agentmem-'));
+    const configPath=path.join(directory,'config.toml');const serverPath=path.join(directory,'fixture.mjs');const statePath=path.join(directory,'state.json');
+    const server=`import {existsSync,readFileSync,writeFileSync} from 'node:fs';\nimport readline from 'node:readline';\nconst statePath=process.argv[2];\nconst load=()=>existsSync(statePath)?JSON.parse(readFileSync(statePath,'utf8')):{};\nconst save=value=>writeFileSync(statePath,JSON.stringify(value));\nconst reply=(id,result)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\\n');\nreadline.createInterface({input:process.stdin}).on('line',line=>{const msg=JSON.parse(line);if(msg.method==='initialize'){reply(msg.id,{protocolVersion:'2025-06-18',capabilities:{tools:{}},serverInfo:{name:'agentmem-fixture',version:'1'}});return;}if(msg.method!=='tools/call')return;const name=msg.params?.name;const args=msg.params?.arguments||{};if(name==='task_context'){reply(msg.id,{content:[{type:'text',text:JSON.stringify({task:{acceptance:['Criterion'],acceptance_revision:1,acceptance_complete:true},requirements:{requirements_revision:1,requirements_complete:true,applicable_requirements:[]}})}]});return;}if(name==='record_work'&&args.action==='receipt'){const current=load();if(!current.saved){save({saved:{key:args.idempotency_key,receipt:args.receipt},attempts:1});process.exit(0);}current.attempts++;current.samePayload=current.saved.key===args.idempotency_key&&JSON.stringify(current.saved.receipt)===JSON.stringify(args.receipt);save(current);reply(msg.id,{content:[{type:'text',text:JSON.stringify({status:'done',receipt_id:'fixture-receipt',completion_accepted:true})}]});return;}reply(msg.id,{content:[{type:'text',text:JSON.stringify({error:'unexpected fixture call'})}],isError:true});});`;
+    const config=`[mcp_servers.agentmem]\ncommand = ${JSON.stringify(process.execPath)}\nargs = ${JSON.stringify([serverPath,statePath,'receipt-drop-once'])}\n`;
+    try{
+      await writeFile(serverPath,server,'utf8');await writeFile(configPath,config,'utf8');vi.stubEnv('CODEX_HOME',directory);
+      const adapter=new AgentMem();
+      try{
+        const saved=await adapter.recordReceipt('fixture','task-fixture','lease-fixture',{...receipt,assignment:{acceptance:['Criterion']},review_outcome:'accept'} as any);
+        expect(saved).toMatchObject({status:'done',receipt_id:'fixture-receipt'});
+        const state=JSON.parse(await readFile(statePath,'utf8'));
+        expect(state.attempts).toBe(2);expect(state.samePayload).toBe(true);expect(state.saved.key).toBe('pseudoharness-task-fixture-receipt-v2');
+      }finally{adapter.close();vi.unstubAllEnvs();}
+    }finally{await rm(directory,{recursive:true,force:true});}
   });
 
   it('keeps rejected saves and completions visibly distinct from success in app state',()=>{
