@@ -16,7 +16,7 @@ export type PassAllowanceUsage = { fiveHourPercent:number|null; weeklyPercent:nu
 export type PassRoleUsage = { threadId:string; tokenStatus:'pending'|'available'|'unavailable'; tokens?:PassTokenUsage; creditStatus:'pending'|'available'|'unavailable'; estimateSource?:'codex-app-server-thread-usage'; estimatedCreditsMicros?:string; estimatedUsdMicros?:string|null; allowance?:PassAllowanceUsage; groups?:PassUsageGroup[]; updatedAt?:string };
 export type PassUsage = Partial<Record<'orchestrator'|'worker',PassRoleUsage>>;
 export type ApprovalRequest = { requestId: string|number; method: 'item/commandExecution/requestApproval'|'item/fileChange/requestApproval'; itemId:string; threadId:string; turnId:string; reason?:string; command?:string; cwd?:string; grantRoot?:string; availableDecisions?:string[]; kind?:string; networkHost?:string; networkProtocol?:string };
-export type TaskPass = { id:string; index:number; createdAt:string; userInput:string; userInputs:string[]; userMessageIds:string[]; phase:TaskPhase; legacyUnassociated?:boolean; publicAnswer?:string; assignment?:Assignment; receipt?:Receipt; reviewNote?:string; resolution?:'direct'|'delegated'; routingNote?:string; error?:string; escalation?:unknown; reasoningSummaries?:ReasoningSummary[]; reasoningRawContent?:ReasoningRawContent[]; reasoningTurns?:ReasoningTurn[]; usage?:PassUsage; correctionCount:number; orchestratorThreadId?:string; workerThreadId?:string; activeTurnId?:string; activeRole?:'orchestrator'|'worker'; processedTurns:string[]; agentmemTaskId?:string; agentmemLease?:string; agentmemRecordStatus?:string; agentmemRecordError?:string; agentmemReceiptId?:string };
+export type TaskPass = { id:string; index:number; createdAt:string; userInput:string; userInputs:string[]; userMessageIds:string[]; phase:TaskPhase; approvalPolicy?:ApprovalPolicy; legacyUnassociated?:boolean; publicAnswer?:string; assignment?:Assignment; receipt?:Receipt; reviewNote?:string; resolution?:'direct'|'delegated'; routingNote?:string; error?:string; escalation?:unknown; reasoningSummaries?:ReasoningSummary[]; reasoningRawContent?:ReasoningRawContent[]; reasoningTurns?:ReasoningTurn[]; usage?:PassUsage; correctionCount:number; orchestratorThreadId?:string; workerThreadId?:string; activeTurnId?:string; activeRole?:'orchestrator'|'worker'; processedTurns:string[]; agentmemTaskId?:string; agentmemLease?:string; agentmemRecordStatus?:string; agentmemRecordError?:string; agentmemReceiptId?:string };
 export type Task = { id: string; title: string; phase: TaskPhase; createdAt: string; updatedAt: string; userRoot: string; agentmemProjectId: string; userMessages: string[]; messages: Message[]; passes?:TaskPass[]; currentPassId?:string; assignment?: Assignment; receipt?: Receipt; reviewNote?: string; resolution?:'direct'|'delegated'; allowDirectResponse?:boolean; routingNote?:string; reasoningSummaries?:ReasoningSummary[]; reasoningRawContent?:ReasoningRawContent[]; reasoningTurns?:ReasoningTurn[]; activeModelId?:string; activeEffort?:string; correctionCount: number; orchestratorThreadId?: string; workerThreadId?: string; activeTurnId?: string; activeRole?:'orchestrator'|'worker'; processedTurns: string[]; error?: string; escalation?: unknown; approvalRequests?: ApprovalRequest[]; agentmemTaskId?: string; agentmemLease?: string; agentmemRecordStatus?: string; agentmemRecordError?: string; agentmemReceiptId?: string; pendingRevision?: boolean };
 export type Settings = { projectRoot: string; agentmemProjectId: string; orchestratorModel: string; orchestratorEffort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'; approvalPolicy: ApprovalPolicy };
 export type State = { version: 2; settings: Settings; tasks: Task[]; activeTaskId: string|null; };
@@ -27,6 +27,8 @@ let current = structuredClone(defaults);
 let loaded = false;
 let writeQueue = Promise.resolve();
 const listeners = new Set<(state: State) => void>();
+const approvalPolicies:ApprovalPolicy[]=['on-request','untrusted','never','full-access'];
+const savedApprovalPolicy=(value:unknown):ApprovalPolicy=>approvalPolicies.includes(value as ApprovalPolicy)?value as ApprovalPolicy:'on-request';
 
 export async function loadState(): Promise<State> {
   if (loaded) return current;
@@ -42,13 +44,14 @@ export function upgradeStoredState(value:any):State{
   const tasks=(value.tasks||[]).map((t:any)=>{
     const task={...t,agentmemProjectId:typeof t.agentmemProjectId==='string'?t.agentmemProjectId:(value.settings?.agentmemProjectId||defaults.settings.agentmemProjectId),...(['planning','worker_running','reviewing'].includes(t.phase)?{phase:'paused_after_restart' as const,activeRole:undefined,activeTurnId:undefined,approvalRequests:[],error:'The process restarted during this turn. Resume explicitly after checking Codex thread state.'}:{})} as Task;
     if(!Array.isArray(task.passes)||task.passes.length===0){
-      task.passes=[{id:randomUUID(),index:1,createdAt:task.createdAt,userInput:task.userMessages?.[0]||task.title,userInputs:[...(task.userMessages||[])],userMessageIds:[],phase:task.phase,legacyUnassociated:true,assignment:task.assignment,receipt:task.receipt,reviewNote:task.reviewNote,resolution:task.resolution,routingNote:task.routingNote,error:task.error,escalation:task.escalation,reasoningSummaries:task.reasoningSummaries,reasoningRawContent:task.reasoningRawContent,reasoningTurns:task.reasoningTurns,correctionCount:task.correctionCount||0,orchestratorThreadId:task.orchestratorThreadId,workerThreadId:task.workerThreadId,processedTurns:[...(task.processedTurns||[])],agentmemTaskId:task.agentmemTaskId,agentmemLease:task.agentmemLease,agentmemRecordStatus:task.agentmemRecordStatus,agentmemRecordError:task.agentmemRecordError,agentmemReceiptId:task.agentmemReceiptId}];
+      task.passes=[{id:randomUUID(),index:1,createdAt:task.createdAt,userInput:task.userMessages?.[0]||task.title,userInputs:[...(task.userMessages||[])],userMessageIds:[],phase:task.phase,approvalPolicy:savedApprovalPolicy(value.settings?.approvalPolicy),legacyUnassociated:true,assignment:task.assignment,receipt:task.receipt,reviewNote:task.reviewNote,resolution:task.resolution,routingNote:task.routingNote,error:task.error,escalation:task.escalation,reasoningSummaries:task.reasoningSummaries,reasoningRawContent:task.reasoningRawContent,reasoningTurns:task.reasoningTurns,correctionCount:task.correctionCount||0,orchestratorThreadId:task.orchestratorThreadId,workerThreadId:task.workerThreadId,processedTurns:[...(task.processedTurns||[])],agentmemTaskId:task.agentmemTaskId,agentmemLease:task.agentmemLease,agentmemRecordStatus:task.agentmemRecordStatus,agentmemRecordError:task.agentmemRecordError,agentmemReceiptId:task.agentmemReceiptId}];
       task.currentPassId=undefined;
     }
+    for(const pass of task.passes)pass.approvalPolicy=savedApprovalPolicy(pass.approvalPolicy??value.settings?.approvalPolicy);
     syncCurrentPass(task);
     return task;
   });
-  return {...defaults,...value,version:2,settings:{...defaults.settings,...value.settings},tasks};
+  return {...defaults,...value,version:2,settings:{...defaults.settings,...value.settings,approvalPolicy:savedApprovalPolicy(value.settings?.approvalPolicy)},tasks};
 }
 export function getState() { return structuredClone(current); }
 export function getTask(id: string) { return current.tasks.find(t => t.id === id); }
@@ -73,14 +76,14 @@ export async function mutate(fn: (state: State) => void) {
   writeQueue = writeQueue.then(async () => { await mkdir(dataDir,{recursive:true}); const tmp = `${statePath}.${randomUUID()}.tmp`; await writeFile(tmp, JSON.stringify(current,null,2), { mode: 0o600 }); await rename(tmp,statePath); });
   await writeQueue; for(const listener of listeners) listener(getState()); return getState();
 }
-export async function createTask(message: string, root: string, agentmemProjectId: string) {
+export async function createTask(message: string, root: string, agentmemProjectId: string, approvalPolicy:ApprovalPolicy='on-request') {
   const now = new Date().toISOString(); const id = randomUUID();
   const task: Task = { id, title: message.slice(0, 72), phase: 'intake', createdAt: now, updatedAt: now, userRoot: root, agentmemProjectId, userMessages: [message], correctionCount: 0, processedTurns: [], messages: [{id:randomUUID(),role:'user',text:message,createdAt:now}] };
-  beginPass(task,message,task.messages[0].id);
+  beginPass(task,message,task.messages[0].id,approvalPolicy);
   await mutate(s => { s.tasks.unshift(task); s.activeTaskId=id; }); return task;
 }
-export function beginPass(task:Task,message:string,userMessageId?:string){
-  const now=new Date().toISOString();const pass:TaskPass={id:randomUUID(),index:(task.passes?.reduce((n,p)=>Math.max(n,p.index),0)||0)+1,createdAt:now,userInput:message,userInputs:[message],userMessageIds:userMessageId?[userMessageId]:[],phase:'intake',correctionCount:0,processedTurns:[]};
+export function beginPass(task:Task,message:string,userMessageId?:string,approvalPolicy:ApprovalPolicy='on-request'){
+  const now=new Date().toISOString();const pass:TaskPass={id:randomUUID(),index:(task.passes?.reduce((n,p)=>Math.max(n,p.index),0)||0)+1,createdAt:now,userInput:message,userInputs:[message],userMessageIds:userMessageId?[userMessageId]:[],phase:'intake',approvalPolicy,correctionCount:0,processedTurns:[]};
   task.passes=[...(task.passes||[]),pass];task.currentPassId=pass.id;
   task.phase='intake';task.assignment=undefined;task.receipt=undefined;task.reviewNote=undefined;task.resolution=undefined;task.routingNote=undefined;task.reasoningSummaries=[];task.reasoningRawContent=[];task.reasoningTurns=[];task.activeModelId=undefined;task.activeEffort=undefined;task.correctionCount=0;task.orchestratorThreadId=undefined;task.workerThreadId=undefined;task.activeTurnId=undefined;task.activeRole=undefined;task.processedTurns=[];task.error=undefined;task.escalation=undefined;task.approvalRequests=[];task.agentmemTaskId=undefined;task.agentmemLease=undefined;task.agentmemRecordStatus=undefined;task.agentmemRecordError=undefined;task.agentmemReceiptId=undefined;task.pendingRevision=false;
   if(userMessageId){const msg=task.messages.find(m=>m.id===userMessageId);if(msg)msg.passId=pass.id;}

@@ -257,12 +257,12 @@ describe('local task shell',()=>{
     render(<App/>);await screen.findByText('What are we working on?');
     fireEvent.click(screen.getByRole('button',{name:'Orchestrator model'}));expect(screen.getByRole('listbox',{name:'Orchestrator model'})).toBeTruthy();fireEvent.click(screen.getByRole('option',{name:'GPT-6 Astra'}));
     fireEvent.click(screen.getByRole('button',{name:'Orchestrator effort'}));fireEvent.click(screen.getByRole('option',{name:'high'}));
-    fireEvent.click(screen.getByRole('button',{name:'Approval policy'}));fireEvent.click(screen.getByRole('option',{name:'Untrusted commands'}));
+    fireEvent.click(screen.getByRole('button',{name:'Approval policy'}));expect(screen.getByRole('option',{name:'Untrusted commands'})).toBeTruthy();fireEvent.click(screen.getByRole('option',{name:'Full access (auto approve)'}));
     const {api}=await import('../src/ui/api.js');
     await waitFor(()=>expect(vi.mocked(api).mock.calls.some(([url,body])=>url==='/api/settings'&&(body as any).orchestratorModel==='gpt-6-astra')).toBe(true));
     await waitFor(()=>expect(vi.mocked(api).mock.calls.filter(([url])=>url==='/api/settings').length).toBeGreaterThanOrEqual(3));
     const writes=vi.mocked(api).mock.calls.filter(([url])=>url==='/api/settings').map(([,body])=>body as any);
-    expect(writes.at(-1)?.orchestratorEffort).toBe('high');expect(writes.at(-1)?.approvalPolicy).toBe('untrusted');
+    expect(writes.at(-1)?.orchestratorEffort).toBe('high');expect(writes.at(-1)?.approvalPolicy).toBe('full-access');
   });
   it('uses one accessible Markdown source editor without a preview-mode toggle',async()=>{
     render(<App/>);await screen.findByText('What are we working on?');const editor=screen.getByRole('textbox',{name:'Task message'});expect(editor.getAttribute('contenteditable')).toBe('true');expect(screen.queryByRole('button',{name:'Preview'})).toBeNull();

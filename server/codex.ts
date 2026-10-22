@@ -47,25 +47,26 @@ export class AppServer extends EventEmitter {
     await this.connect(); const params=makeThreadParams({role,root,model,approvalPolicy,ownedPolicy});
     const r=await this.request('thread/start',params); return String(r.thread.id);
   }
-  async resumeThread(threadId:string){await this.connect();const r=await this.request('thread/resume',makeThreadResumeParams(threadId));return String(r.thread.id);}
+  async resumeThread(threadId:string,approvalPolicy?:ApprovalPolicy){await this.connect();const r=await this.request('thread/resume',makeThreadResumeParams(threadId,approvalPolicy));return String(r.thread.id);}
   async startTurn(threadId:string,input:string,role:'orchestrator'|'worker',model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',root:string,writeRoots:string[]=[],approvalPolicy:ApprovalPolicy='on-request',schemaOverride?:unknown) {
     const schema=schemaOverride??(role==='orchestrator'? initialOrchestratorJsonSchema:workerOutcomeJsonSchema);
     const params=makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema});
     return this.request('turn/start',params,30000);
   }
-  async reviewTurn(threadId:string,input:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request') {return this.request('turn/start',{threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:reviewJsonSchema,approvalPolicy},30000);}
+  async reviewTurn(threadId:string,input:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request') {return this.request('turn/start',{threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:reviewJsonSchema,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandboxPolicy:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:{type:'readOnly',networkAccess:false}},30000);}
   async interrupt(threadId:string,turnId:string){return this.request('turn/interrupt',{threadId,turnId},15000);}
   close(){try{this.child?.stdin.end();this.child?.kill();}catch{} this.ready=false;}
 }
 
 export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema}:{threadId:string;input:string;role:'orchestrator'|'worker';model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown}) {
-  return {threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:schema,sandboxPolicy:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false},approvalPolicy};
+  return {threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:schema,sandboxPolicy:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false},approvalPolicy:runtimeApprovalPolicy(approvalPolicy)};
 }
 export const REASONING_THREAD_CONFIG={model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true} as const;
+export function runtimeApprovalPolicy(policy:ApprovalPolicy){return policy==='full-access'?'never':policy;}
 export function makeThreadParams({role,root,model,approvalPolicy,ownedPolicy}:{role:'orchestrator'|'worker';root:string;model:string;approvalPolicy:ApprovalPolicy;ownedPolicy?:string}){
-  return {cwd:root,model,approvalPolicy,sandbox:'read-only',allowProviderModelFallback:false,config:REASONING_THREAD_CONFIG,developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
+  return {cwd:root,model,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandbox:approvalPolicy==='full-access'?'danger-full-access':'read-only',allowProviderModelFallback:false,config:REASONING_THREAD_CONFIG,developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
 }
-export function makeThreadResumeParams(threadId:string){return {threadId,excludeTurns:true,config:REASONING_THREAD_CONFIG};}
+export function makeThreadResumeParams(threadId:string,approvalPolicy?:ApprovalPolicy){return {threadId,excludeTurns:true,config:REASONING_THREAD_CONFIG,...(approvalPolicy?{approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandbox:approvalPolicy==='full-access'?'danger-full-access':'read-only'}:{})};}
 export function approvalResponse(method:string,requested:unknown,decision:'accept'|'decline'|'cancel'){
   if(method==='item/permissions/requestApproval')return {permissions:decision==='accept'&&requested&&typeof requested==='object'?requested:{},scope:'turn'};
   return {decision};

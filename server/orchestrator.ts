@@ -36,17 +36,18 @@ function jsonFromTurn(turn:any){const raw=extractAssistantText(turn); if(!raw)th
 function titleFor(task:Task){return task.title||'New task';}
 async function startOrchestrator(task:Task,payload:string,action:'assignment'|'review',allowDirectResponse=false) {
   const state=getState(); const modelId=state.settings.orchestratorModel; requireModel(modelId,state.settings.orchestratorEffort);
+  const approvalPolicy=currentPass(task)?.approvalPolicy??state.settings.approvalPolicy;
   const policy=await loadOwnedOrchestrationPolicy();
   const input=buildOrchestratorInput(policy,payload);
-  if(!task.orchestratorThreadId) task.orchestratorThreadId=await codex.startThread('orchestrator',task.userRoot,modelId,state.settings.orchestratorEffort,state.settings.approvalPolicy,policy);
-  else if(!attachedThreads.has(task.orchestratorThreadId)) await codex.resumeThread(task.orchestratorThreadId);
+  if(!task.orchestratorThreadId) task.orchestratorThreadId=await codex.startThread('orchestrator',task.userRoot,modelId,state.settings.orchestratorEffort,approvalPolicy,policy);
+  else if(!attachedThreads.has(task.orchestratorThreadId)) await codex.resumeThread(task.orchestratorThreadId,approvalPolicy);
   attachedThreads.add(task.orchestratorThreadId);
   task.phase=action==='assignment'?'planning':'reviewing'; task.activeRole='orchestrator'; task.activeModelId=modelId;task.activeEffort=state.settings.orchestratorEffort;task.activeTurnId=undefined; task.error=undefined;task.allowDirectResponse=action==='assignment'&&allowDirectResponse;
   await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
   allowanceBaselines.set(task.orchestratorThreadId!,await readAllowanceSnapshot());
   const response=action==='review'
-    ? await codex.reviewTurn(task.orchestratorThreadId,input,modelId,state.settings.orchestratorEffort,state.settings.approvalPolicy)
-    : await codex.startTurn(task.orchestratorThreadId,input,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],state.settings.approvalPolicy,allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema);
+    ? await codex.reviewTurn(task.orchestratorThreadId,input,modelId,state.settings.orchestratorEffort,approvalPolicy)
+    : await codex.startTurn(task.orchestratorThreadId,input,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],approvalPolicy,allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema);
   const live=getTask(task.id); if(live&&live.phase==='cancelled')return;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;t.activeTurnId=response.turn?.id||response.turnId||undefined; t.activeRole='orchestrator';if(t.activeTurnId)beginReasoningTurn(t,'orchestrator',task.orchestratorThreadId!,t.activeTurnId,modelId,state.settings.orchestratorEffort);});
   const id=response.turn?.id||response.turnId;if(id) await processDeferred(task.id,id);
@@ -63,9 +64,9 @@ async function startWorker(task:Task,assignment:Assignment){
   requireModel('gpt-6-luna','high');
   const writeRoots=assignmentWriteRoots(assignment,task.userRoot);
   const workerPrompt=`Complete this assignment in one coherent task.\n\n${JSON.stringify(assignment,null,2)}\n\nReturn one strict structured worker outcome and include every field. For a receipt use type="receipt", receipt=<complete receipt object>, decision_needed=null, evidence=[], options=[], recommendation=null, consequences=[]. For a consequential decision use type="escalation", receipt=null, and provide decision_needed, evidence, options, recommendation (or null), consequences. Do not send a progress report as an escalation. The application separately displays progress and tool events. No transcript will be sent to the orchestrator.`;
-  const approvalPolicy=getState().settings.approvalPolicy;
+  const approvalPolicy=currentPass(task)?.approvalPolicy??getState().settings.approvalPolicy;
   if(!task.workerThreadId) task.workerThreadId=await codex.startThread('worker',task.userRoot,'gpt-6-luna','high',approvalPolicy);
-  else if(!attachedThreads.has(task.workerThreadId)) await codex.resumeThread(task.workerThreadId);
+  else if(!attachedThreads.has(task.workerThreadId)) await codex.resumeThread(task.workerThreadId,approvalPolicy);
   attachedThreads.add(task.workerThreadId);
   task.phase='worker_running';task.activeRole='worker';task.activeModelId='gpt-6-luna';task.activeEffort='high';task.activeTurnId=undefined;task.error=undefined;
   await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
@@ -244,7 +245,9 @@ export async function retryAgentMemCompletion(taskId:string,passId:string){
     ?{status:'complete',result:pass.publicAnswer||'',changes:[],acceptance:{met:[criterion],unmet:[]},verification:[{check:'Validated direct-answer outcome',result:'passed',evidence:pass.routingNote||'The direct-answer branch was accepted.'}],risks:[],knowledge:{consulted:['App-owned delegation policy','Scoped AgentMem project context'],updated:[]},decision_required:null}
     :pass.receipt||(()=>{throw new Error('The accepted delegated pass has no saved worker receipt to retry.');})();
   let saved:any;
-  try{saved=await agentmem.retryReceipt(task.agentmemProjectId,pass.agentmemTaskId,{...appReceipt,app_task_id:task.id,assignment:pass.assignment,review:pass.reviewNote,review_outcome:'accept'});}
+  try{const retryReceipt={...appReceipt,app_task_id:task.id,assignment:pass.assignment,review:pass.reviewNote,review_outcome:'accept'};saved=pass.agentmemLease
+    ?await agentmem.recordReceipt(task.agentmemProjectId,pass.agentmemTaskId,pass.agentmemLease,retryReceipt)
+    :await agentmem.retryReceipt(task.agentmemProjectId,pass.agentmemTaskId,retryReceipt);}
   catch(error){const failure=agentMemRecordFailure(error);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;const p=x.passes?.find(a=>a.id===passId);if(!p)return;p.agentmemRecordStatus=failure.status;p.agentmemRecordError=failure.error;if(agentMemFailureReleased(error)){p.agentmemLease=undefined;if(x.currentPassId===passId)x.agentmemLease=undefined;}});throw error;}
   const record=agentMemRecordState(saved,appReceipt.status);
   await mutate(s=>{
@@ -259,10 +262,10 @@ export async function submitTask(message:string,existingTaskId?:string){
   const state=getState(); if(!state.settings.projectRoot)throw new Error('Set a project root in Settings before starting a task.');if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
   if(!shouldWakeOrchestrator('explicit_user_input'))throw new Error('Orchestrator wake policy rejected explicit input.');
   if(existingTaskId){const t=getTask(existingTaskId);if(!t)throw new Error('Task not found.'); if(['planning','reviewing','worker_running'].includes(t.phase)){await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);const p=currentPass(x);if(p){p.userInputs.push(message);p.userMessageIds.push(m.id);}x.pendingRevision=true;});const row=getTask(t.id)!;if(row.activeRole&&row.activeTurnId){await codex.interrupt(row.activeRole==='worker'?row.workerThreadId!:row.orchestratorThreadId!,row.activeTurnId);}return row;}
-    await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);beginPass(x,message,m.id);s.activeTaskId=x.id;});
+    await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);beginPass(x,message,m.id,state.settings.approvalPolicy);s.activeTaskId=x.id;});
     const row=getTask(t.id)!;const c=await taskContext(row,message);await beginAssignment(row,c,message);return getTask(t.id)!;
   }
-  const created=await (await import('./state.js')).createTask(message,state.settings.projectRoot,state.settings.agentmemProjectId);
+  const created=await (await import('./state.js')).createTask(message,state.settings.projectRoot,state.settings.agentmemProjectId,state.settings.approvalPolicy);
   try {
     const context=await taskContext(getTask(created.id)!,message);
     await beginAssignment(getTask(created.id)!,context,message);
