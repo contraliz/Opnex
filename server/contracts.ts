@@ -66,9 +66,32 @@ export const workerOutcomeSchema = z.object({
   recommendation: z.string().max(4000).nullable(), consequences: z.array(text).max(12),
 }).strict().superRefine((x,ctx)=>{
   if(x.type==='receipt'&&!x.receipt)ctx.addIssue({code:'custom',path:['receipt'],message:'Receipt outcome requires a receipt.'});
-  if(x.type==='receipt'&&(x.decision_needed||x.evidence.length||x.options.length||x.recommendation||x.consequences.length))ctx.addIssue({code:'custom',path:['type'],message:'Receipt outcome cannot include escalation fields.'});
-  if(x.type==='escalation'&&(x.receipt||!x.decision_needed||!x.evidence.length||!x.options.length))ctx.addIssue({code:'custom',path:['type'],message:'Escalation requires a decision, evidence and options, and no receipt.'});
+  // The generated JSON Schema cannot express branch-exclusive nullable fields
+  // portably. Treat `type` as authoritative for receipts and ignore otherwise
+  // valid escalation-only fields; rejecting them here made the wire schema
+  // accept a result that this validator rejected as a `type` error.
+  if(x.type==='escalation'){
+    if(x.receipt)ctx.addIssue({code:'custom',path:['receipt'],message:'Escalation outcomes cannot contain a receipt.'});
+    if(!x.decision_needed?.trim())ctx.addIssue({code:'custom',path:['decision_needed'],message:'Escalation requires a decision.'});
+    if(!x.evidence.length)ctx.addIssue({code:'custom',path:['evidence'],message:'Escalation requires evidence.'});
+    if(!x.options.length)ctx.addIssue({code:'custom',path:['options'],message:'Escalation requires options.'});
+  }
 });
+
+export function workerOutcomeFailureSummary(error:unknown){
+  const issues=(error as {issues?:Array<{path?:PropertyKey[];code?:string}>}|null)?.issues;
+  if(!Array.isArray(issues)||!issues.length)return 'The result could not be validated.';
+  const messages=issues.map(issue=>{
+    const field=issue.path?.map(String).join('.')||'result';
+    if(field==='type')return 'outcome type must be "receipt" or "escalation"';
+    if(field==='receipt')return 'receipt must be present and complete for a receipt outcome, and omitted for an escalation';
+    if(field==='decision_needed')return 'an escalation needs a decision';
+    if(field==='evidence')return 'an escalation needs evidence';
+    if(field==='options')return 'an escalation needs options';
+    return `invalid ${field.replaceAll('_',' ')}`;
+  });
+  return [...new Set(messages)].join('; ');
+}
 
 export const userTaskSchema = z.object({ message: text, taskId: z.string().uuid().optional() }).strict();
 export const sessionTitleSchema = z.object({ title: z.string().trim().min(1, 'Session name cannot be empty.').max(120, 'Session name must be 120 characters or fewer.') }).strict();
