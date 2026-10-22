@@ -24,6 +24,20 @@ describe('Codex approval and turn configuration',()=>{
     expect(makeThreadResumeParams('thread-1')).toEqual({threadId:'thread-1',excludeTurns:true,config:orchestrator.config});
     expect(orchestrator.developerInstructions).toContain('policy');
   });
+  it('isolates the router with a classification-only thread and assigns the Fast tier only to its low-effort turn',()=>{
+    const router=makeThreadParams({role:'router',root:'/tmp/project',model:'gpt-6-luna',effort:'low',approvalPolicy:'on-request'});
+    expect((router as any).dynamicTools).toEqual([]);
+    expect(router.config).toMatchObject({web_search:'disabled',apps:{_default:{enabled:false,destructive_enabled:false,open_world_enabled:false}}});
+    expect(router.developerInstructions).toContain('classification-only');
+    const turn=makeTurnParams({threadId:'router',input:'Classify only',role:'router',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'},serviceTierForTurn:'priority'});
+    expect(turn).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:'priority',sandboxPolicy:{type:'readOnly',networkAccess:false}});
+    const direct=makeTurnParams({threadId:'direct',input:'Answer',role:'direct',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'}});
+    const simple=makeTurnParams({threadId:'simple',input:'Edit',role:'simple',model:'gpt-6-luna',effort:'xhigh',writeRoots:['/tmp/project'],approvalPolicy:'on-request',schema:{type:'object'}});
+    const simpleInstructions=makeThreadParams({role:'simple',root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'}).developerInstructions;
+    expect(simpleInstructions).toContain('Updating focused tests or docs needed to verify the requested behavior is an ordinary implementation decision');expect(simpleInstructions).toContain('never weaken or rewrite a test merely to hide a failure');
+    expect(direct).not.toHaveProperty('serviceTierForTurn');expect(direct.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
+    expect(simple).not.toHaveProperty('serviceTierForTurn');expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:false});
+  });
   it('requires both roles to verify public-source provenance instead of trusting local paths or KB claims',()=>{
     const orchestrator=buildOrchestratorDeveloperInstructions();
     const worker=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request'}).developerInstructions;
@@ -54,6 +68,13 @@ describe('Codex approval and turn configuration',()=>{
     }
     expect(makeThreadResumeParams('thread','full-access')).toMatchObject({approvalPolicy:'never',sandbox:'danger-full-access'});
     expect(makeThreadResumeParams('thread')).not.toHaveProperty('sandbox');
+    for(const role of ['router','direct'] as const){
+      const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'full-access'});
+      const turn=makeTurnParams({threadId:'thread',input:'answer',role,model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'full-access',schema:{type:'object'}});
+      expect(thread.sandbox).toBe('read-only');expect(turn.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
+    }
+    const simple=makeTurnParams({threadId:'simple',input:'edit',role:'simple',model:'gpt-6-luna',effort:'xhigh',writeRoots:['/tmp/project'],approvalPolicy:'full-access',schema:{type:'object'}});
+    expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:true});
   });
   it('uses the full-access sandbox for review turns as well as ordinary turns',async()=>{
     const client=new AppServer();const request=vi.fn().mockResolvedValue({turn:{id:'review'}});(client as any).request=request;
