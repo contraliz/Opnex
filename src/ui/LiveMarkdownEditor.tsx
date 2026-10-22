@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { Compartment, EditorState, type Range, type SelectionRange } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
+import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
+import { tags } from '@lezer/highlight';
 import { markdown } from '@codemirror/lang-markdown';
 import { GFM } from '@lezer/markdown';
 import { Decoration, EditorView, ViewPlugin, keymap, type DecorationSet } from '@codemirror/view';
@@ -85,13 +86,24 @@ const livePreview = ViewPlugin.fromClass(class {
   }
 }, { decorations: plugin => plugin.decorations });
 
+const markdownHighlight = HighlightStyle.define([
+  { tag: tags.heading, color: 'var(--accent-soft)', fontWeight: '650' },
+  { tag: tags.strong, color: 'var(--text)', fontWeight: '700' },
+  { tag: tags.emphasis, color: 'var(--accent-soft)', fontStyle: 'italic' },
+  { tag: tags.monospace, color: 'var(--accent-soft)' },
+  { tag: tags.link, color: 'var(--accent-soft)' },
+  { tag: tags.url, color: 'var(--muted)', textDecoration: 'underline' },
+  { tag: tags.quote, color: 'var(--muted)', fontStyle: 'italic' },
+  { tag: tags.comment, color: 'var(--subtle)' },
+]);
+
 const editorTheme = EditorView.theme({
-  '&': { height: '100%', minHeight: '55px', backgroundColor: 'transparent', color: '#eeeeee', fontSize: '14px' },
+  '&': { height: '100%', minHeight: '55px', backgroundColor: 'transparent', color: 'var(--text)', fontSize: '14px' },
   '.cm-scroller': { overflow: 'auto', fontFamily: 'inherit', lineHeight: '1.55' },
-  '.cm-content': { minHeight: '55px', padding: '6px 7px', caretColor: '#c1b6ff' },
+  '.cm-content': { minHeight: '55px', padding: '6px 7px', caretColor: 'var(--accent-soft)' },
   '.cm-line': { padding: '0' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#c1b6ff' },
-  '.cm-selectionBackground, ::selection': { backgroundColor: '#514778 !important' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent-soft)' },
+  '.cm-selectionBackground, ::selection': { backgroundColor: 'var(--selection) !important' },
   '&.cm-focused': { outline: 'none' },
 });
 const placeholderConfig = new Compartment();
@@ -118,7 +130,7 @@ export function LiveMarkdownEditor({ value, onChange, submit, disabled, hint, in
         doc: value,
         extensions: [
           markdown({ extensions: [GFM] }),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          syntaxHighlighting(markdownHighlight, { fallback: true }),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           EditorView.lineWrapping,

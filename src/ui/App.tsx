@@ -6,6 +6,7 @@ import Composer from './Composer';
 import { prepareMarkdownSubmission } from './LiveMarkdownEditor';
 import SettingsDialog from './SettingsDialog';
 import { SessionDialog, SessionRow } from './SessionControls';
+import { WorkspaceGitDiff } from './WorkspaceGitDiff';
 import type { AppState, Assignment, Runtime, Task, TaskPass, Message } from '../types';
 
 const phaseText:Record<string,string>={intake:'Ready',planning:'Planning',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
@@ -123,7 +124,7 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
     {p.error&&<div className="error-card"><AlertCircle size={16}/><div><strong>{p.phase==='needs_attention'?'Action needed':'Workflow error'}</strong><p>{p.error}</p>{p.phase==='paused_after_restart'&&<small>Send an explicit update to reattach the saved threads and continue.</small>}</div></div>}
     <PassUsagePanel pass={p}/>
     {output&&<section className="final-artifact" aria-label="Final output"><header><FileText size={16}/><strong>Final output</strong><span>{p.resolution==='direct'?'Orchestrator':'Luna · reviewed by orchestrator'}</span></header><div className="final-artifact-body markdown-body"><Markdown>{output}</Markdown></div></section>}
-    <Disclosure title="Run receipt · repository and knowledge base changes" icon={<Check size={15}/>} open={receiptExpanded} onToggle={toggleReceipt}><RunReceipt pass={p}/></Disclosure>
+    <Disclosure title="Run receipt · repository and knowledge base changes" icon={<Check size={15}/>} open={receiptExpanded} onToggle={toggleReceipt}><RunReceipt pass={p} taskId={task.id} gitEnabled={receiptExpanded}/></Disclosure>
   </section>;
 }
 
@@ -179,12 +180,13 @@ function PassUsagePanel({pass}:{pass:TaskPass}){
 function ApprovalCard({request,onDecision}:{request:any;onDecision:(decision:'accept'|'decline'|'cancel')=>void}){const permission=request.method==='item/permissions/requestApproval';return <section className="approval-card" aria-label="Codex approval needed"><div className="approval-heading"><ShieldCheck size={15}/><strong>Approval needed</strong><span>{permission?'Permission request':request.method.includes('fileChange')?'File change':'Command execution'}</span></div>{request.reason&&<p>{request.reason}</p>}{request.command&&<pre>{request.command}</pre>}{request.networkHost&&<div className="approval-meta">Network destination: {request.networkHost} ({request.networkProtocol})</div>}{request.cwd&&<div className="approval-meta">Working directory: {request.cwd}</div>}{request.grantRoot&&<div className="approval-meta">Requested write root: {request.grantRoot}</div>}{permission&&<pre className="permission-preview">{JSON.stringify(request.permissionRequest,null,2)}</pre>}<div className="approval-actions"><button onClick={()=>onDecision('decline')}>Decline</button><button onClick={()=>onDecision('cancel')}>Cancel turn</button><button className="approval-accept" onClick={()=>onDecision('accept')}>{permission?'Grant requested permissions':'Approve once'}</button></div></section>}
 function Disclosure({title,icon,open,onToggle,children}:{title:string;icon:React.ReactNode;open:boolean;onToggle:()=>void;children:React.ReactNode}){return <div className={`disclosure ${open?'open':''}`}><button className="disclosure-head" onClick={onToggle} aria-expanded={open}><span className="disclosure-icon">{icon}</span><strong>{title}</strong><ChevronDown size={14} className="disclosure-chevron"/><span className="disclosure-spacer"/></button><div className="disclosure-panel" aria-hidden={!open} inert={!open}><div className="disclosure-panel-inner"><div className="disclosure-content">{children}</div></div></div></div>}
 function AssignmentView({assignment:a}:{assignment:Assignment}){const data:[string,string[]][]=[['Outcome',[a.outcome,a.deliverable]],['Authorized read scope',a.read_scope],['Authorized write scope',a.write_scope],['Constraints',a.constraints],['Acceptance',a.acceptance],['Verification',a.verification],['Escalate when',a.escalation_conditions],['Exclusions',a.exclusions]];return <div className="assignment-grid">{data.map(([label,items])=><div key={label} className="assignment-block"><span>{label}</span><ul>{items.map((x,i)=><li key={i}>{x}</li>)}</ul></div>)}</div>;}
-function RunReceipt({pass:p}:{pass:TaskPass}){
+function RunReceipt({pass:p,taskId,gitEnabled}:{pass:TaskPass;taskId:string;gitEnabled:boolean}){
   const receipt=p.receipt;
   return <div className="run-receipt-content">
     <div className={`receipt-status ${receipt?.status||'unavailable'}`}>{receipt?.status||'No worker receipt'}</div>
     {!receipt?<p className="receipt-unavailable">This pass has no Pseudoharness worker receipt to summarize.</p>:<>
-      <div className="receipt-change-grid"><div><b>Repository changes</b>{list(receipt.changes)}</div><div><b>Knowledge base changes</b>{list(receipt.knowledge?.updated)}</div></div>
+      <WorkspaceGitDiff key={`${taskId}:${p.id}`} taskId={taskId} enabled={gitEnabled}/>
+      <div className="receipt-change-grid"><div><b>Worker-reported repository changes</b>{list(receipt.changes)}</div><div><b>Knowledge base changes</b>{list(receipt.knowledge?.updated)}</div></div>
       <div className="receipt-acceptance-grid"><div><b>Acceptance met</b>{list(receipt.acceptance?.met)}</div><div><b>Unmet</b>{list(receipt.acceptance?.unmet)}</div></div>
       <div className="receipt-verification"><b>Verification</b>{receipt.verification?.length?<ul>{receipt.verification.map((item,index)=><li key={index}><span className={`check-state ${item.result}`}>{item.result==='passed'?'✓':item.result==='failed'?'!':'·'}</span><span>{item.check}{item.evidence&&<small>{item.evidence}</small>}</span></li>)}</ul>:<div className="none">Not reported</div>}</div>
       {receipt.risks?.length>0&&<div className="receipt-risks"><b>Risks and limits</b>{list(receipt.risks)}</div>}
