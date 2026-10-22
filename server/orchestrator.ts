@@ -1,6 +1,6 @@
 import { AppServer, approvalResponse, extractAssistantText, type Model } from './codex.js';
 import { AgentMem, agentMemFailureReleased, agentMemRecordFailure, agentMemRecordState, safeError } from './agentmem.js';
-import { assignmentJsonSchema, initialOrchestratorJsonSchema, receiptSchema, reviewSchema, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
+import { assignmentJsonSchema, initialOrchestratorJsonSchema, receiptSchema, reviewSchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
 import { addMessage, beginPass, currentPass, getState, getTask, isCurrentPassThread, mutate, type Task } from './state.js';
 import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, completionDisposition, correctionWorker, shouldWakeOrchestrator } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
@@ -184,7 +184,7 @@ function structuredFailure(error:unknown,role:'orchestrator'|'worker'){
     const fields=[...new Set(issues.map((issue:any)=>String(issue.path?.[0]||'result').replaceAll('_',' ')))].join(', ');
     return role==='orchestrator'
       ? `The orchestrator returned an incomplete assignment (${fields}). Empty read scope is valid for tasks that need no files. No worker was started; send a short message to retry planning.`
-      : `The Luna result did not match the receipt contract (${fields}). No review was started; inspect the task and send a correction if you want to continue.`;
+      : `The Luna result did not match the receipt contract: ${workerOutcomeFailureSummary(error)}. No review was started; inspect the task and send a correction if you want to continue.`;
   }
   if(error instanceof Error&&error.message==='Codex final message was not valid JSON.')return role==='orchestrator'
     ? 'The orchestrator did not return a usable assignment. No worker was started; send a short message to retry planning.'
