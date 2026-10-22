@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { initialOrchestratorJsonSchema, reviewJsonSchema, workerOutcomeJsonSchema, type ApprovalPolicy } from './contracts.js';
+import { directExecutorJsonSchema, initialOrchestratorJsonSchema, reviewJsonSchema, routeDecisionJsonSchema, simpleExecutorJsonSchema, workerOutcomeJsonSchema, type ApprovalPolicy } from './contracts.js';
 
 type RpcMessage = { id?: string|number; method?: string; params?: any; result?: any; error?: { message?: string; code?: number } };
 export type Model = { id: string; displayName?: string; supportedReasoningEfforts?: { reasoningEffort: string }[]; isDefault?: boolean; [k: string]: unknown };
+export type CodexRole='router'|'direct'|'simple'|'orchestrator'|'worker';
 
 export class AppServer extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
@@ -43,14 +44,14 @@ export class AppServer extends EventEmitter {
   async models():Promise<Model[]> { await this.connect(); const all:Model[]=[]; let cursor:string|undefined; for(let i=0;i<10;i++){const r=await this.request('model/list',{cursor:cursor??null,limit:100,includeHidden:false}); all.push(...(r.data||[])); if(!r.nextCursor)break; cursor=r.nextCursor;} return all; }
   async threadUsage(threadId:string):Promise<any>{await this.connect();const response=await this.request('account/usage/read',{threadId},10000);return response?.threadUsage??null;}
   async accountRateLimits():Promise<any>{await this.connect();return this.request('account/rateLimits/read',{excludeResetCreditDetails:true},10000);}
-  async startThread(role:'orchestrator'|'worker',root:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request',ownedPolicy?:string) {
-    await this.connect(); const params=makeThreadParams({role,root,model,approvalPolicy,ownedPolicy});
+  async startThread(role:CodexRole,root:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request',ownedPolicy?:string) {
+    await this.connect(); const params=makeThreadParams({role,root,model,effort,approvalPolicy,ownedPolicy});
     const r=await this.request('thread/start',params); return String(r.thread.id);
   }
   async resumeThread(threadId:string,approvalPolicy?:ApprovalPolicy){await this.connect();const r=await this.request('thread/resume',makeThreadResumeParams(threadId,approvalPolicy));return String(r.thread.id);}
-  async startTurn(threadId:string,input:string,role:'orchestrator'|'worker',model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',root:string,writeRoots:string[]=[],approvalPolicy:ApprovalPolicy='on-request',schemaOverride?:unknown) {
-    const schema=schemaOverride??(role==='orchestrator'? initialOrchestratorJsonSchema:workerOutcomeJsonSchema);
-    const params=makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema});
+  async startTurn(threadId:string,input:string,role:CodexRole,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',root:string,writeRoots:string[]=[],approvalPolicy:ApprovalPolicy='on-request',schemaOverride?:unknown,serviceTierForTurn?:string) {
+    const schema=schemaOverride??(role==='orchestrator'? initialOrchestratorJsonSchema:role==='router'?routeDecisionJsonSchema:role==='direct'?directExecutorJsonSchema:role==='simple'?simpleExecutorJsonSchema:workerOutcomeJsonSchema);
+    const params=makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema,serviceTierForTurn});
     return this.request('turn/start',params,30000);
   }
   async reviewTurn(threadId:string,input:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request') {return this.request('turn/start',{threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:reviewJsonSchema,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandboxPolicy:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:{type:'readOnly',networkAccess:false}},30000);}
@@ -58,13 +59,21 @@ export class AppServer extends EventEmitter {
   close(){try{this.child?.stdin.end();this.child?.kill();}catch{} this.ready=false;}
 }
 
-export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema}:{threadId:string;input:string;role:'orchestrator'|'worker';model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown}) {
-  return {threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:schema,sandboxPolicy:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false},approvalPolicy:runtimeApprovalPolicy(approvalPolicy)};
+export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema,serviceTierForTurn}:{threadId:string;input:string;role:CodexRole;model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown;serviceTierForTurn?:string}) {
+  const readOnly=role==='router'||role==='direct';
+  const sandboxPolicy=readOnly?{type:'readOnly',networkAccess:false}:role==='simple'?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:approvalPolicy==='full-access'}:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false};
+  return {threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:schema,...(serviceTierForTurn?{serviceTierForTurn}:{}),sandboxPolicy,approvalPolicy:runtimeApprovalPolicy(approvalPolicy)};
 }
 export const REASONING_THREAD_CONFIG={model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true} as const;
 export function runtimeApprovalPolicy(policy:ApprovalPolicy){return policy==='full-access'?'never':policy;}
-export function makeThreadParams({role,root,model,approvalPolicy,ownedPolicy}:{role:'orchestrator'|'worker';root:string;model:string;approvalPolicy:ApprovalPolicy;ownedPolicy?:string}){
-  return {cwd:root,model,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandbox:approvalPolicy==='full-access'?'danger-full-access':'read-only',allowProviderModelFallback:false,config:REASONING_THREAD_CONFIG,developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
+const ROUTER_CONFIG={...REASONING_THREAD_CONFIG,web_search:'disabled',apps:{_default:{enabled:false,destructive_enabled:false,open_world_enabled:false}}} as const;
+const ROUTER_INSTRUCTIONS='You are a classification-only routing agent. Return exactly one JSON object matching the requested schema, with route, rule_id, and a short justification. Do not answer the user, inspect files, run commands, call tools, search the web, or plan/execute the task. Use only the original user request and the supplied bounded conversation context. Default uncertain, mixed, multi-component, or new-feature work to hard_task. Hard means the existing orchestrator must create a complete assignment for Luna and review Luna\'s receipt. A simple route is only for a known, bounded action with straightforward verification. A direct route is only for an explanation or transformation requiring no implementation.';
+const DIRECT_INSTRUCTIONS='You are GPT-6 Luna handling a read-only direct-answer route. Answer the current request without implementation or project investigation. If the request requires implementation or materially more investigation than expected, return the structured escalation instead. Do not claim files changed, tests run, or a worker/review occurred.';
+const SIMPLE_INSTRUCTIONS='You are GPT-6 Luna handling a simple implementation. Implement only the user-authorized bounded request in the selected project root, preserve unrelated changes, and verify the result. Updating focused tests or docs needed to verify the requested behavior is an ordinary implementation decision when it preserves unrelated behavior; never weaken or rewrite a test merely to hide a failure. Do not exceed the existing sandbox or approval policy. If material uncertainty, scope expansion, a consequential choice, or a genuine blocker appears, stop and return a structured escalation including completed actions and concrete evidence. Never claim Sol reviewed or accepted your work.';
+export function makeThreadParams({role,root,model,approvalPolicy,ownedPolicy}:{role:CodexRole;root:string;model:string;effort?:string;approvalPolicy:ApprovalPolicy;ownedPolicy?:string}){
+  const router=role==='router';
+  const sandbox=router||role==='direct'||role==='simple'?'read-only':approvalPolicy==='full-access'?'danger-full-access':'read-only';
+  return {cwd:root,model,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandbox,allowProviderModelFallback:false,...(router?{dynamicTools:[],config:ROUTER_CONFIG}: {config:REASONING_THREAD_CONFIG}),developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:role==='router'?ROUTER_INSTRUCTIONS:role==='direct'?DIRECT_INSTRUCTIONS:role==='simple'?SIMPLE_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
 }
 export function makeThreadResumeParams(threadId:string,approvalPolicy?:ApprovalPolicy){return {threadId,excludeTurns:true,config:REASONING_THREAD_CONFIG,...(approvalPolicy?{approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandbox:approvalPolicy==='full-access'?'danger-full-access':'read-only'}:{})};}
 export function approvalResponse(method:string,requested:unknown,decision:'accept'|'decline'|'cancel'){

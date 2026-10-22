@@ -1,11 +1,11 @@
 # Pseudoharness
 
-Pseudoharness is a local desktop-style Codex delegation app. Its orchestrator follows the app-owned policy in [`policy/CODEX_DELEGATION_POLICY.md`](policy/CODEX_DELEGATION_POLICY.md): it may answer directly or assign a separate `gpt-6-luna` worker at high effort, then review the worker's structured receipt. Progress and reasoning update the UI but do not wake another model. This independent project is not affiliated with OpenAI.
+Pseudoharness is a local desktop-style Codex request-routing and delegation app. Each new request is classified by GPT-6 Luna at low effort with the Fast tier. Direct answers use a separate read-only Luna turn; bounded implementation uses Luna at xhigh and reports its own verification; hard tasks use the configured Sol/Astra orchestrator to assign Luna at high effort and review the structured receipt. The app-owned policy is in [`policy/CODEX_DELEGATION_POLICY.md`](policy/CODEX_DELEGATION_POLICY.md). This independent project is not affiliated with OpenAI.
 
 ## Requirements
 
 - Node.js 22.12 or newer and npm.
-- Codex CLI installed, signed in, and able to run `codex app-server --stdio`. The signed-in account must have access to the models you select.
+- Codex CLI installed, signed in, and able to run `codex app-server --stdio`. Its model catalog must include GPT-6 Luna low effort and the Fast (`priority`) service tier for routing. The signed-in account must also have access to the models selected for hard tasks.
 - A workspace directory to choose in Settings.
 - Optional: AgentMem available as an MCP stdio server in the same Codex environment, with a project registered to the selected workspace root.
 
@@ -17,7 +17,11 @@ The model and effort selectors use the catalog returned by the Codex executable 
 
 The app uses your installed Codex runtime; it does not ask for or store an API key. First-run settings have an empty workspace and AgentMem project, so no author-specific path or knowledge-base identity is required. If `codex` is not on `PATH`, set `CODEX_EXECUTABLE` to the CLI executable path before starting. `CODEX_HOME` can select a non-default Codex configuration directory.
 
-The code uses Node's cross-platform process and path APIs. Windows 11 and macOS have been verified with build and portable-package checks; macOS verification also covered a signed-in Codex app-server connection, directory browsing, and a direct-answer task. Linux is intended but not independently verified. Codex CLI availability and sign-in are external prerequisites on each machine.
+The code uses Node's cross-platform process and path APIs. macOS has been verified with build and portable-package checks, a signed-in Codex app-server connection, directory browsing, and a direct-answer task. The repository now runs build and test checks on macOS and Windows in GitHub Actions; check the latest run before treating Windows as verified. Linux is intended but not independently verified. Codex CLI availability, model access, and sign-in are external prerequisites on each machine.
+
+## Request routing
+
+The router receives the current request and bounded conversation context, then returns a route, rule ID, and brief reason. Its Fast capability is checked before classification; the app does not substitute another speed or model. Direct and simple requests do not start the configured orchestrator. The hard-task model and effort in Settings apply only after a request is routed to a hard task. The task details panel records the selected route and executor.
 
 ## Install the portable package
 
