@@ -4,7 +4,7 @@ Pseudoharness is a local desktop-style Codex request-routing and delegation app.
 
 ## Requirements
 
-- Node.js 22.12 or newer and npm.
+- Node.js 22.12 or newer and npm to run the packaged app. Use Node.js 22.22.2 for source checks; it satisfies the locked jsdom test environment's runtime requirements and is the version used in CI.
 - Codex CLI installed, signed in, and able to run `codex app-server --stdio`. Its model catalog must include GPT-6 Luna low effort and the Fast (`priority`) service tier for routing. The signed-in account must also have access to the models selected for hard tasks.
 - A workspace directory to choose in Settings.
 - Optional: AgentMem available as an MCP stdio server in the same Codex environment, with a project registered to the selected workspace root.
@@ -90,4 +90,4 @@ Approval presets map to Codex app-server values: **On request** uses `on-request
 
 ## Checks and license
 
-Run `npm run lint`, `npm test`, `npm run typecheck`, and `npm run build` from the source checkout. `npm run package` produces the portable local tarball; it does not publish it. App-server model access, approval prompts, and sandbox behavior depend on each user's signed-in Codex installation. This project is licensed under MIT; see [LICENSE](LICENSE).
+Run `npm run lint`, `npm test`, `npm run typecheck`, and `npm run build` from the source checkout. The locked jsdom test environment needs Node.js 22.22.2; CI uses that tested version. The packaged app runtime remains compatible with Node.js 22.12 or newer. `npm run package` produces the portable local tarball; it does not publish it. App-server model access, approval prompts, and sandbox behavior depend on each user's signed-in Codex installation. This project is licensed under MIT; see [LICENSE](LICENSE).
