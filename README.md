@@ -9,9 +9,15 @@ Pseudoharness is a local desktop-style Codex delegation app. Its orchestrator fo
 - A workspace directory to choose in Settings.
 - Optional: AgentMem available as an MCP stdio server in the same Codex environment, with a project registered to the selected workspace root.
 
+### macOS first run
+
+In Terminal, check the existing Codex sign-in with `codex login status`, then run `npm ci` and `npm run dev` from this checkout. Open <http://127.0.0.1:5173> and choose a workspace in Settings. No separate Mac app bundle is required; the app runs locally in your browser and stores its state under `~/Library/Application Support/Pseudoharness`. Use `npm run package` to build the portable npm tarball instead.
+
+The model and effort selectors use the catalog returned by the Codex executable the app launches. If an expected model is marked unavailable or its effort selector is disabled, check `codex --version` and point the app at a newer runtime with `CODEX_EXECUTABLE=/path/to/codex npm run dev`. This override leaves the CLI on `PATH` unchanged.
+
 The app uses your installed Codex runtime; it does not ask for or store an API key. First-run settings have an empty workspace and AgentMem project, so no author-specific path or knowledge-base identity is required. If `codex` is not on `PATH`, set `CODEX_EXECUTABLE` to the CLI executable path before starting. `CODEX_HOME` can select a non-default Codex configuration directory.
 
-The code uses Node's cross-platform process and path APIs. Windows 11 was used for release verification; macOS and Linux are intended but were not independently verified for this package. Codex CLI availability and sign-in are external prerequisites on each machine.
+The code uses Node's cross-platform process and path APIs. Windows 11 and macOS have been verified with build and portable-package checks; macOS verification also covered a signed-in Codex app-server connection, directory browsing, and a direct-answer task. Linux is intended but not independently verified. Codex CLI availability and sign-in are external prerequisites on each machine.
 
 ## Install the portable package
 

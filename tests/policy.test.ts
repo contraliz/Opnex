@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
 import { assignmentSchema, workerOutcomeFailureSummary, workerOutcomeSchema } from '../server/contracts.js';
 import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, completionDisposition, consolidatedUserRequest, correctionWorker, shouldWakeOrchestrator, isCancelled } from '../server/policy.js';
 import type { Receipt } from '../server/contracts.js';
@@ -69,10 +70,11 @@ describe('workflow contracts and scheduling policy',()=>{
     expect(consolidatedUserRequest(['Build a viewer'],assignment)).toContain('Prior complete assignment');
   });
   it('enforces assignment write roots under the configured project and supports read-only work',()=>{
-    expect(assignmentWriteRoots({write_scope:['D:/repo/src']},'D:/repo')).toEqual(['D:\\repo\\src']);
-    expect(assignmentWriteRoots({write_scope:[]},'D:/repo')).toEqual([]);
-    expect(assignmentWriteRoots({write_scope:['No filesystem writes authorized']},'D:/repo')).toEqual([]);
-    expect(()=>assignmentWriteRoots({write_scope:['D:/other']},'D:/repo')).toThrow(/escapes/i);
-    expect(()=>assignmentWriteRoots({write_scope:['src']},'D:/repo')).toThrow(/absolute/i);
+    const root=path.resolve('repo');const source=path.join(root,'src');
+    expect(assignmentWriteRoots({write_scope:[source]},root)).toEqual([source]);
+    expect(assignmentWriteRoots({write_scope:[]},root)).toEqual([]);
+    expect(assignmentWriteRoots({write_scope:['No filesystem writes authorized']},root)).toEqual([]);
+    expect(()=>assignmentWriteRoots({write_scope:[path.resolve('other')]},root)).toThrow(/escapes/i);
+    expect(()=>assignmentWriteRoots({write_scope:['src']},root)).toThrow(/absolute/i);
   });
 });
