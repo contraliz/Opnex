@@ -158,15 +158,50 @@ describe('local task shell',()=>{
     const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id},csrf:'test'} as any);
     const {container}=render(<App/>);expect(await screen.findByRole('heading',{name:'A result'})).toBeTruthy();expect(screen.getByRole('table')).toBeTruthy();expect(screen.getByText('bold').tagName).toBe('STRONG');expect(screen.getByText('42').tagName).toBe('CODE');expect(!screen.getByText('bad link').closest('a')?.getAttribute('href')).toBe(true);expect(container.querySelector('script')).toBeNull();expect(container.textContent).toContain('<script>alert(1)</script>');
   });
-  it('lists searchable root-matched knowledge bases and persists Disabled as an explicit choice',async()=>{
+  it('lists searchable projects-directory knowledge bases and pairs workspace selection with the KB',async()=>{
     const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{
-      if(path==='/api/agentmem/projects')return {projects:[{id:'demo-kb',name:'Demo knowledge',sourceRoot:'D:/workspace/demo'},{id:'other-kb',name:'Other workspace',sourceRoot:'D:/other/project'}]} as any;
+      if(path==='/api/agentmem/projects')return {projects:[{id:'demo-kb',name:'Demo knowledge',sourceRoot:'D:/workspace/demo',memoryDirectory:'demo'},{id:'other-kb',name:'Other workspace',sourceRoot:'D:/other/project',memoryDirectory:'other'}]} as any;
       return path==='/api/state'?fixture as any:{} as any;
     });
     render(<App/>);await screen.findByText('What are we working on?');fireEvent.click(screen.getByRole('button',{name:'Settings'}));const trigger=await screen.findByRole('button',{name:'AgentMem knowledge base'});fireEvent.click(trigger);
-    const search=await screen.findByRole('searchbox',{name:'Search knowledge bases'});expect(await screen.findByRole('option',{name:/Demo knowledge/})).toBeTruthy();const mismatch=screen.getByRole('option',{name:/Other workspace/}) as HTMLButtonElement;expect(mismatch.disabled).toBe(true);
-    fireEvent.change(search,{target:{value:'Demo knowledge'}});expect(screen.getByRole('option',{name:/Demo knowledge/})).toBeTruthy();expect(screen.queryByRole('option',{name:/Other workspace/})).toBeNull();fireEvent.change(search,{target:{value:''}});fireEvent.click(screen.getByRole('option',{name:/Demo knowledge/}));expect(trigger.textContent).toContain('Demo knowledge');
-    fireEvent.click(trigger);fireEvent.click(await screen.findByRole('option',{name:/Disabled/}));expect(trigger.textContent).toContain('Disabled');fireEvent.click(screen.getByRole('button',{name:'Save settings'}));await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url,body])=>url==='/api/settings'&&(body as any).agentmemProjectId==='')).toBe(true));expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/agentmem/projects')).toBe(true);
+    const search=await screen.findByRole('searchbox',{name:'Search AgentMem projects'});expect(await screen.findByRole('option',{name:/Demo knowledge/})).toBeTruthy();const other=screen.getByRole('option',{name:/Other workspace/}) as HTMLButtonElement;expect(other.disabled).toBe(false);expect(screen.queryByText('Different root')).toBeNull();
+    fireEvent.change(search,{target:{value:'Other workspace'}});expect(screen.getByRole('option',{name:/Other workspace/})).toBeTruthy();expect(screen.queryByRole('option',{name:/Demo knowledge/})).toBeNull();fireEvent.click(screen.getByRole('option',{name:/Other workspace/}));expect(trigger.textContent).toContain('Other workspace');const root=screen.getByRole('textbox',{name:/Project root/}) as HTMLInputElement;expect(root.value).toBe('D:/other/project');
+    fireEvent.click(trigger);fireEvent.click(await screen.findByRole('option',{name:/Disabled/}));expect(trigger.textContent).toContain('Disabled');expect(root.value).toBe('D:/other/project');fireEvent.click(screen.getByRole('button',{name:'Save settings'}));await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url,body])=>url==='/api/settings'&&(body as any).agentmemProjectId===''&&(body as any).projectRoot==='D:/other/project')).toBe(true));expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/agentmem/projects')).toBe(true);
+  });
+  it('shows per-file current Git changes inside each expanded run receipt and loads only on demand',async()=>{
+    const now=new Date().toISOString();const receipt={status:'complete',result:'Reviewed output.',changes:['Reviewed output artifact'],acceptance:{met:['Output reviewed'],unmet:[]},verification:[],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};const task={id:'git-view',title:'Review workspace changes',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'Review',userInputs:['Review'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',receipt,publicAnswer:'Reviewed output.',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'Review',createdAt:now,passId:'pass-1'}]};const response={available:true,workspaceRoot:'D:/workspace/demo',repositoryRoot:'D:/workspace/demo',branch:'main',capturedAt:now,changes:[{path:'src/app.ts',status:' M',kind:'tracked'},{path:'new file.ts',status:'??',kind:'untracked'}],files:[{path:'src/app.ts',status:' M',kind:'tracked',additions:18,deletions:6,binary:false,patch:'diff --git a/src/app.ts b/src/app.ts\n-const old = 1;\n+const value = 2;'},{path:'new file.ts',status:'??',kind:'untracked',additions:2,deletions:0,binary:false,patch:'diff --git a/new file.ts b/new file.ts\n+new file'}],diff:'diff --git a/src/app.ts b/src/app.ts\n-const old = 1;\n+const value = 2;\ndiff --git a/new file.ts b/new file.ts\n+new file',truncated:false};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id},csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(url:string)=>url==='/api/tasks/git-view/git'?response as any:{} as any);
+    render(<App/>);
+    const receiptToggle=await screen.findByRole('button',{name:/Run receipt/});
+    expect(receiptToggle.getAttribute('aria-expanded')).toBe('false');
+    expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/tasks/git-view/git')).toBe(false);
+    fireEvent.click(receiptToggle);
+    const changesToggle=await screen.findByRole('button',{name:/Current workspace changes/});
+    expect(changesToggle.getAttribute('aria-expanded')).toBe('false');
+    expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/tasks/git-view/git')).toBe(false);
+    fireEvent.click(changesToggle);
+    expect(changesToggle.getAttribute('aria-expanded')).toBe('true');
+    expect(await screen.findByText('Edited app.ts')).toBeTruthy();
+    expect(screen.queryByRole('button',{name:'View diff'})).toBeNull();
+    expect(screen.getByText('+18')).toBeTruthy();expect(screen.getByText('−6')).toBeTruthy();expect(screen.getByText('+2')).toBeTruthy();expect(screen.getByText('−0')).toBeTruthy();expect(screen.getByText('Worker-reported repository changes')).toBeTruthy();
+    const trackedRow=screen.getByText('Edited app.ts').closest('.receipt-git-file') as HTMLElement;
+    fireEvent.click(within(trackedRow).getByRole('button',{name:'View changes'}));
+    expect(within(trackedRow).getByLabelText('Changes for src/app.ts').textContent).toContain('+const value = 2;');
+    const addedRow=screen.getByText('Added new file.ts').closest('.receipt-git-file') as HTMLElement;
+    fireEvent.click(within(addedRow).getByRole('button',{name:'View changes'}));
+    expect(within(addedRow).getByLabelText('Changes for new file.ts').textContent).toContain('+new file');
+    expect(vi.mocked(apiMod.api).mock.calls.filter(([url])=>url==='/api/tasks/git-view/git')).toHaveLength(1);
+    fireEvent.click(changesToggle);
+    expect(changesToggle.getAttribute('aria-expanded')).toBe('false');
+    const changesPanel=changesToggle.parentElement?.nextElementSibling as HTMLElement|null;
+    expect(changesPanel).not.toBeNull();
+    expect(changesPanel?.hasAttribute('inert')).toBe(true);
+    expect(changesPanel?.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.click(changesToggle);
+    expect(changesToggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByLabelText('Changes for src/app.ts')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:'Refresh current workspace changes'}));
+    expect(changesToggle.getAttribute('aria-expanded')).toBe('true');
+    await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.filter(([url])=>url==='/api/tasks/git-view/git')).toHaveLength(2));
   });
   it('labels an in-flight AgentMem save honestly and does not expose retry while the lease is held',async()=>{
     const now=new Date().toISOString();const task={id:'saving-1',title:'Saving receipt',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',agentmemProjectId:'demo-project',agentmemTaskId:'work-1',agentmemLease:'lease-held',agentmemRecordStatus:'saving',correctionCount:0,currentPassId:'pass-1',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'Question',userInputs:['Question'],userMessageIds:['u1'],phase:'accepted',resolution:'direct',publicAnswer:'Answer',agentmemTaskId:'work-1',agentmemLease:'lease-held',agentmemRecordStatus:'saving',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'Question',createdAt:now,passId:'pass-1'},{id:'a1',role:'orchestrator',text:'Answer',createdAt:now,passId:'pass-1'}]};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id},csrf:'test'} as any);

@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentMem, agentMemRecordFailure, agentMemRecordState, toAgentMemReceipt } from '../server/agentmem.js';
 import type { Receipt } from '../server/contracts.js';
@@ -6,12 +8,12 @@ const receipt:Receipt={status:'complete',result:'The adapter completion task is 
 const context={task:{acceptance:['Adapter submits completion schema','AgentMem releases completed task']},requirements:{requirements_revision:7,requirements_complete:true,applicable_requirements:[{id:'REQ-0001',revision:7}]}};
 
 describe('AgentMem receipt boundary',()=>{
-  it('lists registered knowledge bases from supported MCP list result shapes and verifies project roots',async()=>{
+  it('lists only registered projects with a projects-directory memory root and verifies the paired workspace',async()=>{
     const adapter=new AgentMem();(adapter as any).client={};
-    const call=vi.fn(async()=>({projects:[{id:'other',name:'Other',root:'D:/other',memory_root:'D:/private/other'},{id:'demo',root:'D:/workspace/demo'}]}));(adapter as any).call=call;
-    await expect(adapter.listProjects()).resolves.toEqual([{id:'demo',name:'demo',sourceRoot:'D:/workspace/demo'},{id:'other',name:'Other',sourceRoot:'D:/other'}]);
+    const projects=path.join(os.tmpdir(),'projects');const call=vi.fn(async()=>({projects:[{id:'other',name:'Other',root:'D:/other',memory_root:path.join(os.tmpdir(),'private','other')},{id:'demo',root:'D:/workspace/demo',memory_root:path.join(projects,'demo')},{id:'missing-root',memory_root:path.join(projects,'missing-root')},{id:'outside',root:'D:/outside',memory_root:path.join(os.tmpdir(),'projects-backup','outside')}]}));(adapter as any).call=call;
+    await expect(adapter.listProjects()).resolves.toEqual([{id:'demo',name:'demo',sourceRoot:'D:/workspace/demo',memoryDirectory:'demo'}]);
     await expect(adapter.connect('demo','d:/workspace/demo')).resolves.toMatchObject({id:'demo'});
-    await expect(adapter.connect('other','D:/workspace/demo')).rejects.toThrow(/root does not match/);
+    await expect(adapter.connect('other','D:/workspace/demo')).rejects.toThrow(/not registered/);
     expect(call).toHaveBeenCalledTimes(3);
   });
 

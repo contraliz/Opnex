@@ -6,7 +6,7 @@ import type { Receipt } from './contracts.js';
 import os from 'node:os';
 
 type Status = { connected:boolean; projectVerified:boolean; detail:string };
-export type AgentMemProject = { id:string; name:string; description?:string; sourceRoot:string };
+export type AgentMemProject = { id:string; name:string; description?:string; sourceRoot:string; memoryDirectory:string };
 export class AgentMem {
   private client?:Client; private transport?:StdioClientTransport;
   status:Status={connected:false,projectVerified:false,detail:'Not connected'};
@@ -51,7 +51,9 @@ export class AgentMem {
     return rows.flatMap((row:any)=>{
       if(!row||typeof row.id!=='string'||!row.id.trim())return [];
       const sourceRoot=row.source_root||row.root||row.cwd;
-      return [{id:row.id,name:typeof row.name==='string'&&row.name.trim()?row.name:row.id,...(typeof row.description==='string'&&row.description?{description:row.description}:{}),...(typeof sourceRoot==='string'&&sourceRoot?{sourceRoot}:{sourceRoot:''})}];
+      const memoryRoot=row.memory_root||row.memoryRoot;
+      if(typeof sourceRoot!=='string'||!sourceRoot.trim()||typeof memoryRoot!=='string'||!memoryRoot.trim()||path.basename(path.dirname(memoryRoot)).toLowerCase()!=='projects')return [];
+      return [{id:row.id,name:typeof row.name==='string'&&row.name.trim()?row.name:row.id,...(typeof row.description==='string'&&row.description?{description:row.description}:{}),sourceRoot,memoryDirectory:path.basename(memoryRoot)}];
     }).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})||a.id.localeCompare(b.id));
   }
   private async call(name:string,args:Record<string,unknown>) {
