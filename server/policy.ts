@@ -2,6 +2,7 @@ import type { Task } from './state.js';
 import type { Receipt } from './contracts.js';
 import type { Assignment } from './contracts.js';
 import path from 'node:path';
+import { realpath, stat } from 'node:fs/promises';
 
 export type OrchestratorWake = 'explicit_user_input'|'explicit_worker_escalation'|'final_worker_receipt';
 const completions = new Set<string>();
@@ -44,4 +45,33 @@ export function assignmentWriteRoots(assignment:Pick<Assignment,'write_scope'>,p
     result.push(candidate);
   }
   return [...new Set(result)];
+}
+
+/**
+ * A simple route is writable only when the human explicitly names one or more
+ * existing project directories in inline code. File paths and prose are not
+ * widened to their parent directory; callers must use the hard assignment flow
+ * when a bounded directory scope cannot be established.
+ */
+export async function simpleRouteWriteRoots(userInputs:string[],projectRoot:string):Promise<string[]|undefined>{
+  const references=userInputs.flatMap(input=>[...input.matchAll(/`([^`\r\n]+)`/g)].map(match=>match[1].trim()));
+  const pathLike=references.filter(value=>/[\\/]/.test(value)||/^[A-Za-z]:/.test(value)||value.startsWith('.')||/\.[A-Za-z0-9]{1,8}$/.test(value));
+  if(!pathLike.length)return undefined;
+
+  try{
+    const root=path.resolve(projectRoot),rootReal=await realpath(root);
+    if(!(await stat(rootReal)).isDirectory())return undefined;
+    const roots:string[]=[];
+    for(const value of pathLike){
+      const candidate=path.resolve(root,value);
+      const relative=path.relative(root,candidate);
+      if(relative===''||relative==='..'||relative.startsWith(`..${path.sep}`)||path.isAbsolute(relative))return undefined;
+      const resolved=await realpath(candidate);
+      const resolvedRelative=path.relative(rootReal,resolved);
+      if(resolvedRelative===''||resolvedRelative==='..'||resolvedRelative.startsWith(`..${path.sep}`)||path.isAbsolute(resolvedRelative))return undefined;
+      if(!(await stat(resolved)).isDirectory())return undefined;
+      roots.push(resolved);
+    }
+    return assignmentWriteRoots({write_scope:roots},root);
+  }catch{return undefined;}
 }

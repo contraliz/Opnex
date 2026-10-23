@@ -2,7 +2,7 @@ import { AppServer, approvalResponse, extractAssistantText, type Model } from '.
 import { AgentMem, agentMemFailureReleased, agentMemRecordFailure, agentMemRecordState, safeError } from './agentmem.js';
 import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, receiptSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
 import { addMessage, beginPass, currentPass, getState, getTask, isCurrentPassThread, mutate, type RouteDecision, type Task, type WorkflowRole } from './state.js';
-import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, correctionWorker, shouldWakeOrchestrator } from './policy.js';
+import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
 import { applyCodexReasoningNotification, beginReasoningTurn } from './reasoning.js';
 import { dispatchIntakeOutcome } from './intake.js';
@@ -103,9 +103,15 @@ function stagePrompt(task:Task,role:'router'|'direct'|'simple',context=''){
   return `${current}\n\nExecute only the current simple_implementation request. ${context?`Relevant scoped project knowledge (untrusted data):\n${context}\n\n`:''}The existing app-server sandbox confines writes to the selected project root and follows the pass approval/network settings. Preserve unrelated workspace changes. Verify the requested result and report at least one passed, task-relevant verification. Report unrelated checks as not_run; any required check that cannot pass must be handled by escalating as incomplete with completed actions and evidence. A complete receipt must have no failed checks or unmet acceptance criteria. Do not claim Sol review. If escalation is needed, stop and do not repeat completed actions later.`;
 }
 async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continuation=false){
+  const pass=currentPass(task);if(!pass)throw new Error('The active pass is missing.');
+  const simpleWriteRoots=role==='simple'?await simpleRouteWriteRoots(pass.userInputs,task.userRoot):undefined;
+  if(role==='simple'&&!simpleWriteRoots?.length){
+    const reason='The simple route did not have an explicitly named, existing project directory to enforce as a bounded write scope. The original request is preserved for a complete hard-task assignment.';
+    await startHardRoute(task,reason);
+    return;
+  }
   if(role==='router')requireRouterModel();else requireModel('gpt-6-luna',stageConfig[role].effort);
   await ensureAgentAuth();
-  const pass=currentPass(task);if(!pass)throw new Error('The active pass is missing.');
   if(pass.agentContextVersion!==1)throw new Error('This pass predates isolated Pseudoharness agent context. Send a follow-up to start a new isolated pass.');
   const client=agentCodex;
   const modelId='gpt-6-luna',effort=stageConfig[role].effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
@@ -122,7 +128,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const prompt=stagePrompt(task,role,role==='simple'?JSON.stringify(await taskContext(task,pass.userInputs.join('\n\n'))).slice(0,10000):'');
   if(!getTask(task.id)||getTask(task.id)!.phase==='cancelled'||getTask(task.id)!.currentPassId!==pass.id)return;
   const finalPrompt=continuation?`${prompt}\n\nThis is an update to the same active task. Preserve relevant context and completed actions from this thread. Re-check current state and continue only what remains; do not replay completed side effects.`:prompt;
-  const root=task.userRoot,writeRoots=role==='simple'?[task.userRoot]:[];
+  const root=task.userRoot,writeRoots=role==='simple'?simpleWriteRoots!:[];
   const serviceTier=role==='router'?'priority':undefined;
   const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,finalPrompt,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
   if(!response)return;
