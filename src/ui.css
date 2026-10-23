@@ -147,7 +147,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .workspace-tabs { display: flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--sidebar); }
 .workspace-tabs button { min-height: 31px; display: inline-flex; align-items: center; gap: 7px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
 .workspace-tabs button[aria-selected="true"] { background: var(--raised-hover); color: var(--text); }
-.embedded-workspace { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--canvas); }
+.embedded-workspace { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--canvas); container-type: inline-size; }
 .embed-toolbar { flex: 0 0 auto; display: grid; gap: 0; padding: 0 12px; border-bottom: 1px solid var(--raised-hover); background: #191919; }
 .browser-chrome-tabs { display: flex; align-items: center; min-width: 0; height: 38px; gap: 5px; overflow-x: auto; }
 .browser-summary-chip,.browser-chrome-tabs .native-tab,.browser-new-tab { height: 25px; min-width: 0; padding: 0 9px; border: 0; border-radius: 999px; background: transparent; color: #aaa; font-size: 11px; cursor: pointer; }
@@ -174,7 +174,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .native-tab > [role="tab"] { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; overflow: hidden; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font-size: 11px; }
 .native-tab > [role="tab"] > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .native-tab-glyph { display: inline-flex; color: var(--muted); }
-.browser-address { display: grid; grid-template-columns: auto minmax(120px, min(680px, 58vw)) auto 1fr auto auto; align-items: center; gap: 5px; min-height: 36px; }
+.browser-address { display: flex; align-items: center; gap: 5px; min-height: 36px; min-width: 0; width: 100%; }
 .browser-address-nav { display: flex; gap: 0; }
 .browser-address-nav > button { width: 25px; height: 27px; display: inline-grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: #aaa; cursor: pointer; }
 .browser-address-nav > button:hover:not(:disabled) { background: #2b2b2b; color: #fff; }
@@ -182,11 +182,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .browser-address > button { width: 30px; height: 30px; display: inline-grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .browser-address > button:disabled { opacity: .4; cursor: default; }
 .browser-address > button:hover:not(:disabled) { background: var(--raised-hover); color: var(--text); }
-.browser-address input { flex: 1; min-width: 0; height: 31px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; outline: 0; background: var(--sidebar); color: var(--text); font-size: 12px; }
+.browser-address input { flex: 1 1 120px; width: 0; min-width: 48px; height: 31px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; outline: 0; background: var(--sidebar); color: var(--text); font-size: 12px; }
 .browser-address input:focus-visible { border-color: var(--accent-soft); box-shadow: 0 0 0 2px #a78bfa33; }
 .browser-address input { height: 26px; border-radius: 999px; border-color: #373737; background: #242424; text-align: center; font-size: 11px; }
 .browser-address .open-address { display: none; }
-.browser-address .commenting-toggle,.browser-address .browser-clear-data { height: 25px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: #aaa; font-size: 10px; white-space: nowrap; cursor: pointer; }
+.browser-address .commenting-toggle,.browser-address .browser-clear-data { flex: 0 0 auto; height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: #aaa; font-size: 10px; white-space: nowrap; cursor: pointer; }
+.browser-address .commenting-toggle { width: auto; min-width: 32px; }
+.browser-address .browser-clear-data { width: 32px; padding: 0; }
 .browser-address .commenting-toggle:hover:not(:disabled),.browser-address .browser-clear-data:hover { background: #2b2b2b; color: #eee; }
 .browser-address .commenting-toggle.enabled { border-color: #44505f; background: #202b38; color: #a9c8f5; }
 .browser-address .commenting-toggle:disabled { opacity: .4; cursor: default; }
@@ -988,9 +990,6 @@ body { min-width: 640px; min-height: 520px; }
   .git-summary-row > div:nth-child(2) { border-right: 0; }
   .git-summary-row > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
   .git-overview-grid { grid-template-columns: minmax(0,1fr); gap: 20px; }
-  .browser-address { grid-template-columns: auto minmax(90px,1fr) auto auto; }
-  .browser-address .commenting-toggle { grid-column: 3; }
-  .browser-address .browser-clear-data { grid-column: 4; }
   .git-commit-row { grid-template-columns: var(--git-graph-width) 16px minmax(0,1fr) auto; gap: 6px; }
   .git-commit-refs { display: none; }
 }
@@ -1004,12 +1003,17 @@ body { min-width: 640px; min-height: 520px; }
   .git-branch-row { gap: 5px; padding: 0 3px; }
   .git-upstream { display: none; }
   .browser-chrome-tabs .native-tab { max-width: 120px; }
-  .browser-address { grid-template-columns: auto minmax(50px,1fr) auto auto; gap: 2px; }
+  .browser-address { gap: 3px; }
   .browser-address-nav > button { width: 21px; }
-  .browser-address .commenting-toggle { width: 28px; padding: 0; overflow: hidden; font-size: 0; }
-  .browser-address .commenting-toggle svg { flex: 0 0 auto; }
-  .browser-address .browser-clear-data { width: 26px; padding: 0; }
+  .browser-address .commenting-toggle,.browser-address .browser-clear-data { height: 29px; }
   .git-privacy-note { align-items: flex-start; }
+}
+@container (max-width: 560px) {
+  .browser-address .open-address { display: none; }
+}
+@container (max-width: 390px) {
+  .browser-address .commenting-toggle { width: 32px; padding: 0; }
+  .browser-address .commenting-toggle > span { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .git-branch-row,.git-commit-row,.browser-annotation { animation: none !important; }
