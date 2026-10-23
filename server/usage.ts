@@ -1,6 +1,6 @@
-import type { PassAllowanceWindow, PassRoleUsage, PassTokenUsage, PassUsageGroup, TaskPass } from './state.js';
+import type { PassAllowanceWindow, PassRoleUsage, PassTokenUsage, PassUsageGroup, TaskPass, WorkflowRole } from './state.js';
 
-type Role='orchestrator'|'worker';
+type Role=WorkflowRole;
 export type AllowanceSnapshot={accountId:string|null;sampledAt:string;fiveHour:{usedPercent:number;windowDurationMins:number|null;resetsAt:number|null}|null;weekly:{usedPercent:number;windowDurationMins:number|null;resetsAt:number|null}|null};
 export function normalizeAllowanceSnapshot(response:unknown):AllowanceSnapshot|null {
   if(!response||typeof response!=='object')return null;
@@ -43,7 +43,7 @@ function micros(value:unknown):string|null {
   const text=String(value);
   return /^\d+$/.test(text)?text:null;
 }
-function roleThread(pass:TaskPass,role:Role){return role==='orchestrator'?pass.orchestratorThreadId:pass.workerThreadId;}
+function roleThread(pass:TaskPass,role:Role){return pass[`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId'|'orchestratorThreadId'|'workerThreadId'];}
 function ensureRoleUsage(pass:TaskPass,role:Role,threadId:string):PassRoleUsage {
   const existing=pass.usage?.[role];
   const value=existing?.threadId===threadId?existing:{threadId,tokenStatus:'pending' as const,creditStatus:'pending' as const};

@@ -15,6 +15,57 @@ export type Assignment = z.infer<typeof assignmentSchema>;
 export const directAnswerSchema = z.object({
   type:z.literal('direct_answer'), answer:text, policy_basis:z.string().trim().min(1).max(400),
 }).strict();
+export const routeNameSchema = z.enum(['direct_answer','simple_implementation','hard_task']);
+export const routeRuleSchema = z.enum([
+  'direct_explanation_or_transform','simple_bounded_correction','simple_internal_rename','simple_mechanical_dependency_upgrade','simple_established_documentation','simple_routine_git',
+  'hard_new_feature','hard_multi_component_change','hard_migration','hard_major_dependency_upgrade','hard_public_contract_change','hard_lifecycle_change',
+  'hard_unknown_cause_diagnosis','hard_mixed_scope','hard_significant_uncertainty'
+]);
+export const ROUTE_RULES={
+  direct_explanation_or_transform:'direct_answer',
+  simple_bounded_correction:'simple_implementation',
+  simple_internal_rename:'simple_implementation',
+  simple_mechanical_dependency_upgrade:'simple_implementation',
+  simple_established_documentation:'simple_implementation',
+  simple_routine_git:'simple_implementation',
+  hard_new_feature:'hard_task',
+  hard_multi_component_change:'hard_task',
+  hard_migration:'hard_task',
+  hard_major_dependency_upgrade:'hard_task',
+  hard_public_contract_change:'hard_task',
+  hard_lifecycle_change:'hard_task',
+  hard_unknown_cause_diagnosis:'hard_task',
+  hard_mixed_scope:'hard_task',
+  hard_significant_uncertainty:'hard_task',
+} as const;
+export const routeDecisionSchema=z.object({route:routeNameSchema,rule_id:routeRuleSchema,justification:z.string().trim().min(1).max(400)}).strict().superRefine((decision,ctx)=>{
+  if(ROUTE_RULES[decision.rule_id]!==decision.route)ctx.addIssue({code:'custom',path:['rule_id'],message:'Routing rule does not authorize this route.'});
+});
+export type RouteDecision=z.infer<typeof routeDecisionSchema>;
+export const directExecutorOutcomeSchema=z.object({
+  type:z.enum(['answer','escalate']),answer:z.string().trim().max(12000).nullable(),escalation:z.string().trim().max(2000).nullable(),
+  route:z.enum(['simple_implementation','hard_task']).nullable(),justification:z.string().trim().max(400).nullable(),
+}).strict().superRefine((value,ctx)=>{
+  if(value.type==='answer'){
+    if(!value.answer)ctx.addIssue({code:'custom',path:['answer'],message:'A direct answer requires answer text.'});
+    if(value.escalation||value.route||value.justification)ctx.addIssue({code:'custom',path:['type'],message:'An answer cannot contain escalation fields.'});
+  }else{
+    if(value.answer!==null)ctx.addIssue({code:'custom',path:['answer'],message:'An escalation cannot contain a public answer.'});
+    if(!value.escalation||!value.route||!value.justification)ctx.addIssue({code:'custom',path:['escalation'],message:'Escalation requires reason, route and justification.'});
+  }
+});
+export const simpleExecutorOutcomeSchema=z.object({
+  type:z.enum(['complete','escalate']),receipt:z.lazy(()=>receiptSchema).nullable(),
+  escalation:z.object({decision_needed:text,completed_actions:z.array(text).max(30),evidence:z.array(text).max(30)}).strict().nullable(),
+}).strict().superRefine((value,ctx)=>{
+  if(value.type==='complete'){
+    if(!value.receipt)ctx.addIssue({code:'custom',path:['receipt'],message:'A completed implementation requires a receipt.'});
+    if(value.escalation)ctx.addIssue({code:'custom',path:['escalation'],message:'A completion cannot contain escalation fields.'});
+  }else{
+    if(value.receipt)ctx.addIssue({code:'custom',path:['receipt'],message:'An escalation cannot contain a receipt.'});
+    if(!value.escalation)ctx.addIssue({code:'custom',path:['escalation'],message:'An escalation requires evidence and completed actions.'});
+  }
+});
 export const delegationPlanSchema = z.object({
   type:z.literal('delegate'), assignment:assignmentSchema,
 }).strict();
@@ -115,5 +166,9 @@ export const initialOrchestratorJsonSchema = { type:'object',additionalPropertie
   assignment:{anyOf:[assignmentJsonSchema,{type:'null'}]},
 }};
 const receiptJsonSchema = { type:'object',additionalProperties:false,required:['status','result','changes','acceptance','verification','risks','knowledge','decision_required'],properties:{status:{type:'string',enum:['complete','incomplete','blocked','failed']},result:{type:'string'},changes:{type:'array',items:{type:'string'}},acceptance:{type:'object',additionalProperties:false,required:['met','unmet'],properties:{met:{type:'array',items:{type:'string'}},unmet:{type:'array',items:{type:'string'}}}},verification:{type:'array',items:{type:'object',additionalProperties:false,required:['check','result','evidence'],properties:{check:{type:'string'},result:{type:'string',enum:['passed','failed','not_run']},evidence:{type:['string','null']}}}},risks:{type:'array',items:{type:'string'}},knowledge:{type:'object',additionalProperties:false,required:['consulted','updated'],properties:{consulted:{type:'array',items:{type:'string'}},updated:{type:'array',items:{type:'string'}}}},decision_required:{type:['string','null']}}};
+const routeRuleIds=Object.keys(ROUTE_RULES);
+export const routeDecisionJsonSchema={type:'object',additionalProperties:false,required:['route','rule_id','justification'],properties:{route:{type:'string',enum:['direct_answer','simple_implementation','hard_task']},rule_id:{type:'string',enum:routeRuleIds},justification:{type:'string'}}};
+export const directExecutorJsonSchema={type:'object',additionalProperties:false,required:['type','answer','escalation','route','justification'],properties:{type:{type:'string',enum:['answer','escalate']},answer:{type:['string','null']},escalation:{type:['string','null']},route:{type:['string','null'],enum:['simple_implementation','hard_task',null]},justification:{type:['string','null']}}};
+export const simpleExecutorJsonSchema={type:'object',additionalProperties:false,required:['type','receipt','escalation'],properties:{type:{type:'string',enum:['complete','escalate']},receipt:{anyOf:[receiptJsonSchema,{type:'null'}]},escalation:{anyOf:[{type:'object',additionalProperties:false,required:['decision_needed','completed_actions','evidence'],properties:{decision_needed:{type:'string'},completed_actions:{type:'array',items:{type:'string'}},evidence:{type:'array',items:{type:'string'}}}},{type:'null'}]}}};
 export const workerOutcomeJsonSchema = { type:'object',additionalProperties:false,required:['type','receipt','decision_needed','evidence','options','recommendation','consequences'],properties:{type:{type:'string',enum:['receipt','escalation']},receipt:{anyOf:[receiptJsonSchema,{type:'null'}]},decision_needed:{type:['string','null']},evidence:{type:'array',items:{type:'string'}},options:{type:'array',items:{type:'string'}},recommendation:{type:['string','null']},consequences:{type:'array',items:{type:'string'}}} };
 export const reviewJsonSchema = {type:'object',additionalProperties:false,required:['outcome','note','assignment','decision_required'],properties:{outcome:{type:'string',enum:['accept','correction','incomplete','blocked','failed']},note:{type:'string'},assignment:{anyOf:[assignmentJsonSchema,{type:'null'}]},decision_required:{type:['string','null']}}};

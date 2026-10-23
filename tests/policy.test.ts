@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import { assignmentSchema, workerOutcomeFailureSummary, workerOutcomeSchema } from '../server/contracts.js';
-import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, completionDisposition, consolidatedUserRequest, correctionWorker, shouldWakeOrchestrator, isCancelled } from '../server/policy.js';
+import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, completionDisposition, consolidatedUserRequest, correctionWorker, shouldWakeOrchestrator, isCancelled, simpleRouteWriteRoots } from '../server/policy.js';
 import type { Receipt } from '../server/contracts.js';
 
 const assignment={outcome:'Fix scoped issue',deliverable:'Updated files',read_scope:['D:/repo'],write_scope:['D:/repo/src'],exclusions:['No deploy'],constraints:['Use local runtime'],context_refs:['docs/architecture.md'],acceptance:['Build passes'],verification:['Run tests'],ordinary_authority:['Choose implementation details'],escalation_conditions:['Need user decision'],receipt_requirements:['Structured receipt']};
@@ -69,10 +72,22 @@ describe('workflow contracts and scheduling policy',()=>{
     expect(consolidatedUserRequest(['Build a viewer'],assignment)).toContain('Prior complete assignment');
   });
   it('enforces assignment write roots under the configured project and supports read-only work',()=>{
-    expect(assignmentWriteRoots({write_scope:['D:/repo/src']},'D:/repo')).toEqual(['D:\\repo\\src']);
-    expect(assignmentWriteRoots({write_scope:[]},'D:/repo')).toEqual([]);
-    expect(assignmentWriteRoots({write_scope:['No filesystem writes authorized']},'D:/repo')).toEqual([]);
-    expect(()=>assignmentWriteRoots({write_scope:['D:/other']},'D:/repo')).toThrow(/escapes/i);
-    expect(()=>assignmentWriteRoots({write_scope:['src']},'D:/repo')).toThrow(/absolute/i);
+    const root=path.resolve('repo');const source=path.join(root,'src');
+    expect(assignmentWriteRoots({write_scope:[source]},root)).toEqual([source]);
+    expect(assignmentWriteRoots({write_scope:[]},root)).toEqual([]);
+    expect(assignmentWriteRoots({write_scope:['No filesystem writes authorized']},root)).toEqual([]);
+    expect(()=>assignmentWriteRoots({write_scope:[path.resolve('other')]},root)).toThrow(/escapes/i);
+    expect(()=>assignmentWriteRoots({write_scope:['src']},root)).toThrow(/absolute/i);
+  });
+  it('derives simple-route writes only from explicit existing project directories',async()=>{
+    const temp=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-simple-scope-'));const root=path.join(temp,'project');const source=path.join(root,'src');
+    try{
+      await mkdir(source,{recursive:true});await writeFile(path.join(source,'label.ts'),'export const label="ok";');
+      expect(await simpleRouteWriteRoots(['Fix it under `src/`.'],root)).toEqual([source]);
+      expect(await simpleRouteWriteRoots(['Fix a typo in src/label.ts.'],root)).toBeUndefined();
+      expect(await simpleRouteWriteRoots(['Fix the known typo.'],root)).toBeUndefined();
+      expect(await simpleRouteWriteRoots(['Edit `../outside/`.'],root)).toBeUndefined();
+      expect(await simpleRouteWriteRoots(['Edit `src/missing/`.'],root)).toBeUndefined();
+    }finally{await rm(temp,{recursive:true,force:true});}
   });
 });

@@ -4,11 +4,17 @@ This is the application's owned, portable copy of the user-supplied Codex `AGENT
 
 ## Objective and roles
 
-Minimize unnecessary orchestrator usage while maintaining high-quality output. Sol/Astra owns understanding the user's outcome, defining scope and acceptance, consequential decisions, explicit escalations, final receipt assessment, and the final response. It gathers only enough context to make those decisions. Detailed investigation and execution belong to GPT-6 Luna with high reasoning effort.
+Classify each new user request before execution. The routing agent is GPT-6 Luna at low effort with the Fast service tier. It receives the current request and bounded conversation context, returns only a route, matching rule ID, and short justification, and does not execute the task. Router Fast must be available from the configured Codex runtime; the app does not silently substitute a different model or speed. Runtime configuration disables web search and dynamic tools for this role where supported. The installed app-server protocol has no general built-in command-tool disable switch, so instructions further restrict tool use and detected router tool activity causes a visible conservative hard fallback.
 
-The orchestrator may answer trivial questions or perform trivial transformations directly when delegation overhead would exceed the work required. When the user explicitly asks for Luna, delegation is required. Consequential implementation work should be delegated. When delegating, dispatch one complete bounded assignment; never substitute another worker model or effort silently.
+A `direct_answer` uses an independent GPT-6 Luna low-effort read-only turn for explanations, calculations, summaries, comparisons, and transforms that need no implementation. If the request actually needs implementation or materially more investigation, Luna returns a structured escalation.
 
-The Luna worker owns investigation, ordinary implementation decisions, debugging, verification, authorized documentation and knowledge maintenance, the deliverable, and a compact receipt. It retains context for directly related corrections and does not recursively delegate routine work.
+A `simple_implementation` uses an independent GPT-6 Luna xhigh turn to execute and verify known bounded corrections, internal renames that do not change persisted/public contracts, cosmetic changes, documentation of established facts or designs, and routine Git/PR operations. It runs without Sol review. Writes are confined to the selected project root and use the current pass's approval and network settings. Known-compatible patch/minor dependency updates can be simple when their scope is bounded and verification is specified. Fixing a known bug can change behavior without making it a new feature, and task classification does not depend on file count alone. Major upgrades are hard by default unless the request supplies the complete bounded migration delta, confirms no persisted/public contract changes, and specifies verification. The canonical classification rules and exception wording are in `server/routing.ts`.
+
+A `hard_task` uses the configured Sol or Astra orchestrator, which creates one complete Luna high-effort assignment and reviews Luna's receipt. New features, multi-component work, migrations, persisted or public contract changes, lifecycle changes, substantial diagnosis of unknown causes or performance, mixed hard/soft work, and significant uncertainty route here. A hard route cannot be downgraded to a direct answer. The selected orchestrator model and effort apply only to hard tasks.
+
+The app validates route names and rule IDs together. Invalid or malformed router output and detected router tool use conservatively select the hard route with a visible reason. Missing router model, low effort, or Fast capability stops before classification and surfaces a blocker; it never silently changes the selected model or speed. A valid route whose executor cannot start surfaces that startup error without switching routes.
+
+The canonical rule IDs, boundaries, and examples sent to the router are maintained in `server/routing.ts` and reused by routing tests; keep this role and lifecycle policy consistent with that source.
 
 ## Complete assignments and receipts
 
@@ -16,13 +22,13 @@ Before a worker starts, the orchestrator supplies the intended outcome and deliv
 
 The worker returns a structured receipt with status, result, changes, acceptance, verification, risks, knowledge consulted or updated, and any decision required. The orchestrator reviews that receipt and either accepts it, issues one consolidated correction, or records an incomplete, blocked, or failed outcome. A correction to the same task reuses the worker thread; an unrelated task starts a fresh thread.
 
-If Luna is already executing the user's task directly, continue without creating an orchestrator or recursively delegating routine work.
+When direct or simple Luna execution discovers that the task exceeds its route, it returns a structured escalation. Preserve completed actions and evidence when escalating to a hard task so already completed side effects are not repeated.
 
 ## Invocation and wake policy
 
 The app owns invocation timing. It may run the orchestrator for explicit human input, an explicit structured worker escalation, or the final worker receipt. Progress events, tool output, timers, and waiting do not trigger orchestrator inference. While Luna works, the orchestrator stays dormant. The orchestrator receives the complete assignment, relevant scoped AgentMem context, and compact escalation or receipt only; it never receives a worker transcript or reasoning stream.
 
-An initial orchestrator response may be either a direct answer permitted by the policy above or a complete delegation assignment. Direct answers must not create a worker session or fabricate a worker receipt. If the orchestrator delegates, the full assignment must validate before Luna starts. Invalid or ambiguous output stops the workflow with an actionable error; it does not silently switch paths.
+The hard-task orchestrator must return a complete delegation assignment; it cannot answer directly. A direct route has no assignment or fabricated worker receipt. A simple route may complete with its own verified receipt but must not claim Sol review. Invalid or ambiguous outputs surface an actionable error; they do not silently switch execution paths.
 
 ## Escalation and worker lifetime
 

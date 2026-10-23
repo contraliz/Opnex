@@ -17,5 +17,7 @@ export function defaultDataDirectory({platform=process.platform,home=os.homedir(
 
 export function stateDirectory(env:NodeJS.ProcessEnv=process.env,platform:Platform=process.platform,home=os.homedir()){
   const override=env.PSEUDOHARNESS_DATA_DIR;
-  return override?path.resolve(override):defaultDataDirectory({platform,home,env});
+  if(!override)return defaultDataDirectory({platform,home,env});
+  const paths=platform==='win32'?path.win32:path.posix;
+  return paths.resolve(override);
 }
