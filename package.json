@@ -30,6 +30,7 @@
     "dev:web": "vite --host 127.0.0.1",
     "desktop": "npm run build && electron desktop/main.cjs",
     "desktop:smoke": "npm run build && node scripts/desktop-smoke.mjs",
+    "desktop:interaction-smoke": "npm run build && node scripts/electron-annotation-smoke.mjs",
     "desktop:package": "npm run build && electron-builder --publish never && node scripts/desktop-smoke.mjs --packaged",
     "build": "node scripts/clean-build.mjs && tsc -p tsconfig.server.json && vite build",
     "start": "node bin/pseudoharness.js",
