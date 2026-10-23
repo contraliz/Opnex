@@ -18,7 +18,7 @@ The canonical rule IDs, boundaries, and examples sent to the router are maintain
 
 ## Complete assignments and receipts
 
-Before a worker starts, the orchestrator supplies the intended outcome and deliverable, authorized read/write scope, exclusions, constraints, relevant cited context, acceptance criteria, verification, ordinary authority, escalation conditions, and receipt requirements. The app validates the full structured contract and permissions before starting Luna. Empty read scope is valid when no files are needed; empty write scope grants no file writes.
+Before a worker starts, the orchestrator supplies the intended outcome and deliverable, authorized read/write scope, exclusions, constraints, relevant cited context, acceptance criteria, verification, ordinary authority, escalation conditions, receipt requirements, and optional names of relevant skills. The app validates and stores the full structured contract before starting Luna. Luna then follows three stages: a scope-only context plan; a context summary based on the broad scope and an app-mediated, scoped AgentMem retrieval; and execution after the complete assignment and selected skill contents are supplied. No write roots are granted during context planning or composition. The app resolves selected skill names only beneath configured Codex skill directories and applies size limits. Empty AgentMem settings skip retrieval entirely and are labeled disabled; retrieval failures are labeled unavailable rather than represented as successful context. Empty read scope is valid when no files are needed; empty write scope grants no file writes.
 
 The worker returns a structured receipt with status, result, changes, acceptance, verification, risks, knowledge consulted or updated, and any decision required. The orchestrator reviews that receipt and either accepts it, issues one consolidated correction, or records an incomplete, blocked, or failed outcome. A correction to the same task reuses the worker thread; an unrelated task starts a fresh thread.
 
@@ -26,7 +26,7 @@ When direct or simple Luna execution discovers that the task exceeds its route, 
 
 ## Invocation and wake policy
 
-The app owns invocation timing. It may run the orchestrator for explicit human input, an explicit structured worker escalation, or the final worker receipt. Progress events, tool output, timers, and waiting do not trigger orchestrator inference. While Luna works, the orchestrator stays dormant. The orchestrator receives the complete assignment, relevant scoped AgentMem context, and compact escalation or receipt only; it never receives a worker transcript or reasoning stream.
+The app owns invocation timing. It may run the orchestrator for explicit human input, an explicit structured worker escalation, or the final worker receipt. Progress events, tool output, timers, and waiting do not trigger orchestrator inference. While Luna works through all three context/execution stages, the orchestrator stays dormant. The orchestrator receives the complete assignment, relevant scoped AgentMem context, and compact escalation or receipt only; it never receives a worker transcript or reasoning stream.
 
 The hard-task orchestrator must return a complete delegation assignment; it cannot answer directly. A direct route has no assignment or fabricated worker receipt. A simple route may complete with its own verified receipt but must not claim Sol review. Invalid or ambiguous outputs surface an actionable error; they do not silently switch execution paths.
 

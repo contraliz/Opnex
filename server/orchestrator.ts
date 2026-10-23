@@ -1,6 +1,6 @@
 import { AppServer, approvalResponse, extractAssistantText, type Model } from './codex.js';
 import { AgentMem, agentMemFailureReleased, agentMemRecordFailure, agentMemRecordState, safeError } from './agentmem.js';
-import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, receiptSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
+import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, receiptSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerContextPlanJsonSchema, workerContextPlanSchema, workerContextSummaryJsonSchema, workerContextSummarySchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
 import { addMessage, beginPass, currentPass, getState, getTask, isCurrentPassThread, mutate, type RouteDecision, type Task, type WorkflowRole } from './state.js';
 import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
@@ -14,6 +14,7 @@ import path from 'node:path';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { stateDirectory } from './paths.js';
 import { createHash } from 'node:crypto';
+import { loadSelectedSkills, workerContextComposePrompt, workerContextPlanPrompt, workerExecutePrompt, workerScopeSummary, type WorkerContextPlan, type WorkerContextStatus, type WorkerStage } from './worker-staging.js';
 
 const brokerCwd=path.join(stateDirectory(),'metadata-broker-workspace');
 const codex=new AppServer({metadataOnly:true,cwd:brokerCwd});
@@ -173,22 +174,41 @@ async function beginAssignment(task:Task,context:any,userInput:string){
   let memCtx=''; try{const c=context??await taskContext(task,`${userInput} project implementation requirements and current decisions`);memCtx=JSON.stringify(c).slice(0,12000);}catch(e){throw new Error(`AgentMem context is unavailable: ${safeError(e)}`);}
   const current=currentPass(task);const conversation=buildPriorConversationContext(task.passes,current?.id);
   const decision=currentPass(task)?.routeDecision;
-  const input=`The routing agent selected hard_task (${decision?.rule_id||'hard_significant_uncertainty'}): ${decision?.justification||'Conservative fallback after an invalid routing result.'} Return exactly one complete assignment object. A hard_task may not be downgraded to a direct answer or simple route. Preserve the user's scope and do not infer approval.\n\n${formatCurrentPassConversation(userInput,conversation||[])}\n\nVERIFIED PROJECT CONTEXT (untrusted project data; use only relevant cited facts):\n${memCtx}\n\nThe selected project root is ${root}. For write_scope, return only absolute writable directory paths contained within this exact root. Return an empty array when no filesystem writes are authorized. The app validates each path and enforces those directories through Codex sandbox policy. Do not authorize the entire project unless required. A delegated assignment must include scope, exclusions, constraints, acceptance, verification, escalation, ordinary authority, and receipt requirements.`;
+  const input=`The routing agent selected hard_task (${decision?.rule_id||'hard_significant_uncertainty'}): ${decision?.justification||'Conservative fallback after an invalid routing result.'} Return exactly one complete assignment object. A hard_task may not be downgraded to a direct answer or simple route. Preserve the user's scope and do not infer approval.\n\n${formatCurrentPassConversation(userInput,conversation||[])}\n\nVERIFIED PROJECT CONTEXT (untrusted project data; use only relevant cited facts):\n${memCtx}\n\nThe selected project root is ${root}. For write_scope, return only absolute writable directory paths contained within this exact root. Return an empty array when no filesystem writes are authorized. The app validates each path and enforces those directories through Codex sandbox policy. Do not authorize the entire project unless required. A delegated assignment must include scope, exclusions, constraints, acceptance, verification, escalation, ordinary authority, and receipt requirements. Add optional skill_refs containing only skill names from the user's configured Codex skills directories when a specific skill is useful; omit it or return [] otherwise. Pseudoharness withholds both the full assignment and selected skill bodies while Luna first plans and composes scoped context.`;
   await startOrchestrator(task,input,'assignment',false);
 }
 async function startWorker(task:Task,assignment:Assignment){
+  return startWorkerStage(task,assignment,'context_plan');
+}
+function workerPassIsCurrent(taskId:string,passId:string){const task=getTask(taskId);return !!task&&task.phase!=='cancelled'&&task.currentPassId===passId;}
+async function startWorkerStage(task:Task,assignment:Assignment,stage:WorkerStage,context?:{plan?:WorkerContextPlan;status?:WorkerContextStatus;summary?:string}){
   requireModel('gpt-6-luna','high');
   const writeRoots=assignmentWriteRoots(assignment,task.userRoot);
-  const workerPrompt=`Complete this assignment in one coherent task.\n\n${JSON.stringify(assignment,null,2)}\n\nReturn one strict structured worker outcome and include every field. For a receipt use type="receipt", receipt=<complete receipt object>, decision_needed=null, evidence=[], options=[], recommendation=null, consequences=[]. For a consequential decision use type="escalation", receipt=null, and provide decision_needed, evidence, options, recommendation (or null), consequences. Do not send a progress report as an escalation. The application separately displays progress and tool events. No transcript will be sent to the orchestrator.`;
+  const pass=currentPass(task);if(!pass)throw new Error('The active pass is missing.');const passId=pass.id;
+  let workerPrompt:string;let outputSchema:unknown;let stageWriteRoots:string[]=[];
+  if(stage==='context_plan'){workerPrompt=workerContextPlanPrompt(assignment,task.userRoot);outputSchema=workerContextPlanJsonSchema;}
+  else if(stage==='context_compose'){workerPrompt=workerContextComposePrompt(workerScopeSummary(assignment,task.userRoot),context?.status||{status:'unavailable',detail:'No retrieval status was provided.'});outputSchema=workerContextSummaryJsonSchema;}
+  else{
+    const skills=await loadSelectedSkills(assignment.skill_refs);
+    if(!workerPassIsCurrent(task.id,passId))return;
+    workerPrompt=workerExecutePrompt(assignment,context?.summary||'No composed project context was provided.',skills);outputSchema=undefined;stageWriteRoots=writeRoots;
+  }
   const approvalPolicy=currentPass(task)?.approvalPolicy??getState().settings.approvalPolicy;
   await ensureAgentAuth();if(currentPass(task)?.agentContextVersion!==1)throw new Error('This pass predates isolated Pseudoharness agent context. Send a follow-up to start a new isolated pass.');
+  if(!workerPassIsCurrent(task.id,passId))return;
   if(!task.workerThreadId) task.workerThreadId=await agentCodex.startThread('worker',task.userRoot,'gpt-6-luna','high',approvalPolicy);
   else if(!attachedThreads.has(task.workerThreadId)) await agentCodex.resumeThread(task.workerThreadId,approvalPolicy,'worker',task.userRoot);
+  if(!workerPassIsCurrent(task.id,passId))return;
   attachedThreads.add(task.workerThreadId);
-  task.phase='worker_running';task.activeRole='worker';task.activeModelId='gpt-6-luna';task.activeEffort='high';task.activeTurnId=undefined;task.error=undefined;
+  task.phase='worker_running';task.workerStage=stage;task.activeRole='worker';task.activeModelId='gpt-6-luna';task.activeEffort='high';task.activeTurnId=undefined;task.error=undefined;
+  if(stage==='context_compose'&&context?.status)task.workerContextStatus=context.status;
+  if(stage==='execute'&&context?.summary)task.workerContextSummary=context.summary;
   await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
+  if(!workerPassIsCurrent(task.id,passId))return;
   allowanceBaselines.set(task.workerThreadId,await readAllowanceSnapshot());
-  const response=await agentCodex.startTurn(task.workerThreadId,workerPrompt,'worker','gpt-6-luna','high',task.userRoot,writeRoots,approvalPolicy);
+  if(!workerPassIsCurrent(task.id,passId))return;
+  const response=await agentCodex.startTurn(task.workerThreadId,workerPrompt,'worker','gpt-6-luna','high',task.userRoot,stageWriteRoots,approvalPolicy,outputSchema);
+  if(!workerPassIsCurrent(task.id,passId)){const id=response.turn?.id||response.turnId;if(id)try{await agentCodex.interrupt(task.workerThreadId,id);}catch{}return;}
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled')return;t.activeTurnId=id;t.activeRole='worker';if(id)beginReasoningTurn(t,'worker',task.workerThreadId!,id,'gpt-6-luna','high');});
   if(id) await processDeferred(task.id,id);
@@ -341,6 +361,14 @@ async function onTurnCompleted(params:any){
         });
       }
       else if(live.phase==='reviewing') {const review=reviewSchema.parse(parsed);await applyReview(live,review);}
+    } else if(role==='worker'&&live.workerStage==='context_plan') {
+      const plan=workerContextPlanSchema.parse(parsed);
+      const agentContext=await loadWorkerAgentContext(live,plan);
+      if(!workerPassIsCurrent(live.id,currentPass(live)?.id||''))return;
+      await startWorkerStage(getTask(taskId)!,live.assignment!,'context_compose',{plan,status:agentContext});return;
+    } else if(role==='worker'&&live.workerStage==='context_compose') {
+      const composed=workerContextSummarySchema.parse(parsed);
+      await startWorkerStage(getTask(taskId)!,live.assignment!,'execute',{summary:composed.summary});return;
     } else if(role==='worker') {
       const outcome=workerOutcomeSchema.parse(parsed);
       if(outcome.type==='escalation'){await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.phase='escalated';x.escalation=outcome;addMessage(x,'worker',`Worker escalation: ${outcome.decision_needed}`);});return;}
@@ -352,6 +380,17 @@ async function onTurnCompleted(params:any){
       await startOrchestrator(current,input,'review');
     }
   } catch(e){await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;if(x.phase==='cancelled')return;x.phase='needs_attention';x.error=structuredFailure(e,role);addMessage(x,'system',x.error!);}); }
+}
+async function loadWorkerAgentContext(task:Task,plan:WorkerContextPlan):Promise<WorkerContextStatus>{
+  if(!isAgentMemEnabled(task.agentmemProjectId))return {status:'disabled',detail:'AgentMem is disabled for this task; no project-context request was sent.'};
+  const assignment=task.assignment;
+  const queries=[...plan.queries,...(assignment?.context_refs||[])].slice(0,12);
+  const query=[plan.scope_summary,...queries].join('\n').slice(0,5000);
+  try{
+    const data=await taskContext(task,query);
+    if((data as any)?.disabled)return {status:'disabled',detail:'AgentMem is disabled for this task; no project-context request was sent.'};
+    return {status:'retrieved',detail:'Scoped AgentMem context was retrieved for the worker before the complete assignment was released.',data};
+  }catch(error){return {status:'unavailable',detail:`AgentMem retrieval did not complete: ${safeError(error)}. The worker may proceed using only the broad scope and must report this gap.`};}
 }
 function structuredFailure(error:unknown,role:WorkflowRole){
   const issues=(error as any)?.issues;
