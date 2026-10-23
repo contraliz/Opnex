@@ -15,15 +15,14 @@ describe('local task shell',()=>{
   it('renders honest first-run empty state and opens project settings',async()=>{
     render(<App/>);expect(await screen.findByText('What are we working on?')).toBeTruthy();expect(screen.getByText(/Local workflow/)).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:/^Settings$/}));const dialog=await screen.findByRole('dialog');const backdrop=dialog.closest('.dialog-backdrop') as HTMLElement;expect(backdrop.dataset.open).toBe('true');expect(document.activeElement).toBe(screen.getByRole('textbox',{name:/Project root/}));expect(screen.getByRole('button',{name:'AgentMem knowledge base'})).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Cancel'}));expect(backdrop.dataset.open).toBe('false');expect(backdrop.hasAttribute('inert')).toBe(true);fireEvent.click(screen.getByRole('button',{name:/^Settings$/}));expect(backdrop.dataset.open).toBe('true');
   });
-  it('links the current pass role IDs to their matching Codex desktop sessions',async()=>{
+  it('shows current pass role IDs without linking isolated agent threads into the user Codex home',async()=>{
     const now=new Date().toISOString();
     const pass={id:'pass-session-links',index:1,createdAt:now,userInput:'Inspect the work',userInputs:['Inspect the work'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',correctionCount:0,routerThreadId:'isolated-router-thread',orchestratorThreadId:'orchestrator-thread-1',workerThreadId:'worker/thread 2',processedTurns:[]};
     const task={id:'task-session-links',title:'Session links',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,orchestratorThreadId:'stale-orchestrator-thread',workerThreadId:'stale-worker-thread',passes:[pass],messages:[{id:'u1',role:'user',text:'Inspect the work',createdAt:now,passId:pass.id}]};
     const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
     const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);
     render(<App/>);fireEvent.click(await screen.findByRole('button',{name:'Current pass session IDs'}));
-    expect(screen.getByRole('link',{name:'Open Orchestrator session in Codex'}).getAttribute('href')).toBe('codex://threads/orchestrator-thread-1');
-    expect(screen.getByRole('link',{name:'Open Worker session in Codex'}).getAttribute('href')).toBe('codex://threads/worker%2Fthread%202');
+    expect(screen.queryByRole('link',{name:/Open .* session in Codex/})).toBeNull();
     expect(screen.getByText('Router')).toBeTruthy();expect(screen.queryByRole('link',{name:'Open Router session in Codex'})).toBeNull();expect(screen.getByText('isolated-router-thread')).toBeTruthy();
     expect(screen.getByText('orchestrator-thread-1')).toBeTruthy();expect(screen.getByText('worker/thread 2')).toBeTruthy();
   });
