@@ -1,0 +1,58 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { LocalGitWorkspace } from '../src/ui/LocalGitWorkspace';
+
+vi.mock('../src/ui/api',()=>({api:vi.fn()}));
+import { api } from '../src/ui/api';
+
+const github={available:false,authenticated:false,detail:'GitHub CLI is unavailable.'};
+function page(repository:string,historyOffset=0,branchOffset=0){
+  const branches=Array.from({length:100},(_,i)=>({name:`branch-${String(branchOffset+i).padStart(3,'0')}`,hash:`b${branchOffset+i}`,current:branchOffset===0&&i===0,remote:false}));
+  const commits=Array.from({length:100},(_,i)=>({hash:`c${historyOffset+i}`,parents:i===99?[`outside-${historyOffset+100}`]:[`c${historyOffset+i+1}`],author:'Fixture',date:'2026-10-24T00:00:00Z',subject:`${repository} commit ${historyOffset+i}`,refs:[]}));
+  return {available:true,authorizedRoot:repository,repositoryRoot:repository,currentBranch:'branch-000',branches,branchPage:{offset:branchOffset,pageSize:100,totalCount:200,totalIsExact:true,hasMore:branchOffset===0,nextOffset:branchOffset===0?100:null},worktrees:[],commits,history:{offset:historyOffset,pageSize:100,hasMore:historyOffset===0,nextOffset:historyOffset===0?100:null},github};
+}
+function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
+afterEach(()=>{cleanup();vi.resetAllMocks();});
+
+describe('native local Git workspace paging and routes',()=>{
+  it('keeps branch and history pages independently while alternating their load-more controls',async()=>{
+    vi.mocked(api).mockImplementation(async url=>{
+      if(url.endsWith('/github'))return github as any;
+      const query=new URLSearchParams(url.slice(url.indexOf('?')+1));return page('C:/fixture',Number(query.get('offset')),Number(query.get('branchOffset'))) as any;
+    });
+    render(<LocalGitWorkspace/>);
+    fireEvent.click(await screen.findByRole('button',{name:/Branches/}));
+    fireEvent.click(await screen.findByRole('button',{name:'Load next 100 branches'}));
+    await waitFor(()=>expect(document.querySelectorAll('.git-branch-row')).toHaveLength(200));
+    fireEvent.click(screen.getByRole('button',{name:'History'}));
+    fireEvent.click(await screen.findByRole('button',{name:'Load next 100 commits'}));
+    await waitFor(()=>expect(document.querySelectorAll('.git-commit-row')).toHaveLength(200));
+    fireEvent.click(screen.getByRole('button',{name:/Branches/}));
+    expect(document.querySelectorAll('.git-branch-row')).toHaveLength(200);
+    const callUrls=vi.mocked(api).mock.calls.map(([url])=>url as string);
+    expect(callUrls).toContain('/api/git-workspace?offset=0&branchOffset=100');
+    expect(callUrls).toContain('/api/git-workspace?offset=100&branchOffset=100');
+    expect(new Set([...document.querySelectorAll('.git-branch-row strong')].map(el=>el.textContent)).size).toBe(200);
+    fireEvent.click(screen.getByRole('button',{name:'History'}));
+    expect(document.querySelectorAll('.git-commit-row')).toHaveLength(200);
+    expect(new Set([...document.querySelectorAll('.git-commit-copy strong')].map(el=>el.textContent)).size).toBe(200);
+  });
+
+  it('aborts the prior task route and ignores its late local and GitHub responses',async()=>{
+    const oldLocal=deferred<any>(),oldGithub=deferred<any>();
+    vi.mocked(api).mockImplementation((url)=>{
+      if(url.includes('old-task'))return (url.endsWith('/github')?oldGithub.promise:oldLocal.promise) as any;
+      if(url.endsWith('/github'))return Promise.resolve(github) as any;
+      return Promise.resolve(page('C:/new-repo')) as any;
+    });
+    const {rerender}=render(<LocalGitWorkspace taskId="old-task"/>);
+    rerender(<LocalGitWorkspace taskId="new-task"/>);
+    expect(await screen.findByText('new-repo')).toBeTruthy();
+    oldLocal.resolve(page('C:/old-repo'));oldGithub.resolve({available:true,authenticated:true,repository:{name:'old/cloud'}});
+    await waitFor(()=>expect(screen.getByText('new-repo')).toBeTruthy());
+    expect(screen.queryByText('old-repo')).toBeNull();expect(screen.queryByText('old/cloud')).toBeNull();
+    const oldCall=vi.mocked(api).mock.calls.find(([url])=>(url as string).includes('old-task'));
+    expect(oldCall?.[2]?.aborted).toBe(true);
+  });
+});
