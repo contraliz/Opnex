@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AppServer, approvalResponse, buildOrchestratorDeveloperInstructions, makeThreadParams, makeThreadResumeParams, makeTurnParams } from '../server/codex.js';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { AppServer, approvalResponse, assertInstructionIsolation, buildOrchestratorDeveloperInstructions, makeThreadParams, makeThreadResumeParams, makeTurnParams } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
 
 describe('Codex approval and turn configuration',()=>{
@@ -27,7 +29,7 @@ describe('Codex approval and turn configuration',()=>{
   it('isolates the router with a classification-only thread and assigns the Fast tier only to its low-effort turn',()=>{
     const router=makeThreadParams({role:'router',root:'/tmp/project',model:'gpt-6-luna',effort:'low',approvalPolicy:'on-request'});
     expect((router as any).dynamicTools).toEqual([]);
-    expect(router.config).toMatchObject({web_search:'disabled',apps:{_default:{enabled:false,destructive_enabled:false,open_world_enabled:false}}});
+    expect(router.config).toMatchObject({project_doc_max_bytes:0,project_doc_fallback_filenames:[],web_search:'disabled',apps:{_default:{enabled:false,destructive_enabled:false,open_world_enabled:false}}});
     expect(router.developerInstructions).toContain('classification-only');
     const turn=makeTurnParams({threadId:'router',input:'Classify only',role:'router',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'},serviceTierForTurn:'priority'});
     expect(turn).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:'priority',sandboxPolicy:{type:'readOnly',networkAccess:false}});
@@ -37,6 +39,59 @@ describe('Codex approval and turn configuration',()=>{
     expect(simpleInstructions).toContain('Updating focused tests or docs needed to verify the requested behavior is an ordinary implementation decision');expect(simpleInstructions).toContain('never weaken or rewrite a test merely to hide a failure');
     expect(direct).not.toHaveProperty('serviceTierForTurn');expect(direct.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
     expect(simple).not.toHaveProperty('serviceTierForTurn');expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:false});
+    expect(makeThreadParams({role:'direct',root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'}).config).not.toHaveProperty('project_doc_max_bytes');
+    expect(makeThreadParams({role:'orchestrator',root:'/tmp/project',model:'gpt-6-sol',approvalPolicy:'on-request'}).config).not.toHaveProperty('project_doc_max_bytes');
+  });
+  it('fails closed unless the app-server explicitly reports no instruction sources for router threads',()=>{
+    expect(()=>assertInstructionIsolation({instructionSources:[]})).not.toThrow();
+    expect(()=>assertInstructionIsolation({instructionSources:['/user/.codex/AGENTS.md']})).toThrow('Router instruction isolation could not be verified');
+    expect(()=>assertInstructionIsolation({})).toThrow('Router instruction isolation could not be verified');
+    expect(()=>assertInstructionIsolation({instructionSources:null})).toThrow('Router instruction isolation could not be verified');
+  });
+  it('requires the isolation acknowledgement on router start and resume, without changing other roles',async()=>{
+    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
+    const request=vi.fn().mockResolvedValueOnce({instructionSources:[],thread:{id:'router-thread'}}).mockResolvedValueOnce({thread:{id:'unsafe-thread'}}).mockResolvedValueOnce({thread:{id:'legacy-thread'}});
+    (client as any).request=request;
+    await expect(client.startThread('router','/isolated/home','gpt-6-luna','low')).resolves.toBe('router-thread');
+    expect(request.mock.calls[0][1]).toMatchObject({cwd:'/isolated/home',config:{project_doc_max_bytes:0,project_doc_fallback_filenames:[]}});
+    await expect(client.resumeThread('router-thread','on-request','router')).rejects.toThrow('Router instruction isolation could not be verified');
+    await expect(client.startTurn('unsafe-thread','classify','router','gpt-6-luna','low','/isolated/home')).rejects.toThrow('must be verified');
+    await expect(client.startThread('direct','/workspace','gpt-6-luna','low')).resolves.toBe('legacy-thread');
+    client.close();
+  });
+  it('shares one in-flight app-server startup across concurrent callers',async()=>{
+    let spawnCount=0;
+    const spawnOptions:any[]=[];
+    const fakeSpawn=(_exe:string,_args:string[],options:any)=>{
+      spawnCount++;
+      spawnOptions.push(options);
+      const child:any=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.killed=false;
+      const write=child.stdin.write.bind(child.stdin);child.stdin.write=(chunk:string,...args:any[])=>{const result=write(chunk,...args);for(const line of String(chunk).trim().split('\n')){const request=JSON.parse(line);if(request.method==='initialize')queueMicrotask(()=>child.stdout.write(`${JSON.stringify({id:request.id,result:{}})}\n`));}return result;};
+      child.kill=()=>{child.killed=true;return true;};return child;
+    };
+    const client=new AppServer({spawnProcess:fakeSpawn as any,cwd:'/isolated/router/workspace'});
+    await Promise.all([client.connect(),client.connect(),client.connect()]);expect(spawnCount).toBe(1);expect(spawnOptions[0].cwd).toBe('/isolated/router/workspace');client.close();
+  });
+  it('bridges short-lived ChatGPT auth only in memory and redacts bridge failures',async()=>{
+    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
+    const token=`header.${Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+300,'https://api.openai.com/auth':{chatgpt_account_id:'account-123',chatgpt_plan_type:'plus'}})).toString('base64url')}.signature`;
+    const request=vi.fn().mockResolvedValue({authMethod:'chatgpt',authToken:token});(client as any).request=request;
+    await expect(client.exportChatGPTAuthTokens()).resolves.toEqual({accessToken:token,chatgptAccountId:'account-123',chatgptPlanType:'plus'});
+    expect(request).toHaveBeenCalledWith('getAuthStatus',{includeToken:true,refreshToken:false},15000);
+    request.mockResolvedValueOnce({type:'chatgptAuthTokens'});
+    await client.useExternalChatGPTAuth({accessToken:token,chatgptAccountId:'account-123',chatgptPlanType:'plus'});
+    expect(request).toHaveBeenLastCalledWith('account/login/start',{type:'chatgptAuthTokens',accessToken:token,chatgptAccountId:'account-123',chatgptPlanType:'plus'},15000);
+    request.mockRejectedValueOnce(new Error(`unexpected token ${token}`));
+    let errorText='';try{await client.exportChatGPTAuthTokens();}catch(error){errorText=(error as Error).message;}
+    expect(errorText).toContain('short-lived sign-in bridge');expect(errorText).not.toContain(token);
+    client.close();
+  });
+  it('refreshes the ChatGPT auth bridge only when the current token is near expiry',async()=>{
+    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
+    const token=(exp:number)=>`header.${Buffer.from(JSON.stringify({exp,'https://api.openai.com/auth':{chatgpt_account_id:'account-123'}})).toString('base64url')}.signature`;
+    const request=vi.fn().mockResolvedValueOnce({authMethod:'chatgpt',authToken:token(Math.floor(Date.now()/1000)+20)}).mockResolvedValueOnce({authMethod:'chatgpt',authToken:token(Math.floor(Date.now()/1000)+300)});(client as any).request=request;
+    await expect(client.exportChatGPTAuthTokens()).resolves.toMatchObject({chatgptAccountId:'account-123'});
+    expect(request.mock.calls).toEqual([['getAuthStatus',{includeToken:true,refreshToken:false},15000],['getAuthStatus',{includeToken:true,refreshToken:true},15000]]);client.close();
   });
   it('requires both roles to verify public-source provenance instead of trusting local paths or KB claims',()=>{
     const orchestrator=buildOrchestratorDeveloperInstructions();
@@ -67,6 +122,7 @@ describe('Codex approval and turn configuration',()=>{
       expect(turn).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
     }
     expect(makeThreadResumeParams('thread','full-access')).toMatchObject({approvalPolicy:'never',sandbox:'danger-full-access'});
+    expect(makeThreadResumeParams('router','full-access','router')).toMatchObject({approvalPolicy:'never',sandbox:'read-only',config:{project_doc_max_bytes:0}});
     expect(makeThreadResumeParams('thread')).not.toHaveProperty('sandbox');
     for(const role of ['router','direct'] as const){
       const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'full-access'});

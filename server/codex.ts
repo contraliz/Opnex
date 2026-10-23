@@ -6,21 +6,34 @@ import { directExecutorJsonSchema, initialOrchestratorJsonSchema, reviewJsonSche
 type RpcMessage = { id?: string|number; method?: string; params?: any; result?: any; error?: { message?: string; code?: number } };
 export type Model = { id: string; displayName?: string; supportedReasoningEfforts?: { reasoningEffort: string }[]; isDefault?: boolean; [k: string]: unknown };
 export type CodexRole='router'|'direct'|'simple'|'orchestrator'|'worker';
+type AppServerOptions={codexHome?:string;cwd?:string;spawnProcess?:typeof spawn};
 
 export class AppServer extends EventEmitter {
+  constructor(private readonly options:AppServerOptions={}){super();}
   private child?: ChildProcessWithoutNullStreams;
+  private connecting?:Promise<void>;
   private requestId = 0;
   private pending = new Map<number,{ resolve:(v:any)=>void; reject:(e:Error)=>void; timer:NodeJS.Timeout }>();
   private buffer = '';
   ready = false;
   async connect() {
     if (this.child && this.ready) return;
+    if(this.connecting)return this.connecting;
+    this.connecting=this.connectOnce();
+    try{await this.connecting;}catch(error){const child=this.child;this.resetChild(child,'Codex app-server connection failed.');try{child?.kill();}catch{}throw error;}finally{this.connecting=undefined;}
+  }
+  private async connectOnce(){
+    if (this.child && this.ready) return;
+    this.buffer='';
     const exe = process.env.CODEX_EXECUTABLE || 'codex';
-    this.child = spawn(exe, ['app-server', '--stdio'], { cwd: process.cwd(), shell: false, windowsHide: true, stdio: ['pipe','pipe','pipe'] });
-    this.child.stdout.setEncoding('utf8'); this.child.stdout.on('data', chunk => this.consume(chunk));
-    this.child.stderr.setEncoding('utf8'); this.child.stderr.on('data', chunk => { const line=String(chunk).trim(); if(line) this.emit('diagnostic',line.slice(0,500)); });
-    this.child.on('error', e => { this.ready=false; this.emit('disconnected',e.message); });
-    this.child.on('exit', (code,signal) => { this.ready=false; for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new Error(`Codex app-server exited (${code ?? signal ?? 'unknown'})`));} this.pending.clear(); this.emit('disconnected',`Codex app-server exited (${code ?? signal ?? 'unknown'})`); });
+    const env:NodeJS.ProcessEnv={...process.env,...(this.options.codexHome?{CODEX_HOME:this.options.codexHome}:{})};
+    if(this.options.codexHome){delete env.CODEX_PROFILE;delete env.CODEX_CONFIG;}
+    this.child = (this.options.spawnProcess||spawn)(exe, ['app-server', '--stdio'], { cwd: this.options.cwd||process.cwd(), env, shell: false, windowsHide: true, stdio: ['pipe','pipe','pipe'] });
+    const child=this.child;
+    child.stdout.setEncoding('utf8'); child.stdout.on('data', chunk => {if(this.child===child)this.consume(chunk);});
+    child.stderr.setEncoding('utf8'); child.stderr.on('data', chunk => {if(this.child!==child)return;const line=String(chunk).trim(); if(line) this.emit('diagnostic',line.slice(0,500)); });
+    child.on('error', e => { if(this.child!==child)return;this.resetChild(child,e.message);this.emit('disconnected',e.message); });
+    child.on('exit', (code,signal) => { if(this.child!==child)return;const reason=`Codex app-server exited (${code ?? signal ?? 'unknown'})`;this.resetChild(child,reason);this.emit('disconnected',reason); });
     await this.request('initialize',{clientInfo:{name:'pseudoharness',title:'Pseudoharness',version:'0.1.0'},capabilities:{experimentalApi:true}});
     this.notify('initialized',{}); this.ready=true; this.emit('connected');
   }
@@ -41,22 +54,64 @@ export class AppServer extends EventEmitter {
   notify(method:string,params:unknown){ if(!this.child||this.child.killed) return; this.child.stdin.write(JSON.stringify({method,params})+'\n'); }
   respondServerRequest(id:string|number,result:unknown){ if(!this.child||this.child.killed) throw new Error('Codex app-server is not connected.'); this.child.stdin.write(JSON.stringify({id,result})+'\n'); }
   respondServerError(id:string|number,code:number,message:string){ if(!this.child||this.child.killed) throw new Error('Codex app-server is not connected.'); this.child.stdin.write(JSON.stringify({id,error:{code,message}})+'\n'); }
+  private resetChild(child:ChildProcessWithoutNullStreams|undefined,reason:string){if(child&&this.child!==child)return;this.ready=false;this.child=undefined;this.buffer='';this.verifiedRouterThreads.clear();for(const pending of this.pending.values()){clearTimeout(pending.timer);pending.reject(new Error(reason));}this.pending.clear();}
   async models():Promise<Model[]> { await this.connect(); const all:Model[]=[]; let cursor:string|undefined; for(let i=0;i<10;i++){const r=await this.request('model/list',{cursor:cursor??null,limit:100,includeHidden:false}); all.push(...(r.data||[])); if(!r.nextCursor)break; cursor=r.nextCursor;} return all; }
   async threadUsage(threadId:string):Promise<any>{await this.connect();const response=await this.request('account/usage/read',{threadId},10000);return response?.threadUsage??null;}
   async accountRateLimits():Promise<any>{await this.connect();return this.request('account/rateLimits/read',{excludeResetCreditDetails:true},10000);}
+  async exportChatGPTAuthTokens():Promise<{accessToken:string;chatgptAccountId:string;chatgptPlanType?:string}>{
+    await this.connect();
+    let response:any;
+    try{response=await this.request('getAuthStatus',{includeToken:true,refreshToken:false},15000);}catch{throw new Error('This Codex app-server cannot provide the short-lived sign-in bridge required to isolate routing instructions. Update Codex and retry.');}
+    if(isAuthTokenNearExpiry(response)){
+      try{response=await this.request('getAuthStatus',{includeToken:true,refreshToken:true},15000);}catch{throw new Error('The signed-in Codex session could not refresh the short-lived routing credential. No router turn was started.');}
+    }
+    return parseAuthResponse(response);
+  }
+  async refreshChatGPTAuthTokens(previousAccountId?:string|null):Promise<{accessToken:string;chatgptAccountId:string;chatgptPlanType?:string}>{
+    await this.connect();let response:any;
+    try{response=await this.request('getAuthStatus',{includeToken:true,refreshToken:true},15000);}catch{throw new Error('The signed-in Codex session could not refresh the short-lived routing credential. No router turn was started.');}
+    const parsed=parseAuthResponse(response);
+    if(previousAccountId&&parsed.chatgptAccountId!==previousAccountId)throw new Error('The signed-in account changed while routing. No router turn was started.');
+    return parsed;
+  }
+  async useExternalChatGPTAuth(tokens:{accessToken:string;chatgptAccountId:string;chatgptPlanType?:string}){
+    await this.connect();
+    try{await this.request('account/login/start',{type:'chatgptAuthTokens',...tokens},15000);}catch{throw new Error('This Codex app-server cannot accept the short-lived routing sign-in bridge. No router turn was started.');}
+  }
   async startThread(role:CodexRole,root:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request',ownedPolicy?:string) {
     await this.connect(); const params=makeThreadParams({role,root,model,effort,approvalPolicy,ownedPolicy});
-    const r=await this.request('thread/start',params); return String(r.thread.id);
+    const r=await this.request('thread/start',params); if(role==='router'){assertInstructionIsolation(r);this.verifiedRouterThreads.add(String(r.thread.id));} return String(r.thread.id);
   }
-  async resumeThread(threadId:string,approvalPolicy?:ApprovalPolicy){await this.connect();const r=await this.request('thread/resume',makeThreadResumeParams(threadId,approvalPolicy));return String(r.thread.id);}
+  private verifiedRouterThreads=new Set<string>();
+  async resumeThread(threadId:string,approvalPolicy?:ApprovalPolicy,role?:CodexRole){await this.connect();const r=await this.request('thread/resume',makeThreadResumeParams(threadId,approvalPolicy,role));if(role==='router'){assertInstructionIsolation(r);this.verifiedRouterThreads.add(threadId);}return String(r.thread.id);}
   async startTurn(threadId:string,input:string,role:CodexRole,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',root:string,writeRoots:string[]=[],approvalPolicy:ApprovalPolicy='on-request',schemaOverride?:unknown,serviceTierForTurn?:string) {
+    if(role==='router'&&!this.verifiedRouterThreads.has(threadId))throw new Error('Router instruction isolation must be verified before a routing turn starts.');
     const schema=schemaOverride??(role==='orchestrator'? initialOrchestratorJsonSchema:role==='router'?routeDecisionJsonSchema:role==='direct'?directExecutorJsonSchema:role==='simple'?simpleExecutorJsonSchema:workerOutcomeJsonSchema);
     const params=makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema,serviceTierForTurn});
     return this.request('turn/start',params,30000);
   }
   async reviewTurn(threadId:string,input:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request') {return this.request('turn/start',{threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:reviewJsonSchema,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandboxPolicy:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:{type:'readOnly',networkAccess:false}},30000);}
   async interrupt(threadId:string,turnId:string){return this.request('turn/interrupt',{threadId,turnId},15000);}
-  close(){try{this.child?.stdin.end();this.child?.kill();}catch{} this.ready=false;}
+  close(){const child=this.child;this.resetChild(child,'Codex app-server connection closed.');try{child?.stdin.end();child?.kill();}catch{}}
+}
+
+function parseAuthResponse(response:any){
+    const token=response?.authToken;
+    if(response?.authMethod!=='chatgpt'||typeof token!=='string'||!token)throw new Error('Routing isolation requires an active ChatGPT-managed Codex sign-in. No router turn was started.');
+    try{
+      const payload=token.split('.')[1];if(!payload)throw new Error('invalid token');
+      const claims=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));
+      const auth=claims?.['https://api.openai.com/auth'];
+      const accountId=auth?.chatgpt_account_id;
+      if(typeof accountId!=='string'||!accountId||typeof claims.exp!=='number'||claims.exp*1000<Date.now()+30000)throw new Error('missing account or expiring token');
+      return {accessToken:token,chatgptAccountId:accountId,...(typeof auth.chatgpt_plan_type==='string'?{chatgptPlanType:auth.chatgpt_plan_type}:{})};
+    }catch{throw new Error('The signed-in Codex session did not provide a usable short-lived routing credential. No router turn was started.');}
+}
+function isAuthTokenNearExpiry(response:any){try{if(response?.authMethod!=='chatgpt'||typeof response.authToken!=='string')return false;const claims=JSON.parse(Buffer.from(response.authToken.split('.')[1],'base64url').toString('utf8'));return typeof claims.exp==='number'&&claims.exp*1000<Date.now()+120000;}catch{return false;}}
+
+export function assertInstructionIsolation(response:any){
+  const sources=response?.instructionSources;
+  if(!Array.isArray(sources)||sources.length!==0)throw new Error('Router instruction isolation could not be verified. No routing turn was started.');
 }
 
 export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema,serviceTierForTurn}:{threadId:string;input:string;role:CodexRole;model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown;serviceTierForTurn?:string}) {
@@ -66,7 +121,7 @@ export function makeTurnParams({threadId,input,role,model,effort,writeRoots,appr
 }
 export const REASONING_THREAD_CONFIG={model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true} as const;
 export function runtimeApprovalPolicy(policy:ApprovalPolicy){return policy==='full-access'?'never':policy;}
-const ROUTER_CONFIG={...REASONING_THREAD_CONFIG,web_search:'disabled',apps:{_default:{enabled:false,destructive_enabled:false,open_world_enabled:false}}} as const;
+export const ROUTER_CONFIG={...REASONING_THREAD_CONFIG,project_doc_max_bytes:0,project_doc_fallback_filenames:[],web_search:'disabled',apps:{_default:{enabled:false,destructive_enabled:false,open_world_enabled:false}}} as const;
 const ROUTER_INSTRUCTIONS='You are a classification-only routing agent. Return exactly one JSON object matching the requested schema, with route, rule_id, and a short justification. Do not answer the user, inspect files, run commands, call tools, search the web, or plan/execute the task. Use only the original user request and the supplied bounded conversation context. Default uncertain, mixed, multi-component, or new-feature work to hard_task. Hard means the existing orchestrator must create a complete assignment for Luna and review Luna\'s receipt. A simple route is only for a known, bounded action with straightforward verification. A direct route is only for an explanation or transformation requiring no implementation.';
 const DIRECT_INSTRUCTIONS='You are GPT-6 Luna handling a read-only direct-answer route. Answer the current request without implementation or project investigation. If the request requires implementation or materially more investigation than expected, return the structured escalation instead. Do not claim files changed, tests run, or a worker/review occurred.';
 const SIMPLE_INSTRUCTIONS='You are GPT-6 Luna handling a simple implementation. Implement only the user-authorized bounded request in the selected project root, preserve unrelated changes, and verify the result. Updating focused tests or docs needed to verify the requested behavior is an ordinary implementation decision when it preserves unrelated behavior; never weaken or rewrite a test merely to hide a failure. Do not exceed the existing sandbox or approval policy. If material uncertainty, scope expansion, a consequential choice, or a genuine blocker appears, stop and return a structured escalation including completed actions and concrete evidence. Never claim Sol reviewed or accepted your work.';
@@ -75,7 +130,7 @@ export function makeThreadParams({role,root,model,approvalPolicy,ownedPolicy}:{r
   const sandbox=router||role==='direct'||role==='simple'?'read-only':approvalPolicy==='full-access'?'danger-full-access':'read-only';
   return {cwd:root,model,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandbox,allowProviderModelFallback:false,...(router?{dynamicTools:[],config:ROUTER_CONFIG}: {config:REASONING_THREAD_CONFIG}),developerInstructions:role==='worker'?WORKER_INSTRUCTIONS:role==='router'?ROUTER_INSTRUCTIONS:role==='direct'?DIRECT_INSTRUCTIONS:role==='simple'?SIMPLE_INSTRUCTIONS:buildOrchestratorDeveloperInstructions(ownedPolicy)};
 }
-export function makeThreadResumeParams(threadId:string,approvalPolicy?:ApprovalPolicy){return {threadId,excludeTurns:true,config:REASONING_THREAD_CONFIG,...(approvalPolicy?{approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandbox:approvalPolicy==='full-access'?'danger-full-access':'read-only'}:{})};}
+export function makeThreadResumeParams(threadId:string,approvalPolicy?:ApprovalPolicy,role?:CodexRole){return {threadId,excludeTurns:true,config:role==='router'?ROUTER_CONFIG:REASONING_THREAD_CONFIG,...(approvalPolicy?{approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandbox:role==='router'?'read-only':approvalPolicy==='full-access'?'danger-full-access':'read-only'}:{})};}
 export function approvalResponse(method:string,requested:unknown,decision:'accept'|'decline'|'cancel'){
   if(method==='item/permissions/requestApproval')return {permissions:decision==='accept'&&requested&&typeof requested==='object'?requested:{},scope:'turn'};
   return {decision};

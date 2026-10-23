@@ -5,7 +5,7 @@ Pseudoharness is a local desktop-style Codex request-routing and delegation app.
 ## Requirements
 
 - Node.js 22.12 or newer and npm to run the packaged app. Use Node.js 22.22.2 for source checks; it satisfies the locked jsdom test environment's runtime requirements and is the version used in CI.
-- Codex CLI installed, signed in, and able to run `codex app-server --stdio`. Its model catalog must include GPT-6 Luna low effort and the Fast (`priority`) service tier for routing. The signed-in account must also have access to the models selected for hard tasks.
+- Codex CLI installed, signed in, and able to run `codex app-server --stdio`. Its model catalog must include GPT-6 Luna low effort and the Fast (`priority`) service tier for routing. The runtime must also support the short-lived external-auth bridge and router `instructionSources` acknowledgement; otherwise routing fails closed. The signed-in account must also have access to the models selected for hard tasks.
 - A workspace directory to choose in Settings.
 - Optional: AgentMem available as an MCP stdio server in the same Codex environment, with a project registered to the selected workspace root.
 
@@ -22,6 +22,8 @@ The code uses Node's cross-platform process and path APIs. macOS has been verifi
 ## Request routing
 
 The router receives the current request and bounded conversation context, then returns a route, rule ID, and brief reason. Its Fast capability is checked before classification; the app does not substitute another speed or model. Direct and simple requests do not start the configured orchestrator. The hard-task model and effort in Settings apply only after a request is routed to a hard task. The task details panel records the selected route and executor.
+
+The router uses a separate, app-owned Codex home and a neutral working directory. Pseudoharness obtains a short-lived ChatGPT sign-in token from the main app-server and passes it to the router app-server in memory; it does not copy the user's Codex configuration or credentials to the router home. Router threads set `project_doc_max_bytes = 0`, and Pseudoharness fails closed unless the app-server confirms that the router thread has no instruction sources. This excludes user and workspace `AGENTS.md` instructions from router context while leaving direct, simple, orchestrator, and worker threads on the normal Codex home. If the installed Codex runtime does not support the required token bridge or isolation acknowledgement, routing stops with an error instead of falling back to the normal workspace thread. Codex's system-level instructions remain runtime-owned.
 
 ## Install the portable package
 

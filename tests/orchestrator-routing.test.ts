@@ -3,20 +3,24 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-const fake=vi.hoisted(()=>({instance:null as any,calls:[] as any[],threadCount:0,turnCount:0,fastAvailable:true}));
+const fake=vi.hoisted(()=>({instance:null as any,routerInstance:null as any,instances:[] as any[],threadOwners:new Map<string,any>(),calls:[] as any[],threadCount:0,turnCount:0,fastAvailable:true}));
 vi.mock('../server/codex.js',()=>{
   class FakeAppServer{
     ready=false;
     listeners=new Map<string,((...args:any[])=>void)[]>();
-    constructor(){fake.instance=this;}
+    constructor(options:any={}){fake.instances.push(this);if(options.codexHome)fake.routerInstance=this;else fake.instance=this;}
     on(event:string,listener:(...args:any[])=>void){this.listeners.set(event,[...(this.listeners.get(event)||[]),listener]);return this;}
     emit(event:string,...args:any[]){for(const listener of this.listeners.get(event)||[])listener(...args);return true;}
     async connect(){this.ready=true;this.emit('connected');}
+    async exportChatGPTAuthTokens(){return {accessToken:'opaque-test-token',chatgptAccountId:'test-account'};}
+    async useExternalChatGPTAuth(){return;}
+    async refreshChatGPTAuthTokens(previousAccountId:string|null){fake.calls.push({kind:'refresh-auth',previousAccountId});return {accessToken:'opaque-refreshed-token',chatgptAccountId:'test-account',chatgptPlanType:'plus'};}
+    respondServerRequest(id:string|number,result:unknown){fake.calls.push({kind:'server-response',id,result});}
     async models(){return [
       {id:'gpt-6-luna',supportedReasoningEfforts:['low','high','xhigh'].map(reasoningEffort=>({reasoningEffort})),serviceTiers:fake.fastAvailable?[{id:'priority'}]:[]},
       {id:'gpt-6-sol',supportedReasoningEfforts:['low','high'].map(reasoningEffort=>({reasoningEffort}))},
     ] as any;}
-    async startThread(role:string,root:string,model:string,effort:string,approvalPolicy:string){const threadId=`${role}-${++fake.threadCount}`;fake.calls.push({kind:'thread',role,root,model,effort,approvalPolicy,threadId});return threadId;}
+    async startThread(role:string,root:string,model:string,effort:string,approvalPolicy:string){const threadId=`${role}-${++fake.threadCount}`;fake.threadOwners.set(threadId,this);fake.calls.push({kind:'thread',role,root,model,effort,approvalPolicy,threadId});return threadId;}
     async resumeThread(threadId:string){return threadId;}
     async startTurn(threadId:string,input:string,role:string,model:string,effort:string,root:string,writeRoots:string[]=[],approvalPolicy:string,schema?:unknown,serviceTierForTurn?:string){const turnId=`turn-${++fake.turnCount}`;fake.calls.push({kind:'turn',threadId,input,role,model,effort,root,writeRoots,approvalPolicy,schema,serviceTierForTurn,turnId});return {turn:{id:turnId}};}
     async reviewTurn(threadId:string,input:string,model:string,effort:string,approvalPolicy:string){return this.startTurn(threadId,input,'orchestrator',model,effort,'/workspace',[],approvalPolicy);}
@@ -35,19 +39,25 @@ const assignment={outcome:'Perform the requested implementation.',deliverable:'A
 const receipt={status:'complete',result:'Completed and verified.',changes:[],acceptance:{met:['The requested behavior is delivered.'],unmet:[]},verification:[{check:'Focused behavior check',result:'passed',evidence:'Mocked lifecycle completed.'},{check:'Unrelated integration suite',result:'not_run',evidence:null}],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};
 async function waitFor(predicate:()=>boolean){for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out waiting for the routed workflow.');}
 async function setup(fast=true){
-  vi.resetModules();fake.calls=[];fake.threadCount=0;fake.turnCount=0;fake.fastAvailable=fast;
+  vi.resetModules();fake.calls=[];fake.instances=[];fake.instance=null;fake.routerInstance=null;fake.threadOwners.clear();fake.threadCount=0;fake.turnCount=0;fake.fastAvailable=fast;
   previousDataDirectory=process.env.PSEUDOHARNESS_DATA_DIR;dataDirectory=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-route-test-'));process.env.PSEUDOHARNESS_DATA_DIR=dataDirectory;
   const state=await import('../server/state.js');await state.loadState();await state.mutate(value=>{value.settings={...value.settings,projectRoot:'/workspace',agentmemProjectId:'',orchestratorModel:'gpt-6-sol',orchestratorEffort:'high',approvalPolicy:'on-request'};});
   const orchestrator=await import('../server/orchestrator.js');await orchestrator.initialize();await waitFor(()=>orchestrator.getRuntimeStatus().codex.models.length>0);modules={state,orchestrator};return modules;
 }
 function lastTurn(role:string){const turn=[...fake.calls].reverse().find(row=>row.kind==='turn'&&row.role===role);if(!turn)throw new Error(`No ${role} turn started.`);return turn;}
-async function complete(role:string,value:unknown){const turn=lastTurn(role);fake.instance.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'agentMessage',text:JSON.stringify(value)}]}});return turn;}
+async function complete(role:string,value:unknown){const turn=lastTurn(role);const owner=fake.threadOwners.get(turn.threadId)||fake.instance;owner.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'agentMessage',text:JSON.stringify(value)}]}});return turn;}
 async function waitForRole(role:string){await waitFor(()=>fake.calls.some(row=>row.kind==='turn'&&row.role===role));return lastTurn(role);}
 
 afterEach(async()=>{await new Promise(resolve=>setImmediate(resolve));if(modules?.state)await modules.state.mutate(()=>{});if(modules?.orchestrator){modules.orchestrator.shutdown();modules=null;}if(previousDataDirectory===undefined)delete process.env.PSEUDOHARNESS_DATA_DIR;else process.env.PSEUDOHARNESS_DATA_DIR=previousDataDirectory;if(dataDirectory)await rm(dataDirectory,{recursive:true,force:true});});
 beforeEach(()=>vi.clearAllMocks());
 
 describe('routed request workflow',()=>{
+  it('bridges isolated-router credential refresh through the main signed-in transport',async()=>{
+    await setup();fake.routerInstance.emit('serverRequest','router-auth-1','account/chatgptAuthTokens/refresh',{reason:'unauthorized',previousAccountId:'test-account'});
+    await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'));
+    expect(fake.calls.find(row=>row.kind==='refresh-auth')).toMatchObject({previousAccountId:'test-account'});
+    expect(fake.calls.find(row=>row.kind==='server-response')).toMatchObject({id:'router-auth-1',result:{accessToken:'opaque-refreshed-token',chatgptAccountId:'test-account',chatgptPlanType:'plus'}});
+  });
   it('runs a direct answer only on Luna and records a user-facing answer without a worker receipt',async()=>{
     const {orchestrator}=await setup();let task=await orchestrator.submitTask('Explain why the sky looks blue.');expect(task.phase).toBe('routing');const router=lastTurn('router');expect(router).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:'priority'});
     await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A concise explanation needs no implementation.'});const direct=await waitForRole('direct');expect(direct).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:undefined});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
@@ -80,11 +90,11 @@ describe('routed request workflow',()=>{
     const {orchestrator}=await setup();const task=await orchestrator.submitTask('A request with an invalid route payload.');await complete('router',{route:'simple_implementation',rule_id:'hard_new_feature',justification:'Mismatched rule'});await waitForRole('orchestrator');const routed=modules.state.getTask(task.id);expect(routed?.routeDecision).toMatchObject({route:'hard_task',effectiveRoute:'hard_task',rule_id:'hard_significant_uncertainty',fallback:true});expect(routed?.routeDecision?.justification).toContain('failed validation');expect(routed?.allowDirectResponse).toBe(false);
   });
   it('interrupts a turn/start response that resolves after a routed task is cancelled',async()=>{
-    const {orchestrator}=await setup();let release:(value:{turn:{id:string}})=>void=()=>{};const deferred=new Promise<{turn:{id:string}}>(resolve=>{release=resolve;});const original=fake.instance.startTurn.bind(fake.instance);fake.instance.startTurn=(...args:any[])=>{const result=original(...args);return args[2]==='router'?deferred:result;};
+    const {orchestrator}=await setup();let release:(value:{turn:{id:string}})=>void=()=>{};const deferred=new Promise<{turn:{id:string}}>(resolve=>{release=resolve;});const original=fake.routerInstance.startTurn.bind(fake.routerInstance);fake.routerInstance.startTurn=(...args:any[])=>{const result=original(...args);return args[2]==='router'?deferred:result;};
     const pending=orchestrator.submitTask('Classify this request.');await waitFor(()=>fake.calls.some(row=>row.kind==='turn'&&row.role==='router'));const row=modules.state.getState().tasks[0];await orchestrator.cancelTask(row.id);release({turn:{id:'late-turn'}});await pending;await waitFor(()=>fake.calls.some(call=>call.kind==='interrupt'&&call.turnId==='late-turn'));expect(modules.state.getTask(row.id)?.phase).toBe('cancelled');
   });
   it('does not revive a router start that resolves after cancellation and interrupts a late turn response',async()=>{
-    const {orchestrator}=await setup();let release:(value:string)=>void=()=>{};const deferred=new Promise<string>(resolve=>{release=resolve;});const original=fake.instance.startThread.bind(fake.instance);fake.instance.startThread=async(role:string,...args:any[])=>role==='router'?deferred:original(role,...args);
+    const {orchestrator}=await setup();let release:(value:string)=>void=()=>{};const deferred=new Promise<string>(resolve=>{release=resolve;});const original=fake.routerInstance.startThread.bind(fake.routerInstance);fake.routerInstance.startThread=async(role:string,...args:any[])=>role==='router'?deferred:original(role,...args);
     const pending=orchestrator.submitTask('Classify this request.');await waitFor(()=>modules.state.getState().tasks.length===1);const row=modules.state.getState().tasks[0];await orchestrator.cancelTask(row.id);release('late-router-thread');await pending;await new Promise(resolve=>setTimeout(resolve,20));expect(modules.state.getTask(row.id)?.phase).toBe('cancelled');expect(fake.calls.some(call=>call.kind==='turn'&&call.role==='router')).toBe(false);
   });
 });
