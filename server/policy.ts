@@ -70,7 +70,10 @@ export async function simpleRouteWriteRoots(userInputs:string[],projectRoot:stri
       const resolvedRelative=path.relative(rootReal,resolved);
       if(resolvedRelative===''||resolvedRelative==='..'||resolvedRelative.startsWith(`..${path.sep}`)||path.isAbsolute(resolvedRelative))return undefined;
       if(!(await stat(resolved)).isDirectory())return undefined;
-      roots.push(resolved);
+      // Keep the project-root spelling used by the app-server workspace. The
+      // real path above is only for containment checks: on macOS `/var` may
+      // resolve to `/private/var`, and Windows may expand 8.3 path segments.
+      roots.push(candidate);
     }
     return assignmentWriteRoots({write_scope:roots},root);
   }catch{return undefined;}
