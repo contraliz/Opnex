@@ -1,0 +1,4 @@
+src/.vite-temp/
+server/.protocol-temp/
+tests/.verify-client/
+tests/.verify-server/

@@ -25,3 +25,5 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run package
+      - run: npm run desktop:smoke
+      - run: npm run desktop:package

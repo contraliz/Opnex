@@ -1,0 +1,31 @@
+appId: org.pseudoharness.desktop
+productName: Pseudoharness
+directories:
+  output: desktop-release
+files:
+  - bin/**
+  - desktop/**
+  - dist/**
+  - dist-server/**
+  - docs/browser-github-and-parallel-workers.md
+  - LICENSE
+  - package.json
+  - policy/CODEX_DELEGATION_POLICY.md
+extraMetadata:
+  main: desktop/main.cjs
+electronFuses:
+  runAsNode: false
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+mac:
+  target:
+    - target: zip
+      arch:
+        - x64
+        - arm64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
