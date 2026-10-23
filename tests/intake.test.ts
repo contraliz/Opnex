@@ -8,8 +8,8 @@ const assignment={outcome:'Refactor service',deliverable:'Updated service',read_
 describe('orchestrator policy and intake routing',()=>{
   it('loads the portable policy copy and includes it in every assembled orchestrator prompt',async()=>{
     const policy=await loadOwnedOrchestrationPolicy();
-    expect(policy).toContain('trivial questions');
-    expect(policy).toContain('When the user explicitly asks for Luna, delegation is required.');
+    expect(policy).toContain('Classify each new user request before execution.');
+    expect(policy).toContain('The hard-task orchestrator must return a complete delegation assignment; it cannot answer directly.');
     expect(policy).toContain('While Luna works, the orchestrator stays dormant.');
     expect(policy).not.toMatch(/[A-Za-z]:\\|\\Users\\|\\home\\/i);
     expect(buildOrchestratorInput(policy,'USER INPUT')).toContain(`<delegation-policy>\n${policy}`);

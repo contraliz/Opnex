@@ -1,17 +1,31 @@
 # Pseudoharness
 
-Pseudoharness is a local desktop-style Codex delegation app. Its orchestrator follows the app-owned policy in [`policy/CODEX_DELEGATION_POLICY.md`](policy/CODEX_DELEGATION_POLICY.md): it may answer directly or assign a separate `gpt-6-luna` worker at high effort, then review the worker's structured receipt. Progress and reasoning update the UI but do not wake another model. This independent project is not affiliated with OpenAI.
+Pseudoharness is a local desktop-style Codex request-routing and delegation app. Each new request is classified by GPT-6 Luna at low effort with the Fast tier. Direct answers use a separate read-only Luna turn; bounded implementation uses Luna at xhigh and reports its own verification; hard tasks use the configured Sol/Astra orchestrator to assign Luna at high effort and review the structured receipt. The app-owned policy is in [`policy/CODEX_DELEGATION_POLICY.md`](policy/CODEX_DELEGATION_POLICY.md). This independent project is not affiliated with OpenAI.
 
 ## Requirements
 
-- Node.js 22.12 or newer and npm.
-- Codex CLI installed, signed in, and able to run `codex app-server --stdio`. The signed-in account must have access to the models you select.
+- Node.js 22.12 or newer and npm to run the packaged app. Use Node.js 22.22.2 for source checks; it satisfies the locked jsdom test environment's runtime requirements and is the version used in CI.
+- Codex CLI installed, signed in, and able to run `codex app-server --stdio`. Its model catalog must include GPT-6 Luna low effort and the Fast (`priority`) service tier for routing. The runtime must also support the short-lived external-auth bridge, per-thread base/developer instructions, and empty `instructionSources` acknowledgement for new and resumed agent threads; otherwise agent work fails closed. The signed-in account must also have access to the models selected for hard tasks.
 - A workspace directory to choose in Settings.
 - Optional: AgentMem available as an MCP stdio server in the same Codex environment, with a project registered to the selected workspace root.
 
+### macOS first run
+
+In Terminal, check the existing Codex sign-in with `codex login status`, then run `npm ci` and `npm run dev` from this checkout. Open <http://127.0.0.1:5173> and choose a workspace in Settings. No separate Mac app bundle is required; the app runs locally in your browser and stores its state under `~/Library/Application Support/Pseudoharness`. Use `npm run package` to build the portable npm tarball instead.
+
+The model and effort selectors use the catalog returned by the Codex executable the app launches. If an expected model is marked unavailable or its effort selector is disabled, check `codex --version` and point the app at a newer runtime with `CODEX_EXECUTABLE=/path/to/codex npm run dev`. This override leaves the CLI on `PATH` unchanged.
+
 The app uses your installed Codex runtime; it does not ask for or store an API key. First-run settings have an empty workspace and AgentMem project, so no author-specific path or knowledge-base identity is required. If `codex` is not on `PATH`, set `CODEX_EXECUTABLE` to the CLI executable path before starting. `CODEX_HOME` can select a non-default Codex configuration directory.
 
-The code uses Node's cross-platform process and path APIs. Windows 11 was used for release verification; macOS and Linux are intended but were not independently verified for this package. Codex CLI availability and sign-in are external prerequisites on each machine.
+The code uses Node's cross-platform process and path APIs. macOS has been verified with build and portable-package checks, a signed-in Codex app-server connection, directory browsing, and a direct-answer task. The repository now runs build and test checks on macOS and Windows in GitHub Actions; check the latest run before treating Windows as verified. Linux is intended but not independently verified. Codex CLI availability, model access, and sign-in are external prerequisites on each machine.
+
+## Request routing
+
+The router receives the current request and bounded conversation context, then returns a route, rule ID, and brief reason. Its Fast capability is checked before classification; the app does not substitute another speed or model. Direct and simple requests do not start the configured orchestrator. The hard-task model and effort in Settings apply only after a request is routed to a hard task. The task details panel records the selected route and executor.
+
+Every new router, direct, simple, orchestrator, and worker thread runs in the versioned, app-owned `agent-codex-home-v1` with a neutral startup directory. The original signed-in app-server is a metadata broker: it provides the model catalog, account limits, and short-lived ChatGPT sign-in tokens, but its RPC allowlist prevents it from starting or operating agent threads. Pseudoharness passes authentication to the isolated agent runtime in memory and does not copy the user's Codex configuration or credentials. New threads receive Pseudoharness-owned base and role instructions, and resumed threads receive them again. Before starting any agent thread, Pseudoharness reads the isolated runtime's effective configuration and stops if it cannot verify the required settings. Those settings disable automatic skills, user memories, plugins, apps, hooks, MCP integrations, native multi-agent delegation, and ambient environment/collaboration instructions. Pseudoharness supplies its own compaction prompt. The selected repository remains the thread working directory, but its `.codex` configuration is untrusted and project instruction files are disabled. Each start and resume must return an empty `instructionSources` list before any turn can run. Old thread records remain visible, but a pre-isolation session cannot resume; send a follow-up to start a fresh isolated pass.
+
+Codex still provides its mandatory system, platform, security, and tool instructions and schemas. Native execution tools continue to follow the existing sandbox, project write roots, approvals, and network policy; files and command output are task data, not trusted instructions. AgentMem remains optional and is added only when Pseudoharness explicitly selects and retrieves scoped project knowledge. The isolation flags and app-server acknowledgement are runtime capabilities; if they are unavailable, agent work stops instead of falling back to a normal user or workspace thread.
 
 ## Install the portable package
 
@@ -80,4 +94,4 @@ Approval presets map to Codex app-server values: **On request** uses `on-request
 
 ## Checks and license
 
-Run `npm run lint`, `npm test`, `npm run typecheck`, and `npm run build` from the source checkout. `npm run package` produces the portable local tarball; it does not publish it. App-server model access, approval prompts, and sandbox behavior depend on each user's signed-in Codex installation. This project is licensed under MIT; see [LICENSE](LICENSE).
+Run `npm run lint`, `npm test`, `npm run typecheck`, and `npm run build` from the source checkout. The locked jsdom test environment needs Node.js 22.22.2; CI uses that tested version. The packaged app runtime remains compatible with Node.js 22.12 or newer. `npm run package` produces the portable local tarball; it does not publish it. App-server model access, approval prompts, and sandbox behavior depend on each user's signed-in Codex installation. This project is licensed under MIT; see [LICENSE](LICENSE).

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,7 +23,8 @@ describe('read-only workspace Git snapshots',()=>{
     const before=execFileSync('git',['status','--porcelain=v1','-z','--untracked-files=all'],{cwd:temporary}).toString();
     const snapshot=await readWorkspaceGitSnapshot(temporary);
     const after=execFileSync('git',['status','--porcelain=v1','-z','--untracked-files=all'],{cwd:temporary}).toString();
-    expect(snapshot.available).toBe(true);expect(snapshot.workspaceRoot).toBe(temporary);expect(snapshot.repositoryRoot).toBe(temporary);
+    const canonical=await realpath(temporary);
+    expect(snapshot.available).toBe(true);expect(snapshot.workspaceRoot).toBe(canonical);expect(snapshot.repositoryRoot).toBe(canonical);
     expect(snapshot.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({path:'app.ts',kind:'tracked'}),
       expect.objectContaining({path:'new file.txt',kind:'untracked'}),
