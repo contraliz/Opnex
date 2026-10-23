@@ -13,8 +13,10 @@ import { applyAllowanceDelta, applyThreadEstimatedUsage, applyThreadTokenUsage, 
 import path from 'node:path';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { stateDirectory } from './paths.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { loadSelectedSkills, workerContextComposePrompt, workerContextPlanPrompt, workerExecutePrompt, workerScopeSummary, type WorkerContextPlan, type WorkerContextStatus, type WorkerStage } from './worker-staging.js';
+import { readGitHubWorkspace } from './github.js';
+import { authorizesWorkerWorkspaceTool, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from './workspace-tools.js';
 
 const brokerCwd=path.join(stateDirectory(),'metadata-broker-workspace');
 const codex=new AppServer({metadataOnly:true,cwd:brokerCwd});
@@ -32,6 +34,7 @@ const attachedThreads=new Set<string>();
 const usageReadSequence=new Map<string,number>();
 const allowanceBaselines=new Map<string,AllowanceSnapshot|null>();
 const routerToolViolations=new Set<string>();
+const workerWorkspaceTargets=new Map<string,{taskId:string;passId:string}>();
 const effortList=(m:Model)=>((m as any).supportedReasoningEfforts||[]).map((x:any)=>typeof x==='string'?x:x.reasoningEffort);
 const serviceTierList=(m:Model)=>Array.isArray((m as any).serviceTiers)?(m as any).serviceTiers.map((x:any)=>x.id):[];
 function roleThreadId(task:Task,role:WorkflowRole){return task[`${role}ThreadId` as keyof Task] as string|undefined;}
@@ -196,10 +199,11 @@ async function startWorkerStage(task:Task,assignment:Assignment,stage:WorkerStag
   const approvalPolicy=currentPass(task)?.approvalPolicy??getState().settings.approvalPolicy;
   await ensureAgentAuth();if(currentPass(task)?.agentContextVersion!==1)throw new Error('This pass predates isolated Pseudoharness agent context. Send a follow-up to start a new isolated pass.');
   if(!workerPassIsCurrent(task.id,passId))return;
-  if(!task.workerThreadId) task.workerThreadId=await agentCodex.startThread('worker',task.userRoot,'gpt-6-luna','high',approvalPolicy);
+  if(!task.workerThreadId) task.workerThreadId=await agentCodex.startThread('worker',task.userRoot,'gpt-6-luna','high',approvalPolicy,undefined,workerWorkspaceTool);
   else if(!attachedThreads.has(task.workerThreadId)) await agentCodex.resumeThread(task.workerThreadId,approvalPolicy,'worker',task.userRoot);
   if(!workerPassIsCurrent(task.id,passId))return;
   attachedThreads.add(task.workerThreadId);
+  workerWorkspaceTargets.set(task.workerThreadId,{taskId:task.id,passId});
   task.phase='worker_running';task.workerStage=stage;task.activeRole='worker';task.activeModelId='gpt-6-luna';task.activeEffort='high';task.activeTurnId=undefined;task.error=undefined;
   if(stage==='context_compose'&&context?.status)task.workerContextStatus=context.status;
   if(stage==='execute'&&context?.summary)task.workerContextSummary=context.summary;
@@ -407,6 +411,29 @@ function structuredFailure(error:unknown,role:WorkflowRole){
 }
 
 async function onServerRequest(id:string|number,method:string,params:any,client:AppServer=agentCodex){
+  if(client===agentCodex&&method==='item/tool/call'){
+    const threadId=typeof params?.threadId==='string'?params.threadId:'';const target=workerWorkspaceTargets.get(threadId);const task=target?getTask(target.taskId):undefined;const pass=task?.passes?.find(row=>row.id===target?.passId);const args=params?.arguments||{};const action=args.action;
+    const fail=(message:string)=>{try{client.respondServerRequest(id,{success:false,contentItems:[{type:'inputText',text:message}]});}catch{}};
+    if(params?.namespace!=='pseudoharness'||params?.tool!=='workspace'||!authorizesWorkerWorkspaceTool(task,pass,target,threadId)||!task||!pass||!target){fail('Workspace action rejected: this tool is limited to the active task’s execution stage. No workspace action was applied.');return;}
+    try{
+      if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(key=>!['action','url'].includes(key))||typeof args.action!=='string'||!['open_browser','open_github','open_pull_request','dock_browser','dock_github','undock','inspect_github'].includes(args.action)||args.url!==undefined&&(typeof args.url!=='string'||args.url.length>2048))throw new Error('The workspace action arguments are invalid.');
+      if(workspaceToolRequiresDesktop(action)&&process.env.PSEUDOHARNESS_DESKTOP!=='1')throw new Error('Opening or docking embedded views requires the Electron desktop shell. You can still use inspect_github in the portable app.');
+      let mode:'browser'|'github'='github';let placement:'side'|'full'='side';let url:string|undefined;let detail='';
+      if(action==='open_browser'){
+        mode='browser';url=normalizeAgentWorkspaceUrl(args.url);detail='Opened the requested browser tab for the active task.';
+      }else if(action==='open_github'||action==='open_pull_request'||action==='inspect_github'){
+        const workspace=await readGitHubWorkspace(task.userRoot);if(action==='inspect_github'){detail=JSON.stringify({available:workspace.available,authenticated:workspace.authenticated,repository:workspace.repository?.name,branch:workspace.branch,pullRequest:workspace.pullRequest?{number:workspace.pullRequest.number,title:workspace.pullRequest.title,url:workspace.pullRequest.url,state:workspace.pullRequest.state,checks:workspace.pullRequest.checks?.map(check=>({name:check.name,state:check.state,conclusion:check.conclusion}))}:undefined,detail:workspace.detail}).slice(0,4000);}
+        else{mode='github';url=action==='open_pull_request'?(workspace.pullRequest?.url||task.githubLink?.pullRequestUrl):workspace.repository?.url;if(!url)throw new Error(action==='open_pull_request'?'The active task has no discoverable pull request.':'The active task has no GitHub repository.');detail=action==='open_pull_request'?'Opened the active task’s pull request in its GitHub workspace.':'Opened the active task’s repository in its GitHub workspace.';}
+      }else if(action==='dock_browser'||action==='dock_github'){mode=action==='dock_browser'?'browser':'github';detail=`Docked the ${mode} workspace beside the active task conversation.`;}
+      else if(action==='undock'){mode=task.workspaceCommand?.mode||'browser';placement='full';detail='Moved the workspace back to its full tab.';}
+      else throw new Error('Unsupported workspace action.');
+      if(url)url=normalizeAgentWorkspaceUrl(url);
+      if(!authorizesWorkerWorkspaceTool(getTask(target.taskId),getTask(target.taskId)?.passes?.find(row=>row.id===target.passId),target,threadId))throw new Error('The active task changed before the workspace request completed. No view was opened.');
+      if(action!=='inspect_github'){let applied=false;await mutate(s=>{const live=s.tasks.find(row=>row.id===task.id);if(authorizesWorkerWorkspaceTool(live,live?.passes?.find(row=>row.id===target.passId),target,threadId)){live!.workspaceCommand={id:randomUUID(),mode,placement,url,createdAt:new Date().toISOString()};applied=true;}});if(!applied)throw new Error('The active task changed before the workspace request completed. No view was opened.');}
+      client.respondServerRequest(id,{success:true,contentItems:[{type:'inputText',text:detail}]});
+    }catch(error){fail(error instanceof Error?error.message:'Workspace action failed. No remote write was attempted.');}
+    return;
+  }
   if(client===agentCodex&&method==='account/chatgptAuthTokens/refresh'){
     try{const tokens=await codex.refreshChatGPTAuthTokens(typeof params?.previousAccountId==='string'?params.previousAccountId:null);client.respondServerRequest(id,tokens);}catch{try{client.respondServerError(id,-32000,'The signed-in session could not refresh the isolated Pseudoharness agent credential.');}catch{}}
     return;

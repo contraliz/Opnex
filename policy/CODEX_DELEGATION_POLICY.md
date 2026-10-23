@@ -22,6 +22,8 @@ Before a worker starts, the orchestrator supplies the intended outcome and deliv
 
 The worker returns a structured receipt with status, result, changes, acceptance, verification, risks, knowledge consulted or updated, and any decision required. The orchestrator reviews that receipt and either accepts it, issues one consolidated correction, or records an incomplete, blocked, or failed outcome. A correction to the same task reuses the worker thread; an unrelated task starts a fresh thread.
 
+New worker threads may use the app-owned `pseudoharness.workspace` tool during execution to open a credential-free Browser URL, show or inspect the active task's repository/PR, or dock/undock its workspace. The handler verifies that the request belongs to the current task, pass, worker thread, and execution stage. It returns minimal status only; website content, browser cookies, and credentials are never provided. The tool cannot push or create a pull request. Those writes remain explicit user actions in the GitHub workspace or ordinary worker commands subject to the task's Codex sandbox, approval, network, and write-root rules. A worker thread created before this tool was introduced retains its prior app-server tool catalog.
+
 When direct or simple Luna execution discovers that the task exceeds its route, it returns a structured escalation. Preserve completed actions and evidence when escalating to a hard task so already completed side effects are not repeated.
 
 ## Invocation and wake policy

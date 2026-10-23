@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { AppServer, approvalResponse, assertAgentIsolationConfig, assertInstructionIsolation, appAgentBaseInstructions, buildOrchestratorDeveloperInstructions, makeThreadParams, makeThreadResumeParams, makeTurnParams } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
+import { authorizesWorkerWorkspaceTool, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from '../server/workspace-tools.js';
 
 describe('Codex approval and turn configuration',()=>{
   const verifiedIsolationConfig={config:{include_permissions_instructions:false,include_apps_instructions:false,include_collaboration_mode_instructions:false,include_environment_context:false,project_doc_max_bytes:0,project_doc_fallback_filenames:[],experimental_compact_prompt_file:'/isolated/home/compaction_prompt.md',skills:{include_instructions:false,bundled:{enabled:false}},memories:{use_memories:false,dedicated_tools:false},features:{apps:false,hooks:false,plugins:false,skill_search:false,memories:false,multi_agent:false,external_agent_memory_import:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false}}};
@@ -27,6 +28,22 @@ describe('Codex approval and turn configuration',()=>{
     expect(orchestrator.baseInstructions).toBe(appAgentBaseInstructions('D:/repo'));
     expect(makeThreadResumeParams('thread-1','on-request','orchestrator','D:/repo','policy')).toMatchObject({threadId:'thread-1',excludeTurns:true,config:orchestrator.config,baseInstructions:appAgentBaseInstructions('D:/repo'),developerInstructions:orchestrator.developerInstructions});
     expect(orchestrator.developerInstructions).toContain('policy');
+  });
+  it('registers only the scoped workspace tool on worker threads and rejects stale or pre-execution calls',()=>{
+    const params=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request',dynamicTools:workerWorkspaceTool});
+    expect(params.dynamicTools).toEqual(workerWorkspaceTool);
+    expect(workerWorkspaceTool[0].inputSchema).toMatchObject({properties:{action:{enum:expect.not.arrayContaining(['push','create_pr'])}}});
+    expect(makeThreadParams({role:'router',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request',dynamicTools:workerWorkspaceTool}).dynamicTools).toEqual([]);
+    const task:any={id:'task',currentPassId:'pass',phase:'worker_running',workerStage:'execute',workerThreadId:'worker-thread'};const pass:any={id:'pass',workerStage:'execute'};const target={taskId:'task',passId:'pass'};
+    expect(authorizesWorkerWorkspaceTool(task,pass,target,'worker-thread')).toBe(true);
+    expect(authorizesWorkerWorkspaceTool({...task,workerStage:'context_compose'},pass,target,'worker-thread')).toBe(false);
+    expect(authorizesWorkerWorkspaceTool({...task,currentPassId:'corrected-pass'},pass,target,'worker-thread')).toBe(false);
+    expect(authorizesWorkerWorkspaceTool(task,pass,target,'another-thread')).toBe(false);
+    expect(authorizesWorkerWorkspaceTool(task,pass,{...target,taskId:'other-task'},'worker-thread')).toBe(false);
+    expect(normalizeAgentWorkspaceUrl('https://github.com/org/repo')).toBe('https://github.com/org/repo');
+    expect(()=>normalizeAgentWorkspaceUrl('https://github.com/org/repo?access_token=secret')).toThrow('authentication parameters');
+    expect(()=>normalizeAgentWorkspaceUrl('https://user:password@example.com')).toThrow('credentials');
+    expect(workspaceToolRequiresDesktop('open_browser')).toBe(true);expect(workspaceToolRequiresDesktop('inspect_github')).toBe(false);
   });
   it('isolates the router with a classification-only thread and assigns the Fast tier only to its low-effort turn',()=>{
     const router=makeThreadParams({role:'router',root:'/tmp/project',model:'gpt-6-luna',effort:'low',approvalPolicy:'on-request'});
