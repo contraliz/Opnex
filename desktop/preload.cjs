@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('pseudoharnessDesktop',Object.freeze({
     undock:id=>ipcRenderer.invoke('pseudoharness:browser-undock',id),
     close:id=>ipcRenderer.invoke('pseudoharness:browser-close',id),
     navigate:(id,action)=>ipcRenderer.invoke('pseudoharness:browser-navigate',{id,action}),
+    setCommenting:(id,enabled)=>ipcRenderer.invoke('pseudoharness:browser-commenting',{id,enabled}),
     setBounds:bounds=>ipcRenderer.invoke('pseudoharness:browser-bounds',bounds),
     hide:()=>ipcRenderer.invoke('pseudoharness:browser-hide'),
     clearData:()=>ipcRenderer.invoke('pseudoharness:browser-clear-data'),
