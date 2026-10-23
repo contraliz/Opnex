@@ -84,7 +84,7 @@ function ConversationMessage({message:m}:{message:Message}){
 }
 
 function SessionIdRow({role,threadId}:{role:'Router'|'Direct'|'Simple'|'Orchestrator'|'Worker';threadId?:string}){
-  return <div className="session-id"><span>{role}</span><code>{threadId||'Not started'}</code>{threadId&&<a className="session-open-link" href={`codex://threads/${encodeURIComponent(threadId)}`} aria-label={`Open ${role} session in Codex`}>Open in Codex <ExternalLink size={12}/></a>}</div>;
+  return <div className="session-id"><span>{role}</span><code>{threadId||'Not started'}</code>{threadId&&role!=='Router'&&<a className="session-open-link" href={`codex://threads/${encodeURIComponent(threadId)}`} aria-label={`Open ${role} session in Codex`}>Open in Codex <ExternalLink size={12}/></a>}</div>;
 }
 
 function ReasoningResponse({turn,summaries,rawContent,live,fallbackTime}:{turn:NonNullable<TaskPass['reasoningTurns']>[number];summaries:NonNullable<TaskPass['reasoningSummaries']>;rawContent:NonNullable<TaskPass['reasoningRawContent']>;live:boolean;fallbackTime:string}){

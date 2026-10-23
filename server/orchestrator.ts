@@ -11,9 +11,16 @@ import { awaitCurrentPassOperation, buildRouterPrompt, dispatchRouteOutput, simp
 import { isAgentMemEnabled, scopedAgentMemContext } from './optional-agentmem.js';
 import { applyAllowanceDelta, applyThreadEstimatedUsage, applyThreadTokenUsage, beginThreadUsageRead, markThreadEstimatedUsageUnavailable, markThreadTokenUsageUnavailable, normalizeAllowanceSnapshot, type AllowanceSnapshot } from './usage.js';
 import path from 'node:path';
+import { lstat, mkdir } from 'node:fs/promises';
+import { stateDirectory } from './paths.js';
 
-const codex=new AppServer(); const agentmem=new AgentMem();
+const codex=new AppServer();
+const routerHome=path.join(stateDirectory(),'router-codex-home');
+const routerCwd=path.join(routerHome,'workspace');
+const routerCodex=new AppServer({codexHome:routerHome,cwd:routerCwd});
+const agentmem=new AgentMem();
 let catalog:Model[]=[]; let codexState='connecting'; let codexError='';
+let routerIsolationError:string|undefined;
 const deferredCompletions=new Map<string,any[]>();
 const attachedThreads=new Set<string>();
 const usageReadSequence=new Map<string,number>();
@@ -23,15 +30,32 @@ const effortList=(m:Model)=>((m as any).supportedReasoningEfforts||[]).map((x:an
 const serviceTierList=(m:Model)=>Array.isArray((m as any).serviceTiers)?(m as any).serviceTiers.map((x:any)=>x.id):[];
 function roleThreadId(task:Task,role:WorkflowRole){return task[`${role}ThreadId` as keyof Task] as string|undefined;}
 function roleForThread(task:Task,threadId:string):WorkflowRole|undefined{return (['router','direct','simple','orchestrator','worker'] as const).find(role=>roleThreadId(task,role)===threadId);}
+function appServerForRole(role:WorkflowRole){return role==='router'?routerCodex:codex;}
 function routedPassIsCurrent(taskId:string,passId:string){const task=getTask(taskId);return !!task&&task.phase!=='cancelled'&&task.currentPassId===passId;}
 export function runtimeStatus(){return {codex:{state:codexState,error:codexError,models:catalog.map(m=>({id:m.id,displayName:m.displayName,efforts:effortList(m),serviceTiers:serviceTierList(m)})),workerAvailable:catalog.some(m=>m.id==='gpt-6-luna'&&effortList(m).includes('high'))},agentmem:agentmem.status};}
 export async function initialize(){
-  codex.on('connected',()=>{codexState='connected';codexError=''; void refreshModels();});
-  codex.on('disconnected',(e:string)=>{codexState='disconnected';codexError=safeError(e); void mutate(s=>s.tasks.forEach(t=>{if(['routing','direct_running','simple_running','worker_running','planning','reviewing'].includes(t.phase)){t.phase='needs_attention';t.error='Codex app-server disconnected. Inspect the existing thread before resuming.';}}));});
-  codex.on('serverRequest',(id:string|number,method:string,params:any)=>{void onServerRequest(id,method,params);});
-  codex.on('notification',(method:string,params:any)=>{if(method==='turn/completed') void onTurnCompleted(params); else if(method==='turn/started') void onTurnStarted(params); else if(method==='thread/tokenUsage/updated') void onThreadTokenUsageUpdated(params); else if(method==='item/agentMessage/delta') void onProgress(params); else if(method==='item/reasoning/summaryTextDelta'||method==='item/reasoning/summaryPartAdded'||method==='item/reasoning/textDelta'||method==='item/completed'||method==='model/rerouted') void onReasoningSummary(method,params); if(method==='item/started'||method==='item/completed') void onProgress(params);});
+  await ensureRouterHome();
+  const bindAppServer=(client:AppServer,isolatedRouter=false)=>{
+    client.on('connected',()=>{if(!isolatedRouter){codexState='connected';codexError='';void refreshModels();}});
+    client.on('disconnected',(e:string)=>{if(!isolatedRouter){codexState='disconnected';codexError=safeError(e);}if(isolatedRouter)for(const task of getState().tasks)if(task.routerThreadId)attachedThreads.delete(task.routerThreadId);void mutate(s=>s.tasks.forEach(t=>{const phases=isolatedRouter?['routing']:['direct_running','simple_running','worker_running','planning','reviewing'];if(phases.includes(t.phase)){t.phase='needs_attention';t.error=isolatedRouter?'Router isolation app-server disconnected. No unisolated routing fallback was attempted.':'Codex app-server disconnected. Inspect the existing thread before resuming.';}}));});
+    client.on('serverRequest',(id:string|number,method:string,params:any)=>{void onServerRequest(id,method,params,client);});
+    client.on('notification',(method:string,params:any)=>{if(method==='turn/completed') void onTurnCompleted(params); else if(method==='turn/started') void onTurnStarted(params); else if(method==='thread/tokenUsage/updated') void onThreadTokenUsageUpdated(params); else if(method==='item/agentMessage/delta') void onProgress(params); else if(method==='item/reasoning/summaryTextDelta'||method==='item/reasoning/summaryPartAdded'||method==='item/reasoning/textDelta'||method==='item/completed'||method==='model/rerouted') void onReasoningSummary(method,params); if(method==='item/started'||method==='item/completed') void onProgress(params);});
+  };
+  bindAppServer(codex);bindAppServer(routerCodex,true);
   void codex.connect().catch(e=>{codexState='disconnected';codexError=safeError(e);});
   await refreshAgentMem();
+}
+async function ensureRouterHome(){
+  try{
+    await verifyIsolationDirectory(routerHome,['AGENTS.override.md','AGENTS.md','AGENTS.local.md','config.toml','managed_config.toml','requirements.toml']);
+    await mkdir(routerCwd,{recursive:true,mode:0o700});
+    await verifyIsolationDirectory(routerCwd,['AGENTS.override.md','AGENTS.md','AGENTS.local.md','CLAUDE.md','.codex']);
+    routerIsolationError=undefined;
+  }catch{routerIsolationError='The isolated router home is unavailable or unsafe. Routing is disabled until it can be inspected.';}
+}
+async function verifyIsolationDirectory(directory:string,blockedNames:string[]){
+  await mkdir(directory,{recursive:true,mode:0o700});const stat=await lstat(directory);if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error();
+  for(const name of blockedNames){try{await lstat(path.join(directory,name));throw new Error();}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
 }
 async function refreshModels(){try{catalog=await codex.models();codexState='connected';codexError='';}catch(e){codexError=safeError(e);}}
 async function refreshAgentMem(){const s=getState();if(!s.settings.projectRoot){agentmem.status={connected:false,projectVerified:false,detail:'Choose a project root in Settings.'};return;}if(!s.settings.agentmemProjectId){agentmem.status={connected:false,projectVerified:false,detail:'Disabled · no AgentMem project selected'};return;}try{await agentmem.connect(s.settings.agentmemProjectId,s.settings.projectRoot);}catch{}}
@@ -51,12 +75,14 @@ function stagePrompt(task:Task,role:'router'|'direct'|'simple',context=''){
 }
 async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continuation=false){
   if(role==='router')requireRouterModel();else requireModel('gpt-6-luna',stageConfig[role].effort);
+  const client=role==='router'?routerCodex:codex;
+  if(role==='router'){if(routerIsolationError)throw new Error(routerIsolationError);await routerCodex.useExternalChatGPTAuth(await codex.exportChatGPTAuthTokens());}
   const pass=currentPass(task);if(!pass)throw new Error('The active pass is missing.');
   const modelId='gpt-6-luna',effort=stageConfig[role].effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
   const approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;
   let threadId=task[threadKey];
-  if(!threadId){const started=await awaitCurrentPassOperation(()=>codex.startThread(role,task.userRoot,modelId,effort,approvalPolicy),()=>routedPassIsCurrent(task.id,pass.id));if(!started)return;threadId=started;task[threadKey]=threadId;}
-  else if(!attachedThreads.has(threadId)){const resumed=await awaitCurrentPassOperation(()=>codex.resumeThread(threadId!,approvalPolicy),()=>routedPassIsCurrent(task.id,pass.id));if(!resumed)return;}
+  if(!threadId){const started=await awaitCurrentPassOperation(()=>client.startThread(role,role==='router'?routerCwd:task.userRoot,modelId,effort,approvalPolicy),()=>routedPassIsCurrent(task.id,pass.id));if(!started)return;threadId=started;task[threadKey]=threadId;}
+  else if(!attachedThreads.has(threadId)){const resumed=await awaitCurrentPassOperation(()=>client.resumeThread(threadId!,approvalPolicy,role),()=>routedPassIsCurrent(task.id,pass.id));if(!resumed)return;}
   attachedThreads.add(threadId);
   task.phase=stageConfig[role].phase;task.activeRole=role;task.activeModelId=modelId;task.activeEffort=effort;task.activeTurnId=undefined;task.error=undefined;task.allowDirectResponse=false;
   await mutate(s=>{const live=s.tasks.find(x=>x.id===task.id);if(!live||live.phase==='cancelled'||live.currentPassId!==pass.id)return;Object.assign(live,task);});
@@ -68,7 +94,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const finalPrompt=continuation?`${prompt}\n\nThis is an update to the same active task. Preserve relevant context and completed actions from this thread. Re-check current state and continue only what remains; do not replay completed side effects.`:prompt;
   const root=task.userRoot,writeRoots=role==='simple'?[task.userRoot]:[];
   const serviceTier=role==='router'?'priority':undefined;
-  const response=await awaitCurrentPassOperation(()=>codex.startTurn(threadId!,finalPrompt,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await codex.interrupt(threadId!,turnId);}catch{}});
+  const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,finalPrompt,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
   if(!response)return;
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.activeTurnId=id;t.activeRole=role;});
@@ -152,7 +178,7 @@ async function refreshThreadUsage(taskId:string,passId:string,role:WorkflowRole,
   const key=`${taskId}:${passId}:${threadId}`;const sequence=(usageReadSequence.get(key)||0)+1;usageReadSequence.set(key,sequence);
   await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass)beginThreadUsageRead(pass,role,threadId);});
   try{
-    const threadUsage=await codex.threadUsage(threadId);
+    const threadUsage=await appServerForRole(role).threadUsage(threadId);
     await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(!pass||usageReadSequence.get(key)!==sequence)return;if(!threadUsage||!applyThreadEstimatedUsage(pass,role,threadId,threadUsage))markThreadEstimatedUsageUnavailable(pass,role,threadId);});
   }catch{
     await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass&&usageReadSequence.get(key)===sequence)markThreadEstimatedUsageUnavailable(pass,role,threadId);});
@@ -302,13 +328,17 @@ function structuredFailure(error:unknown,role:WorkflowRole){
   return safeError(error);
 }
 
-async function onServerRequest(id:string|number,method:string,params:any){
+async function onServerRequest(id:string|number,method:string,params:any,client:AppServer=codex){
+  if(client===routerCodex&&method==='account/chatgptAuthTokens/refresh'){
+    try{const tokens=await codex.refreshChatGPTAuthTokens(typeof params?.previousAccountId==='string'?params.previousAccountId:null);client.respondServerRequest(id,tokens);}catch{try{client.respondServerError(id,-32000,'The signed-in session could not refresh the isolated router credential.');}catch{}}
+    return;
+  }
   const threadId=typeof params?.threadId==='string'?params.threadId:'';
   const task=getState().tasks.find(x=>isCurrentPassThread(x,threadId)&&['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(x.phase));
   const supported=['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval'].includes(method);
   const role=task?roleForThread(task,threadId):undefined;
   if(!task||!supported||role==='router'||role==='direct'){
-    try{codex.respondServerError(id,-32601,'Unsupported or stale approval request; no permission was granted.');}catch{}
+    try{client.respondServerError(id,-32601,'Unsupported or stale approval request; no permission was granted.');}catch{}
     if(task)await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;t.phase='needs_attention';t.error=role==='router'||role==='direct'?'The routing-only or read-only direct-answer stage requested a tool approval. It was rejected; inspect the task before continuing.':'Codex requested an approval type this UI cannot handle. The request was rejected; inspect the thread before continuing.';addMessage(t,'system',t.error);});
     return;
   }
@@ -327,7 +357,7 @@ export async function resolveApproval(taskId:string,requestId:string|number,deci
   const task=getTask(taskId);const approval=task?.approvalRequests?.find(x=>String(x.requestId)===String(requestId));
   if(!task||!approval)throw new Error('This approval is no longer pending. Refresh the task and inspect its status.');
   if(approval.availableDecisions?.length&&!approval.availableDecisions.includes(decision))throw new Error('Codex does not allow that decision for this request.');
-  codex.respondServerRequest(approval.requestId,approvalResponse(approval.method,(approval as any).permissionRequest,decision));
+  appServerForRole(roleForThread(task,approval.threadId)||'worker').respondServerRequest(approval.requestId,approvalResponse(approval.method,(approval as any).permissionRequest,decision));
   await mutate(s=>{const t=s.tasks.find(x=>x.id===taskId)!;t.approvalRequests=(t.approvalRequests||[]).filter(x=>String(x.requestId)!==String(requestId));addMessage(t,'system',decision==='accept'?'Approved the pending Codex request for this turn.':decision==='decline'?'Declined the pending Codex request.':'Cancelled the pending Codex request.');});
   return getTask(taskId);
 }
@@ -372,7 +402,7 @@ export async function retryAgentMemCompletion(taskId:string,passId:string){
 export async function submitTask(message:string,existingTaskId?:string){
   const state=getState(); if(!state.settings.projectRoot)throw new Error('Set a project root in Settings before starting a task.');if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
   if(!shouldWakeOrchestrator('explicit_user_input'))throw new Error('Orchestrator wake policy rejected explicit input.');
-  if(existingTaskId){const t=getTask(existingTaskId);if(!t)throw new Error('Task not found.'); if(['routing','direct_running','simple_running','planning','reviewing','worker_running'].includes(t.phase)){await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);const p=currentPass(x);if(p){p.userInputs.push(message);p.userMessageIds.push(m.id);}x.pendingRevision=true;});const row=getTask(t.id)!;const thread=row.activeRole?roleThreadId(row,row.activeRole):undefined;if(row.activeRole&&row.activeTurnId&&thread){try{await codex.interrupt(thread,row.activeTurnId);}catch{}}return row;}
+  if(existingTaskId){const t=getTask(existingTaskId);if(!t)throw new Error('Task not found.'); if(['routing','direct_running','simple_running','planning','reviewing','worker_running'].includes(t.phase)){await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);const p=currentPass(x);if(p){p.userInputs.push(message);p.userMessageIds.push(m.id);}x.pendingRevision=true;});const row=getTask(t.id)!;const thread=row.activeRole?roleThreadId(row,row.activeRole):undefined;if(row.activeRole&&row.activeTurnId&&thread){try{await appServerForRole(row.activeRole).interrupt(thread,row.activeTurnId);}catch{}}return row;}
     await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);beginPass(x,message,m.id,state.settings.approvalPolicy);s.activeTaskId=x.id;});
     const row=getTask(t.id)!;const passId=currentPass(row)?.id;
     await startRoutingSafely(()=>beginRouting(row),async e=>{await mutate(s=>{const x=s.tasks.find(a=>a.id===row.id);if(!x||x.phase==='cancelled'||x.currentPassId!==passId)return;x.phase='needs_attention';x.error=`Routing could not start: ${safeError(e)}`;addMessage(x,'system',x.error);});});
@@ -390,7 +420,7 @@ export async function submitEscalationDecision(taskId:string,message:string){
   const fresh=getTask(taskId)!;const payload=`Resolve only this worker's explicit consequential decision using the human decision below. Then return a structured disposition: correction assignment (and correction count must remain at most one) or blocked/incomplete outcome.\n\nOriginal assignment: ${JSON.stringify(fresh.assignment)}\nEscalation: ${JSON.stringify(fresh.escalation)}\nHuman decision: ${message}`;
   await startOrchestrator(fresh,payload,'review');return getTask(taskId)!;
 }
-export async function cancelTask(taskId:string){const task=getTask(taskId);if(!task)throw new Error('Task not found.');const role=task.activeRole,turn=task.activeTurnId,thread=role?roleThreadId(task,role):undefined;const passId=currentPass(task)?.id;const allowanceStart=thread?allowanceBaselines.get(thread)||null:null;if(thread)allowanceBaselines.delete(thread);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.phase='cancelled';x.activeRole=undefined;x.activeTurnId=undefined;x.error=undefined;addMessage(x,'system','Task cancelled. Late Codex events will be ignored.');});if(role&&turn&&thread)try{await codex.interrupt(thread,turn);}catch{}if(role&&thread&&passId){const allowanceEnd=await readAllowanceSnapshot();await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass){markThreadTokenUsageUnavailable(pass,role,thread);applyAllowanceDelta(pass,role,thread,allowanceStart,allowanceEnd);}});void refreshThreadUsage(taskId,passId,role,thread);}if(task.agentmemTaskId&&task.agentmemLease)try{await agentmem.connect(task.agentmemProjectId,task.userRoot);await agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId,task.agentmemLease);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus='released';x.agentmemRecordError=undefined;x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(e)}`;});}return getTask(taskId)!;}
+export async function cancelTask(taskId:string){const task=getTask(taskId);if(!task)throw new Error('Task not found.');const role=task.activeRole,turn=task.activeTurnId,thread=role?roleThreadId(task,role):undefined;const passId=currentPass(task)?.id;const allowanceStart=thread?allowanceBaselines.get(thread)||null:null;if(thread)allowanceBaselines.delete(thread);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.phase='cancelled';x.activeRole=undefined;x.activeTurnId=undefined;x.error=undefined;addMessage(x,'system','Task cancelled. Late Codex events will be ignored.');});if(role&&turn&&thread)try{await appServerForRole(role).interrupt(thread,turn);}catch{}if(role&&thread&&passId){const allowanceEnd=await readAllowanceSnapshot();await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass){markThreadTokenUsageUnavailable(pass,role,thread);applyAllowanceDelta(pass,role,thread,allowanceStart,allowanceEnd);}});void refreshThreadUsage(taskId,passId,role,thread);}if(task.agentmemTaskId&&task.agentmemLease)try{await agentmem.connect(task.agentmemProjectId,task.userRoot);await agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId,task.agentmemLease);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus='released';x.agentmemRecordError=undefined;x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(e)}`;});}return getTask(taskId)!;}
 export async function saveSettings(input:any){
   const {settingsSchema}=await import('./contracts.js');const {resolveProjectDirectory}=await import('./directories.js');const v=settingsSchema.parse(input);const resolved=await resolveProjectDirectory(v.projectRoot);
   const projectId=v.agentmemProjectId.trim();if(projectId)await agentmem.connect(projectId,resolved);else{agentmem.close();agentmem.status={connected:false,projectVerified:false,detail:'Disabled · no AgentMem project selected'};}
@@ -399,4 +429,4 @@ export async function saveSettings(input:any){
 export function getRuntimeStatus(){return runtimeStatus();}
 export async function listAgentMemProjects(){return agentmem.listProjects();}
 export async function refreshConnections(){try{await codex.connect();await refreshModels();}catch(e){codexState='disconnected';codexError=safeError(e);}const s=getState();if(s.settings.agentmemProjectId&&s.settings.projectRoot)try{await agentmem.connect(s.settings.agentmemProjectId,s.settings.projectRoot);}catch{}else agentmem.status={connected:false,projectVerified:false,detail:s.settings.projectRoot?'Disabled · no AgentMem project selected':'Choose a project root in Settings.'};return runtimeStatus();}
-export function shutdown(){codex.close();agentmem.close();}
+export function shutdown(){codex.close();routerCodex.close();agentmem.close();}
