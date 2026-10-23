@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { EmbeddedWorkspace } from '../src/ui/EmbeddedWorkspace';
 
 const bridge={
@@ -23,23 +22,16 @@ beforeEach(()=>{
 afterEach(()=>{cleanup();delete (window as any).pseudoharnessDesktop;});
 
 describe('embedded workspace',()=>{
-  it('moves an existing native tab into the side pane through an accessible control',async()=>{
-    render(<EmbeddedWorkspace mode="browser" task={null} placement="full" docked={false} onDock={()=>{}} onUndock={()=>{}}/>);
-    const side=await screen.findByRole('button',{name:'Open Example in side pane'});
-    fireEvent.click(side);
-    await waitFor(()=>expect(bridge.openSide).toHaveBeenCalledWith('one'));
-    expect(await screen.findByLabelText('Example')).toBeTruthy();
-    expect(screen.getAllByRole('button',{name:'Move side tab to main pane'}).length).toBe(1);
-  });
-
-  it('opens an existing tab beside the current page when dragged into the side drop zone',async()=>{
-    render(<EmbeddedWorkspace mode="browser" task={null} placement="full" docked={false} onDock={()=>{}} onUndock={()=>{}}/>);
-    const dataTransfer={setData:vi.fn(),getData:vi.fn(()=> 'one'),effectAllowed:''};
+  it('moves a native browser tab into the side pane by dragging it to the workspace edge',async()=>{
+    render(<EmbeddedWorkspace mode="browser" task={null} placement="full" docked={false}/>);
+    const dataTransfer={setData:vi.fn(),getData:vi.fn(()=> 'one'),types:['application/x-pseudoharness-browser-tab'],effectAllowed:''};
     const tab=await screen.findByRole('presentation');
     fireEvent.dragStart(tab,{dataTransfer});
-    fireEvent.drop(document.querySelector('.native-side-drop')!,{dataTransfer});
+    const main=document.querySelector('.native-browser-host')!;
+    fireEvent.dragOver(main,{dataTransfer,clientX:100});
+    fireEvent.drop(main,{dataTransfer,clientX:100});
     await waitFor(()=>expect(bridge.openSide).toHaveBeenCalledWith('one'));
-    expect(screen.getAllByRole('button',{name:'Move side tab to main pane'}).length).toBe(1);
+    expect(screen.queryByRole('button',{name:/side pane|main pane|Dock beside chat/i})).toBeNull();
   });
 
   it('shows saved task context and performs push only after an explicit user action',async()=>{
@@ -48,7 +40,7 @@ describe('embedded workspace',()=>{
       if(url==='/api/tasks/task-42/github/push')return {result:{pushed:true,message:'Pushed committed changes on feature to origin.'},workspace,link:task.githubLink} as any;
       return {} as any;
     });
-    render(<EmbeddedWorkspace mode="github" task={task} placement="full" docked={false} onDock={()=>{}} onUndock={()=>{}}/>);
+    render(<EmbeddedWorkspace mode="github" task={task} placement="full" docked={false}/>);
     expect(await screen.findByText('owner/repo')).toBeTruthy();
     expect((screen.getByRole('textbox',{name:'Head branch'}) as HTMLInputElement).value).toBe('feature');
     fireEvent.click(screen.getByRole('button',{name:'Push committed changes'}));
@@ -56,16 +48,9 @@ describe('embedded workspace',()=>{
     expect(await screen.findByText('Pushed committed changes on feature to origin.')).toBeTruthy();
   });
 
-  it('docks the same native tab beside the task and undocks that tab back to the full workspace',async()=>{
-    const onUndock=vi.fn();const {container,rerender}=render(<EmbeddedWorkspace mode="github" task={task} placement="side" docked onDock={()=>{}} onUndock={onUndock}/>);
-    await waitFor(()=>expect(bridge.openChat).toHaveBeenCalledWith('one'));
-    expect(container.querySelector('.chat-docked-workspace')?.classList.contains('is-hidden')).toBe(false);
-    fireEvent.click(screen.getByRole('button',{name:'Open full workspace'}));rerender(<EmbeddedWorkspace mode="github" task={task} placement="full" docked={false} onDock={()=>{}} onUndock={onUndock}/>);
-    await waitFor(()=>expect(bridge.undock).toHaveBeenCalledWith('one'));
-    expect(onUndock).toHaveBeenCalledTimes(1);
-  });
-  it('offers a keyboard-operable workspace dock control',async()=>{
-    const user=userEvent.setup();const onDock=vi.fn();render(<EmbeddedWorkspace mode="browser" task={null} placement="full" docked={false} onDock={onDock} onUndock={()=>{}}/>);
-    const button=await screen.findByRole('button',{name:'Dock beside chat'});button.focus();await user.keyboard('{Enter}');expect(onDock).toHaveBeenCalledWith('browser');
+  it('does not expose a separate docking button',async()=>{
+    render(<EmbeddedWorkspace mode="browser" task={null} placement="full" docked={false}/>);
+    expect(await screen.findByRole('tab',{name:/Example/})).toBeTruthy();
+    expect(screen.queryByRole('button',{name:/dock|side pane|main pane|open full workspace/i})).toBeNull();
   });
 });

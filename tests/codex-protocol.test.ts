@@ -60,6 +60,11 @@ describe('Codex approval and turn configuration',()=>{
     expect(simple).not.toHaveProperty('serviceTierForTurn');expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:false});
     for(const role of ['router','direct','simple','orchestrator','worker'] as const){const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'});expect(thread.config).toMatchObject({project_doc_max_bytes:0,project_doc_fallback_filenames:[],projects:{'/tmp/project':{trust_level:'untrusted'}}});expect(thread.baseInstructions).toBe(appAgentBaseInstructions('/tmp/project'));expect(thread.baseInstructions).toContain(`Host platform: ${process.platform}`);}
   });
+  it('adds supplied inline image inputs after the role prompt',()=>{
+    const image={type:'image',image_url:'data:image/png;base64,iVBORw0KGgo='};
+    const turn=makeTurnParams({threadId:'router',input:'Describe the image',role:'router',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'},inputItems:[image]});
+    expect(turn.input).toEqual([{type:'text',text:'Describe the image'},image]);
+  });
   it('fails closed unless the app-server explicitly reports no instruction sources for agent threads',()=>{
     expect(()=>assertInstructionIsolation({instructionSources:[]})).not.toThrow();
     expect(()=>assertInstructionIsolation({instructionSources:['/user/.codex/AGENTS.md']})).toThrow('Pseudoharness instruction isolation could not be verified');
