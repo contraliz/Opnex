@@ -150,7 +150,8 @@ export function workerOutcomeFailureSummary(error:unknown){
   return [...new Set(messages)].join('; ');
 }
 
-export const userTaskSchema = z.object({ message: text, taskId: z.string().uuid().optional() }).strict();
+const attachmentPayload=z.object({name:z.string().min(1).max(160),type:z.string().max(100),size:z.number().int().positive().max(5*1024*1024),data:z.string().min(1).max(Math.ceil(5*1024*1024*4/3)+8)}).strict();
+export const userTaskSchema = z.object({ message:z.string().trim().max(12000).default(''), attachments:z.array(attachmentPayload).max(5).default([]), taskId:z.string().uuid().optional() }).strict().refine(value=>!!value.message||value.attachments.length>0,{message:'Add a message or attach at least one supported file.'});
 export const sessionTitleSchema = z.object({ title: z.string().trim().min(1, 'Session name cannot be empty.').max(120, 'Session name must be 120 characters or fewer.') }).strict();
 export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(), z.number()]), decision: z.enum(['accept','decline','cancel']) }).strict();
 export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never' | 'full-access';

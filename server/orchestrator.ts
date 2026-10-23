@@ -11,6 +11,7 @@ import { awaitCurrentPassOperation, buildRouterPrompt, dispatchRouteOutput, simp
 import { isAgentMemEnabled, scopedAgentMemContext } from './optional-agentmem.js';
 import { applyAllowanceDelta, applyThreadEstimatedUsage, applyThreadTokenUsage, beginThreadUsageRead, markThreadEstimatedUsageUnavailable, markThreadTokenUsageUnavailable, normalizeAllowanceSnapshot, type AllowanceSnapshot } from './usage.js';
 import path from 'node:path';
+import { attachmentUserInput, validateAttachments } from './attachments.js';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { stateDirectory } from './paths.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -134,7 +135,8 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const finalPrompt=continuation?`${prompt}\n\nThis is an update to the same active task. Preserve relevant context and completed actions from this thread. Re-check current state and continue only what remains; do not replay completed side effects.`:prompt;
   const root=task.userRoot,writeRoots=role==='simple'?simpleWriteRoots!:[];
   const serviceTier=role==='router'?'priority':undefined;
-  const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,finalPrompt,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
+  const carried=attachmentUserInput(pass.attachments||[]);
+  const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,`${finalPrompt}${carried.text}`,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier,carried.items),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
   if(!response)return;
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.activeTurnId=id;t.activeRole=role;});
@@ -165,9 +167,10 @@ async function startOrchestrator(task:Task,payload:string,action:'assignment'|'r
   task.phase=action==='assignment'?'planning':'reviewing'; task.activeRole='orchestrator'; task.activeModelId=modelId;task.activeEffort=state.settings.orchestratorEffort;task.activeTurnId=undefined; task.error=undefined;task.allowDirectResponse=action==='assignment'&&allowDirectResponse;
   await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
   allowanceBaselines.set(task.orchestratorThreadId!,await readAllowanceSnapshot());
+  const carried=attachmentUserInput(pass?.attachments||[]);const enrichedInput=`${input}${carried.text}`;
   const response=action==='review'
-    ? await agentCodex.reviewTurn(task.orchestratorThreadId,input,modelId,state.settings.orchestratorEffort,approvalPolicy)
-    : await agentCodex.startTurn(task.orchestratorThreadId,input,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],approvalPolicy,allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema);
+    ? await agentCodex.reviewTurn(task.orchestratorThreadId,enrichedInput,modelId,state.settings.orchestratorEffort,approvalPolicy,carried.items)
+    : await agentCodex.startTurn(task.orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],approvalPolicy,allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,undefined,carried.items);
   const live=getTask(task.id); if(live&&live.phase==='cancelled')return;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;t.activeTurnId=response.turn?.id||response.turnId||undefined; t.activeRole='orchestrator';if(t.activeTurnId)beginReasoningTurn(t,'orchestrator',task.orchestratorThreadId!,t.activeTurnId,modelId,state.settings.orchestratorEffort);});
   const id=response.turn?.id||response.turnId;if(id) await processDeferred(task.id,id);
@@ -211,7 +214,8 @@ async function startWorkerStage(task:Task,assignment:Assignment,stage:WorkerStag
   if(!workerPassIsCurrent(task.id,passId))return;
   allowanceBaselines.set(task.workerThreadId,await readAllowanceSnapshot());
   if(!workerPassIsCurrent(task.id,passId))return;
-  const response=await agentCodex.startTurn(task.workerThreadId,workerPrompt,'worker','gpt-6-luna','high',task.userRoot,stageWriteRoots,approvalPolicy,outputSchema);
+  const carried=stage==='execute'?attachmentUserInput(pass.attachments||[]):{items:[],text:''};
+  const response=await agentCodex.startTurn(task.workerThreadId,`${workerPrompt}${carried.text}`,'worker','gpt-6-luna','high',task.userRoot,stageWriteRoots,approvalPolicy,outputSchema,undefined,carried.items);
   if(!workerPassIsCurrent(task.id,passId)){const id=response.turn?.id||response.turnId;if(id)try{await agentCodex.interrupt(task.workerThreadId,id);}catch{}return;}
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled')return;t.activeTurnId=id;t.activeRole='worker';if(id)beginReasoningTurn(t,'worker',task.workerThreadId!,id,'gpt-6-luna','high');});
@@ -505,24 +509,26 @@ export async function retryAgentMemCompletion(taskId:string,passId:string){
   return getTask(taskId);
 }
 
-export async function submitTask(message:string,existingTaskId?:string){
+export async function submitTask(message:string,existingTaskId?:string,rawAttachments:unknown=[]){
+  const attachments=validateAttachments(rawAttachments);if(!message.trim()&&!attachments.length)throw new Error('Add a message or attach at least one supported file.');
   const state=getState(); if(!state.settings.projectRoot)throw new Error('Set a project root in Settings before starting a task.');if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
   if(!shouldWakeOrchestrator('explicit_user_input'))throw new Error('Orchestrator wake policy rejected explicit input.');
-  if(existingTaskId){const t=getTask(existingTaskId);if(!t)throw new Error('Task not found.'); if(['routing','direct_running','simple_running','planning','reviewing','worker_running'].includes(t.phase)){await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);const p=currentPass(x);if(p){p.userInputs.push(message);p.userMessageIds.push(m.id);}x.pendingRevision=true;});const row=getTask(t.id)!;const thread=row.activeRole?roleThreadId(row,row.activeRole):undefined;if(row.activeRole&&row.activeTurnId&&thread){try{await appServerForRole(row.activeRole).interrupt(thread,row.activeTurnId);}catch{}}return row;}
-    await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message);beginPass(x,message,m.id,state.settings.approvalPolicy);s.activeTaskId=x.id;});
+  if(existingTaskId){const t=getTask(existingTaskId);if(!t)throw new Error('Task not found.'); if(['routing','direct_running','simple_running','planning','reviewing','worker_running'].includes(t.phase)){await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message,attachments);const p=currentPass(x);if(p){p.userInputs.push(message);p.userMessageIds.push(m.id);p.attachments=[...(p.attachments||[]),...attachments];}x.pendingRevision=true;});const row=getTask(t.id)!;const thread=row.activeRole?roleThreadId(row,row.activeRole):undefined;if(row.activeRole&&row.activeTurnId&&thread){try{await appServerForRole(row.activeRole).interrupt(thread,row.activeTurnId);}catch{}}return row;}
+    await mutate(s=>{const x=s.tasks.find(a=>a.id===t.id)!;x.userMessages.push(message);const m=addMessage(x,'user',message,attachments);beginPass(x,message,m.id,state.settings.approvalPolicy,attachments);s.activeTaskId=x.id;});
     const row=getTask(t.id)!;const passId=currentPass(row)?.id;
     await startRoutingSafely(()=>beginRouting(row),async e=>{await mutate(s=>{const x=s.tasks.find(a=>a.id===row.id);if(!x||x.phase==='cancelled'||x.currentPassId!==passId)return;x.phase='needs_attention';x.error=`Routing could not start: ${safeError(e)}`;addMessage(x,'system',x.error);});});
     return getTask(t.id)!;
   }
-  const created=await (await import('./state.js')).createTask(message,state.settings.projectRoot,state.settings.agentmemProjectId,state.settings.approvalPolicy);
+  const created=await (await import('./state.js')).createTask(message,state.settings.projectRoot,state.settings.agentmemProjectId,state.settings.approvalPolicy,attachments);
   const createdPassId=currentPass(getTask(created.id)!)?.id;
   await startRoutingSafely(()=>beginRouting(getTask(created.id)!),async e=>{await mutate(s=>{const x=s.tasks.find(a=>a.id===created.id);if(!x||x.phase==='cancelled'||x.currentPassId!==createdPassId)return;x.phase='needs_attention';x.error=`Routing could not start: ${safeError(e)}`;addMessage(x,'system',x.error);});});
   return getTask(created.id)!;
 }
-export async function submitEscalationDecision(taskId:string,message:string){
+export async function submitEscalationDecision(taskId:string,message:string,rawAttachments:unknown=[]){
+  const attachments=validateAttachments(rawAttachments);if(!message.trim()&&!attachments.length)throw new Error('Add a message or attach at least one supported file.');
   const task=getTask(taskId);if(!task||task.phase!=='escalated'||!task.escalation)throw new Error('No explicit worker escalation is waiting for a decision.');
   if(!shouldWakeOrchestrator('explicit_worker_escalation'))throw new Error('Orchestrator wake policy rejected explicit escalation.');
-  await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.userMessages.push(message);const m=addMessage(x,'user',message);const p=currentPass(x);if(p){p.userInputs.push(message);p.userMessageIds.push(m.id);}x.phase='reviewing';});
+  await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.userMessages.push(message);const m=addMessage(x,'user',message,attachments);const p=currentPass(x);if(p){p.userInputs.push(message);p.userMessageIds.push(m.id);p.attachments=[...(p.attachments||[]),...attachments];}x.phase='reviewing';});
   const fresh=getTask(taskId)!;const payload=`Resolve only this worker's explicit consequential decision using the human decision below. Then return a structured disposition: correction assignment (and correction count must remain at most one) or blocked/incomplete outcome.\n\nOriginal assignment: ${JSON.stringify(fresh.assignment)}\nEscalation: ${JSON.stringify(fresh.escalation)}\nHuman decision: ${message}`;
   await startOrchestrator(fresh,payload,'review');return getTask(taskId)!;
 }

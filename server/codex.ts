@@ -93,13 +93,13 @@ export class AppServer extends EventEmitter {
   }
   private verifiedAgentThreads=new Set<string>();
   async resumeThread(threadId:string,approvalPolicy:ApprovalPolicy,role:CodexRole,root:string,ownedPolicy?:string){this.assertCanRunAgent();await this.verifyAgentIsolationConfig();const r=await this.request('thread/resume',makeThreadResumeParams(threadId,approvalPolicy,role,root,ownedPolicy));assertInstructionIsolation(r);this.verifiedAgentThreads.add(threadId);return String(r.thread.id);}
-  async startTurn(threadId:string,input:string,role:CodexRole,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',root:string,writeRoots:string[]=[],approvalPolicy:ApprovalPolicy='on-request',schemaOverride?:unknown,serviceTierForTurn?:string) {
+  async startTurn(threadId:string,input:string,role:CodexRole,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',root:string,writeRoots:string[]=[],approvalPolicy:ApprovalPolicy='on-request',schemaOverride?:unknown,serviceTierForTurn?:string,inputItems:Array<Record<string,string>>=[]) {
     this.assertCanRunAgent();this.assertAgentThread(threadId);
     const schema=schemaOverride??(role==='orchestrator'? initialOrchestratorJsonSchema:role==='router'?routeDecisionJsonSchema:role==='direct'?directExecutorJsonSchema:role==='simple'?simpleExecutorJsonSchema:workerOutcomeJsonSchema);
-    const params=makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema,serviceTierForTurn});
+    const params=makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema,serviceTierForTurn,inputItems});
     return this.request('turn/start',params,30000);
   }
-  async reviewTurn(threadId:string,input:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request') {this.assertCanRunAgent();this.assertAgentThread(threadId);return this.request('turn/start',{threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:reviewJsonSchema,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandboxPolicy:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:{type:'readOnly',networkAccess:false}},30000);}
+  async reviewTurn(threadId:string,input:string,model:string,effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra',approvalPolicy:ApprovalPolicy='on-request',inputItems:Array<Record<string,string>>=[]) {this.assertCanRunAgent();this.assertAgentThread(threadId);return this.request('turn/start',{threadId,input:[{type:'text',text:input},...inputItems],model,effort,summary:'auto',outputSchema:reviewJsonSchema,approvalPolicy:runtimeApprovalPolicy(approvalPolicy),sandboxPolicy:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:{type:'readOnly',networkAccess:false}},30000);}
   async interrupt(threadId:string,turnId:string){this.assertCanRunAgent();this.assertAgentThread(threadId);return this.request('turn/interrupt',{threadId,turnId},15000);}
   private assertCanRunAgent(){if(this.options.metadataOnly)throw new Error('This Codex app-server is metadata-only; agent threads and turns run in the isolated Pseudoharness agent runtime.');}
   private assertAgentThread(threadId:string){if(this.options.metadataOnly||!this.verifiedAgentThreads.has(threadId))throw new Error('The isolated agent thread is not verified in this app-server process. No turn or thread operation was sent.');}
@@ -132,10 +132,10 @@ export function assertAgentIsolationConfig(response:any,expectedCompactionPrompt
   if(!valid)throw new Error('The installed Codex runtime does not confirm every required Pseudoharness instruction-isolation setting. Update Codex before starting agent work.');
 }
 
-export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema,serviceTierForTurn}:{threadId:string;input:string;role:CodexRole;model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown;serviceTierForTurn?:string}) {
+export function makeTurnParams({threadId,input,role,model,effort,writeRoots,approvalPolicy,schema,serviceTierForTurn,inputItems=[]}:{threadId:string;input:string;role:CodexRole;model:string;effort:string;writeRoots:string[];approvalPolicy:ApprovalPolicy;schema:unknown;serviceTierForTurn?:string;inputItems?:Array<Record<string,string>>}) {
   const readOnly=role==='router'||role==='direct';
   const sandboxPolicy=readOnly?{type:'readOnly',networkAccess:false}:role==='simple'?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:approvalPolicy==='full-access'}:approvalPolicy==='full-access'?{type:'dangerFullAccess'}:role==='orchestrator'?{type:'readOnly',networkAccess:false}:writeRoots.length?{type:'workspaceWrite',writableRoots:writeRoots,networkAccess:false}:{type:'readOnly',networkAccess:false};
-  return {threadId,input:[{type:'text',text:input}],model,effort,summary:'auto',outputSchema:schema,...(serviceTierForTurn?{serviceTierForTurn}:{}),sandboxPolicy,approvalPolicy:runtimeApprovalPolicy(approvalPolicy)};
+  return {threadId,input:[{type:'text',text:input},...inputItems],model,effort,summary:'auto',outputSchema:schema,...(serviceTierForTurn?{serviceTierForTurn}:{}),sandboxPolicy,approvalPolicy:runtimeApprovalPolicy(approvalPolicy)};
 }
 export const REASONING_THREAD_CONFIG={model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true} as const;
 export function runtimeApprovalPolicy(policy:ApprovalPolicy){return policy==='full-access'?'never':policy;}
