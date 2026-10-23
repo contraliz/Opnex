@@ -17,8 +17,16 @@ describe('per-pass task state',()=>{
     const task=taskFixture();syncCurrentPass(task);const userMessage:Message={id:'user-two',role:'user',text:'Second prompt',createdAt:'2026-10-19T00:01:00Z'};task.messages.push(userMessage);const second=beginPass(task,userMessage.text,userMessage.id);
     expect(userMessage.passId).toBe(second.id);expect(currentPass(task)?.id).toBe(second.id);
     expect(task.passes).toHaveLength(2);expect(task.passes?.[0]).toMatchObject({assignment,receipt,workerThreadId:'worker-one',orchestratorThreadId:'orch-one',phase:'accepted'});
-    expect(second).toMatchObject({index:2,userInput:'Second prompt',phase:'intake',correctionCount:0});expect(second.assignment).toBeUndefined();expect(second.receipt).toBeUndefined();expect(task.orchestratorThreadId).toBeUndefined();expect(task.workerThreadId).toBeUndefined();
+    expect(second).toMatchObject({index:2,userInput:'Second prompt',phase:'intake',agentContextVersion:1,correctionCount:0});expect(second.assignment).toBeUndefined();expect(second.receipt).toBeUndefined();expect(task.orchestratorThreadId).toBeUndefined();expect(task.workerThreadId).toBeUndefined();
     second.orchestratorThreadId='orch-two';task.orchestratorThreadId='orch-two';syncCurrentPass(task);expect(isCurrentPassThread(task,'orch-two')).toBe(true);expect(isCurrentPassThread(task,'orch-one')).toBe(false);
+  });
+  it('preserves old pass records but never resumes their pre-isolation agent threads',()=>{
+    const active=taskFixture();active.phase='worker_running';active.activeRole='worker';active.activeTurnId='old-turn';
+    const migrated=upgradeStoredState({version:2,settings:{},tasks:[active],activeTaskId:active.id}).tasks[0];
+    expect(migrated.phase).toBe('paused_after_restart');expect(migrated.activeRole).toBeUndefined();expect(migrated.error).toContain('pre-isolation');
+    expect(migrated.passes?.[0]).toMatchObject({agentContextVersion:0,workerThreadId:'worker-one',orchestratorThreadId:'orch-one'});
+    const msg:Message={id:'followup',role:'user',text:'Continue with a new pass',createdAt:'2026-10-20T00:00:00Z'};migrated.messages.push(msg);const fresh=beginPass(migrated,msg.text,msg.id);
+    expect(fresh.agentContextVersion).toBe(1);expect(migrated.workerThreadId).toBeUndefined();expect(migrated.orchestratorThreadId).toBeUndefined();expect(migrated.passes?.[0].workerThreadId).toBe('worker-one');
   });
   it('persists the selected approval policy per pass and preserves the historical policy across later passes',()=>{
     const task=taskFixture();task.passes![0].approvalPolicy='on-request';syncCurrentPass(task);

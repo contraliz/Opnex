@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { AppServer, approvalResponse, assertInstructionIsolation, buildOrchestratorDeveloperInstructions, makeThreadParams, makeThreadResumeParams, makeTurnParams } from '../server/codex.js';
+import { AppServer, approvalResponse, assertAgentIsolationConfig, assertInstructionIsolation, appAgentBaseInstructions, buildOrchestratorDeveloperInstructions, makeThreadParams, makeThreadResumeParams, makeTurnParams } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
 
 describe('Codex approval and turn configuration',()=>{
+  const verifiedIsolationConfig={config:{include_permissions_instructions:false,include_apps_instructions:false,include_collaboration_mode_instructions:false,include_environment_context:false,project_doc_max_bytes:0,project_doc_fallback_filenames:[],experimental_compact_prompt_file:'/isolated/home/compaction_prompt.md',skills:{include_instructions:false,bundled:{enabled:false}},memories:{use_memories:false,dedicated_tools:false},features:{apps:false,hooks:false,plugins:false,skill_search:false,memories:false,multi_agent:false,external_agent_memory_import:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false}}};
   it('loads the app-owned delegation policy into orchestrator developer instructions',()=>{
     const instructions=buildOrchestratorDeveloperInstructions('ORCHESTRATOR POLICY COPY');
     expect(instructions).toContain('ORCHESTRATOR POLICY COPY');expect(instructions).toContain('policy-bound orchestration model');
@@ -21,15 +22,16 @@ describe('Codex approval and turn configuration',()=>{
   it('requests the most detailed supported summaries and available provider text for new and resumed role threads',()=>{
     const orchestrator=makeThreadParams({role:'orchestrator',root:'D:/repo',model:'gpt-6-sol',approvalPolicy:'on-request',ownedPolicy:'policy'});
     const worker=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request'});
-    expect(orchestrator.config).toEqual({model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true});
-    expect(worker.config).toEqual(orchestrator.config);
-    expect(makeThreadResumeParams('thread-1')).toEqual({threadId:'thread-1',excludeTurns:true,config:orchestrator.config});
+    expect(orchestrator.config).toMatchObject({model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true,include_permissions_instructions:false,include_apps_instructions:false,include_collaboration_mode_instructions:false,include_environment_context:false,project_doc_max_bytes:0,project_doc_fallback_filenames:[],projects:{'D:/repo':{trust_level:'untrusted'}},memories:{use_memories:false,dedicated_tools:false},features:{apps:false,hooks:false,plugins:false,memories:false,multi_agent:false}});
+    expect(worker.config).toMatchObject(orchestrator.config);
+    expect(orchestrator.baseInstructions).toBe(appAgentBaseInstructions('D:/repo'));
+    expect(makeThreadResumeParams('thread-1','on-request','orchestrator','D:/repo','policy')).toMatchObject({threadId:'thread-1',excludeTurns:true,config:orchestrator.config,baseInstructions:appAgentBaseInstructions('D:/repo'),developerInstructions:orchestrator.developerInstructions});
     expect(orchestrator.developerInstructions).toContain('policy');
   });
   it('isolates the router with a classification-only thread and assigns the Fast tier only to its low-effort turn',()=>{
     const router=makeThreadParams({role:'router',root:'/tmp/project',model:'gpt-6-luna',effort:'low',approvalPolicy:'on-request'});
     expect((router as any).dynamicTools).toEqual([]);
-    expect(router.config).toMatchObject({project_doc_max_bytes:0,project_doc_fallback_filenames:[],web_search:'disabled',apps:{_default:{enabled:false,destructive_enabled:false,open_world_enabled:false}}});
+    expect(router.config).toMatchObject({project_doc_max_bytes:0,project_doc_fallback_filenames:[],projects:{'/tmp/project':{trust_level:'untrusted'}},web_search:'disabled',features:{apps:false,hooks:false,plugins:false,memories:false,multi_agent:false}});
     expect(router.developerInstructions).toContain('classification-only');
     const turn=makeTurnParams({threadId:'router',input:'Classify only',role:'router',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'},serviceTierForTurn:'priority'});
     expect(turn).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:'priority',sandboxPolicy:{type:'readOnly',networkAccess:false}});
@@ -39,25 +41,52 @@ describe('Codex approval and turn configuration',()=>{
     expect(simpleInstructions).toContain('Updating focused tests or docs needed to verify the requested behavior is an ordinary implementation decision');expect(simpleInstructions).toContain('never weaken or rewrite a test merely to hide a failure');
     expect(direct).not.toHaveProperty('serviceTierForTurn');expect(direct.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
     expect(simple).not.toHaveProperty('serviceTierForTurn');expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:false});
-    expect(makeThreadParams({role:'direct',root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'}).config).not.toHaveProperty('project_doc_max_bytes');
-    expect(makeThreadParams({role:'orchestrator',root:'/tmp/project',model:'gpt-6-sol',approvalPolicy:'on-request'}).config).not.toHaveProperty('project_doc_max_bytes');
+    for(const role of ['router','direct','simple','orchestrator','worker'] as const){const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'});expect(thread.config).toMatchObject({project_doc_max_bytes:0,project_doc_fallback_filenames:[],projects:{'/tmp/project':{trust_level:'untrusted'}}});expect(thread.baseInstructions).toBe(appAgentBaseInstructions('/tmp/project'));expect(thread.baseInstructions).toContain(`Host platform: ${process.platform}`);}
   });
-  it('fails closed unless the app-server explicitly reports no instruction sources for router threads',()=>{
+  it('fails closed unless the app-server explicitly reports no instruction sources for agent threads',()=>{
     expect(()=>assertInstructionIsolation({instructionSources:[]})).not.toThrow();
-    expect(()=>assertInstructionIsolation({instructionSources:['/user/.codex/AGENTS.md']})).toThrow('Router instruction isolation could not be verified');
-    expect(()=>assertInstructionIsolation({})).toThrow('Router instruction isolation could not be verified');
-    expect(()=>assertInstructionIsolation({instructionSources:null})).toThrow('Router instruction isolation could not be verified');
+    expect(()=>assertInstructionIsolation({instructionSources:['/user/.codex/AGENTS.md']})).toThrow('Pseudoharness instruction isolation could not be verified');
+    expect(()=>assertInstructionIsolation({})).toThrow('Pseudoharness instruction isolation could not be verified');
+    expect(()=>assertInstructionIsolation({instructionSources:null})).toThrow('Pseudoharness instruction isolation could not be verified');
   });
-  it('requires the isolation acknowledgement on router start and resume, without changing other roles',async()=>{
-    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
-    const request=vi.fn().mockResolvedValueOnce({instructionSources:[],thread:{id:'router-thread'}}).mockResolvedValueOnce({thread:{id:'unsafe-thread'}}).mockResolvedValueOnce({thread:{id:'legacy-thread'}});
+  it('requires the installed runtime to confirm every ambient-instruction and compaction setting',async()=>{
+    expect(()=>assertAgentIsolationConfig(verifiedIsolationConfig,'/isolated/home/compaction_prompt.md')).not.toThrow();
+    for(const invalid of [
+      {...verifiedIsolationConfig,config:{...verifiedIsolationConfig.config,include_apps_instructions:undefined}},
+      {...verifiedIsolationConfig,config:{...verifiedIsolationConfig.config,include_environment_context:true}},
+      {...verifiedIsolationConfig,config:{...verifiedIsolationConfig.config,project_doc_max_bytes:8192}},
+      {...verifiedIsolationConfig,config:{...verifiedIsolationConfig.config,experimental_compact_prompt_file:'/unexpected.md'}},
+      {...verifiedIsolationConfig,config:{...verifiedIsolationConfig.config,skills:{include_instructions:true,bundled:{enabled:false}}}},
+      {...verifiedIsolationConfig,config:{...verifiedIsolationConfig.config,features:{...verifiedIsolationConfig.config.features,mcp_2026_07_28:null}}},
+    ])expect(()=>assertAgentIsolationConfig(invalid,'/isolated/home/compaction_prompt.md')).toThrow('does not confirm every required Pseudoharness instruction-isolation setting');
+    const client=new AppServer({codexHome:'/isolated/home',cwd:'/isolated/home/workspace'});(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};const request=vi.fn().mockResolvedValue(verifiedIsolationConfig);(client as any).request=request;
+    await client.verifyAgentIsolationConfig();await client.verifyAgentIsolationConfig();expect(request).toHaveBeenCalledTimes(1);expect(request).toHaveBeenCalledWith('config/read',{cwd:'/isolated/home/workspace',includeLayers:false},10000);client.close();
+    const unsafe=new AppServer({codexHome:'/isolated/home',cwd:'/isolated/home/workspace'});(unsafe as any).ready=true;(unsafe as any).child={killed:false,stdin:{write:()=>{}}};const unsafeRequest=vi.fn().mockResolvedValue({...verifiedIsolationConfig,config:{...verifiedIsolationConfig.config,include_environment_context:true}});(unsafe as any).request=unsafeRequest;
+    await expect(unsafe.startThread('worker','/repo','gpt-6-luna','high')).rejects.toThrow('does not confirm every required Pseudoharness instruction-isolation setting');expect(unsafeRequest).toHaveBeenCalledTimes(1);expect(unsafeRequest.mock.calls[0][0]).toBe('config/read');unsafe.close();
+  });
+  it('requires isolation acknowledgement on every role start and resume before turns',async()=>{
+    const client=new AppServer({codexHome:'/isolated/home',cwd:'/isolated/home/workspace'});(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
+    const request=vi.fn().mockResolvedValueOnce(verifiedIsolationConfig).mockResolvedValueOnce({instructionSources:[],thread:{id:'router-thread'}}).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'unsafe-thread'}}).mockResolvedValueOnce({instructionSources:[],thread:{id:'direct-thread'}}).mockResolvedValueOnce({turn:{id:'safe-turn'}});
     (client as any).request=request;
     await expect(client.startThread('router','/isolated/home','gpt-6-luna','low')).resolves.toBe('router-thread');
-    expect(request.mock.calls[0][1]).toMatchObject({cwd:'/isolated/home',config:{project_doc_max_bytes:0,project_doc_fallback_filenames:[]}});
-    await expect(client.resumeThread('router-thread','on-request','router')).rejects.toThrow('Router instruction isolation could not be verified');
-    await expect(client.startTurn('unsafe-thread','classify','router','gpt-6-luna','low','/isolated/home')).rejects.toThrow('must be verified');
-    await expect(client.startThread('direct','/workspace','gpt-6-luna','low')).resolves.toBe('legacy-thread');
+    expect(request.mock.calls[0]).toEqual(['config/read',{cwd:'/isolated/home/workspace',includeLayers:false},10000]);
+    expect(request.mock.calls[1][1]).toMatchObject({cwd:'/isolated/home',baseInstructions:appAgentBaseInstructions('/isolated/home'),config:{project_doc_max_bytes:0,project_doc_fallback_filenames:[],projects:{'/isolated/home':{trust_level:'untrusted'}}}});
+    await expect(client.resumeThread('router-thread','on-request','router','/isolated/home')).rejects.toThrow('Pseudoharness instruction isolation could not be verified');
+    await expect(client.startTurn('unsafe-thread','classify','router','gpt-6-luna','low','/isolated/home')).rejects.toThrow('not verified');
+    await expect(client.startThread('direct','/workspace','gpt-6-luna','low')).resolves.toBe('direct-thread');
+    await expect(client.startTurn('direct-thread','answer','direct','gpt-6-luna','low','/workspace')).resolves.toMatchObject({turn:{id:'safe-turn'}});
     client.close();
+  });
+  it('keeps the original Codex process threadless with an RPC allowlist',async()=>{
+    const broker=new AppServer({metadataOnly:true});
+    await expect(broker.startThread('worker','/repo','gpt-6-luna','high')).rejects.toThrow('metadata-only');
+    await expect(broker.request('turn/start',{})).rejects.toThrow('does not permit turn/start');
+    await expect(broker.request('thread/resume',{})).rejects.toThrow('does not permit thread/resume');
+    const writes:string[]=[];(broker as any).child={killed:false,stdin:{write:(data:string)=>writes.push(data)}};
+    expect(()=>broker.respondServerRequest('unexpected-thread',{})).toThrow('does not host agent requests');
+    broker.respondServerError('unexpected-request',-32601,'Unsupported');
+    expect(JSON.parse(writes[0])).toEqual({id:'unexpected-request',error:{code:-32601,message:'Unsupported'}});
+    broker.close();
   });
   it('shares one in-flight app-server startup across concurrent callers',async()=>{
     let spawnCount=0;
@@ -69,8 +98,8 @@ describe('Codex approval and turn configuration',()=>{
       const write=child.stdin.write.bind(child.stdin);child.stdin.write=(chunk:string,...args:any[])=>{const result=write(chunk,...args);for(const line of String(chunk).trim().split('\n')){const request=JSON.parse(line);if(request.method==='initialize')queueMicrotask(()=>child.stdout.write(`${JSON.stringify({id:request.id,result:{}})}\n`));}return result;};
       child.kill=()=>{child.killed=true;return true;};return child;
     };
-    const client=new AppServer({spawnProcess:fakeSpawn as any,cwd:'/isolated/router/workspace'});
-    await Promise.all([client.connect(),client.connect(),client.connect()]);expect(spawnCount).toBe(1);expect(spawnOptions[0].cwd).toBe('/isolated/router/workspace');client.close();
+    const client=new AppServer({spawnProcess:fakeSpawn as any,cwd:'/isolated/agent/workspace'});
+    await Promise.all([client.connect(),client.connect(),client.connect()]);expect(spawnCount).toBe(1);expect(spawnOptions[0].cwd).toBe('/isolated/agent/workspace');client.close();
   });
   it('bridges short-lived ChatGPT auth only in memory and redacts bridge failures',async()=>{
     const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
@@ -121,9 +150,9 @@ describe('Codex approval and turn configuration',()=>{
       const turn=makeTurnParams({threadId:'thread',input:'work',role,model:'model',effort:'high',writeRoots:[],approvalPolicy:'full-access',schema:{type:'object'}});
       expect(turn).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
     }
-    expect(makeThreadResumeParams('thread','full-access')).toMatchObject({approvalPolicy:'never',sandbox:'danger-full-access'});
-    expect(makeThreadResumeParams('router','full-access','router')).toMatchObject({approvalPolicy:'never',sandbox:'read-only',config:{project_doc_max_bytes:0}});
-    expect(makeThreadResumeParams('thread')).not.toHaveProperty('sandbox');
+    expect(()=>makeThreadResumeParams('thread','full-access' as any,undefined as any,undefined as any)).toThrow('role and project root are required');
+    expect(makeThreadResumeParams('router','full-access','router','/tmp/project')).toMatchObject({approvalPolicy:'never',sandbox:'read-only',config:{project_doc_max_bytes:0,projects:{'/tmp/project':{trust_level:'untrusted'}}},baseInstructions:appAgentBaseInstructions('/tmp/project')});
+    expect(()=>((makeThreadResumeParams as any)('thread'))).toThrow('role and project root are required');
     for(const role of ['router','direct'] as const){
       const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'full-access'});
       const turn=makeTurnParams({threadId:'thread',input:'answer',role,model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'full-access',schema:{type:'object'}});
@@ -133,7 +162,7 @@ describe('Codex approval and turn configuration',()=>{
     expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:true});
   });
   it('uses the full-access sandbox for review turns as well as ordinary turns',async()=>{
-    const client=new AppServer();const request=vi.fn().mockResolvedValue({turn:{id:'review'}});(client as any).request=request;
+    const client=new AppServer();const request=vi.fn().mockResolvedValue({turn:{id:'review'}});(client as any).request=request;(client as any).verifiedAgentThreads.add('thread');
     await client.reviewTurn('thread','review','gpt-6-sol','high','full-access');
     expect(request.mock.calls[0][1]).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
   });
@@ -156,7 +185,7 @@ describe('Codex approval and turn configuration',()=>{
     client.close();
   });
   it('requests usage for the exact thread rather than reading account-wide activity',async()=>{
-    const client=new AppServer();(client as any).ready=true;
+    const client=new AppServer();(client as any).ready=true;(client as any).verifiedAgentThreads.add('worker-thread');
     const request=vi.fn().mockResolvedValue({threadUsage:{threadId:'worker-thread',estimatedUsageCreditsMicros:125000,groups:[]}});(client as any).request=request;
     await expect(client.threadUsage('worker-thread')).resolves.toEqual({threadId:'worker-thread',estimatedUsageCreditsMicros:125000,groups:[]});
     expect(request).toHaveBeenCalledWith('account/usage/read',{threadId:'worker-thread'},10000);
