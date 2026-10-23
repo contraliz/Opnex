@@ -10,7 +10,7 @@ describe('orchestrator policy and intake routing',()=>{
     const policy=await loadOwnedOrchestrationPolicy();
     expect(policy).toContain('Classify each new user request before execution.');
     expect(policy).toContain('The hard-task orchestrator must return a complete delegation assignment; it cannot answer directly.');
-    expect(policy).toContain('While Luna works, the orchestrator stays dormant.');
+    expect(policy).toContain('While Luna works through all three context/execution stages, the orchestrator stays dormant.');
     expect(policy).not.toMatch(/[A-Za-z]:\\|\\Users\\|\\home\\/i);
     expect(buildOrchestratorInput(policy,'USER INPUT')).toContain(`<delegation-policy>\n${policy}`);
   });

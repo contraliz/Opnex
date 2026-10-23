@@ -6,11 +6,17 @@ export const assignmentSchema = z.object({
   // Empty read scope is valid for work that only returns an answer and needs no files.
   read_scope: z.array(text).max(30), write_scope: z.array(text).max(30),
   exclusions: z.array(text).max(30), constraints: z.array(text).max(40), context_refs: z.array(text).max(40),
+  skill_refs: z.array(z.string().trim().min(1).max(160)).max(12).optional(),
   acceptance: z.array(text).min(1).max(30), verification: z.array(text).min(1).max(30),
   ordinary_authority: z.array(text).min(1).max(30), escalation_conditions: z.array(text).min(1).max(30),
   receipt_requirements: z.array(text).min(1).max(20),
 }).strict();
 export type Assignment = z.infer<typeof assignmentSchema>;
+
+export const workerContextPlanSchema=z.object({type:z.literal('context_plan'),queries:z.array(z.string().trim().min(1).max(500)).max(6),scope_summary:z.string().trim().min(1).max(3000)}).strict();
+export const workerContextSummarySchema=z.object({type:z.literal('context_ready'),summary:z.string().trim().min(1).max(8000)}).strict();
+export const workerContextPlanJsonSchema={type:'object',additionalProperties:false,required:['type','queries','scope_summary'],properties:{type:{type:'string',enum:['context_plan']},queries:{type:'array',maxItems:6,items:{type:'string',maxLength:500}},scope_summary:{type:'string',maxLength:3000}}};
+export const workerContextSummaryJsonSchema={type:'object',additionalProperties:false,required:['type','summary'],properties:{type:{type:'string',enum:['context_ready']},summary:{type:'string',maxLength:8000}}};
 
 export const directAnswerSchema = z.object({
   type:z.literal('direct_answer'), answer:text, policy_basis:z.string().trim().min(1).max(400),
@@ -155,7 +161,7 @@ export const settingsSchema = z.object({
 }).strict();
 
 export const assignmentJsonSchema = { type: 'object', additionalProperties: false, required: ['outcome','deliverable','read_scope','write_scope','exclusions','constraints','context_refs','acceptance','verification','ordinary_authority','escalation_conditions','receipt_requirements'], properties: {
-  outcome: { type: 'string' }, deliverable: { type: 'string' }, read_scope: { type: 'array', items: { type: 'string' } }, write_scope: { type: 'array', items: { type: 'string' } }, exclusions: { type: 'array', items: { type: 'string' } }, constraints: { type: 'array', items: { type: 'string' } }, context_refs: { type: 'array', items: { type: 'string' } }, acceptance: { type: 'array', items: { type: 'string' } }, verification: { type: 'array', items: { type: 'string' } }, ordinary_authority: { type: 'array', items: { type: 'string' } }, escalation_conditions: { type: 'array', items: { type: 'string' } }, receipt_requirements: { type: 'array', items: { type: 'string' } },
+  outcome: { type: 'string' }, deliverable: { type: 'string' }, read_scope: { type: 'array', items: { type: 'string' } }, write_scope: { type: 'array', items: { type: 'string' } }, exclusions: { type: 'array', items: { type: 'string' } }, constraints: { type: 'array', items: { type: 'string' } }, context_refs: { type: 'array', items: { type: 'string' } }, skill_refs: { type: 'array', items: { type: 'string' } }, acceptance: { type: 'array', items: { type: 'string' } }, verification: { type: 'array', items: { type: 'string' } }, ordinary_authority: { type: 'array', items: { type: 'string' } }, escalation_conditions: { type: 'array', items: { type: 'string' } }, receipt_requirements: { type: 'array', items: { type: 'string' } },
 }};
 // Codex structured outputs require a top-level object. Branch-exclusive fields
 // are nullable in the wire shape; initialOrchestratorSchema enforces exclusivity.
