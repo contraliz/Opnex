@@ -12,7 +12,7 @@ describe('Codex approval and turn configuration',()=>{
     expect(instructions).toContain('ORCHESTRATOR POLICY COPY');expect(instructions).toContain('policy-bound orchestration model');
   });
   it('accepts only supported approval presets and keeps the safe default',()=>{
-    const base={projectRoot:'D:/repo',agentmemProjectId:'demo',orchestratorModel:'gpt-6-sol',orchestratorEffort:'high'};
+    const base={projectRoot:'D:/repo',agentmemProjectId:'demo',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low'};
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
     for(const approvalPolicy of ['on-request','untrusted','never','full-access'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
     expect(settingsSchema.safeParse({...base,approvalPolicy:'custom'}).success).toBe(false);
@@ -21,7 +21,7 @@ describe('Codex approval and turn configuration',()=>{
     expect(settingsSchema.safeParse({...base,agentmemProjectId:'x'.repeat(129)}).success).toBe(false);
   });
   it('requests the most detailed supported summaries and available provider text for new and resumed role threads',()=>{
-    const orchestrator=makeThreadParams({role:'orchestrator',root:'D:/repo',model:'gpt-6-sol',approvalPolicy:'on-request',ownedPolicy:'policy'});
+    const orchestrator=makeThreadParams({role:'orchestrator',root:'D:/repo',model:'gpt-6.1-sol',approvalPolicy:'on-request',ownedPolicy:'policy'});
     const worker=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request'});
     expect(orchestrator.config).toMatchObject({model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,show_raw_agent_reasoning:true,include_permissions_instructions:false,include_apps_instructions:false,include_collaboration_mode_instructions:false,include_environment_context:false,project_doc_max_bytes:0,project_doc_fallback_filenames:[],projects:{'D:/repo':{trust_level:'untrusted'}},memories:{use_memories:false,dedicated_tools:false},features:{apps:false,hooks:false,plugins:false,memories:false,multi_agent:false}});
     expect(worker.config).toMatchObject(orchestrator.config);
@@ -162,12 +162,12 @@ describe('Codex approval and turn configuration',()=>{
     expect(readOnly.summary).toBe('auto');
     const write=makeTurnParams({threadId:'t',input:'edit',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:['D:/repo/src'],approvalPolicy:'untrusted',schema:{type:'object'}});
     expect(write.approvalPolicy).toBe('untrusted');expect(write.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['D:/repo/src'],networkAccess:false});
-    const orchestration=makeTurnParams({threadId:'t',input:'plan',role:'orchestrator',model:'gpt-6-sol',effort:'high',writeRoots:['D:/ignored'],approvalPolicy:'never',schema:{type:'object'}});
+    const orchestration=makeTurnParams({threadId:'t',input:'plan',role:'orchestrator',model:'gpt-6.1-sol',effort:'low',writeRoots:['D:/ignored'],approvalPolicy:'never',schema:{type:'object'}});
     expect(orchestration.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
   });
   it('maps full access to the installed app-server never-approve and danger-full-access policies for all roles',()=>{
     for(const role of ['orchestrator','worker'] as const){
-      const thread=makeThreadParams({role,root:'D:/repo',model:role==='worker'?'gpt-6-luna':'gpt-6-sol',approvalPolicy:'full-access'});
+      const thread=makeThreadParams({role,root:'D:/repo',model:role==='worker'?'gpt-6-luna':'gpt-6.1-sol',approvalPolicy:'full-access'});
       expect(thread).toMatchObject({approvalPolicy:'never',sandbox:'danger-full-access'});
       const turn=makeTurnParams({threadId:'thread',input:'work',role,model:'model',effort:'high',writeRoots:[],approvalPolicy:'full-access',schema:{type:'object'}});
       expect(turn).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
@@ -185,7 +185,7 @@ describe('Codex approval and turn configuration',()=>{
   });
   it('uses the full-access sandbox for review turns as well as ordinary turns',async()=>{
     const client=new AppServer();const request=vi.fn().mockResolvedValue({turn:{id:'review'}});(client as any).request=request;(client as any).verifiedAgentThreads.add('thread');
-    await client.reviewTurn('thread','review','gpt-6-sol','high','full-access');
+    await client.reviewTurn('thread','review','gpt-6.1-sol','low','full-access');
     expect(request.mock.calls[0][1]).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
   });
   it('converts user approval decisions into the app-server response schema',()=>{

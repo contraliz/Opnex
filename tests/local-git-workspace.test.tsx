@@ -13,11 +13,12 @@ function page(repository:string,historyOffset=0,branchOffset=0){
   return {available:true,authorizedRoot:repository,repositoryRoot:repository,currentBranch:'branch-000',branches,branchPage:{offset:branchOffset,pageSize:100,totalCount:200,totalIsExact:true,hasMore:branchOffset===0,nextOffset:branchOffset===0?100:null},worktrees:[],commits,history:{offset:historyOffset,pageSize:100,hasMore:historyOffset===0,nextOffset:historyOffset===0?100:null},github};
 }
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
-afterEach(()=>{cleanup();vi.resetAllMocks();});
+afterEach(()=>{cleanup();sessionStorage.clear();vi.resetAllMocks();});
 
 describe('native local Git workspace paging and routes',()=>{
   it('keeps branch and history pages independently while alternating their load-more controls',async()=>{
     vi.mocked(api).mockImplementation(async url=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
       if(url.endsWith('/github'))return github as any;
       const query=new URLSearchParams(url.slice(url.indexOf('?')+1));return page('C:/fixture',Number(query.get('offset')),Number(query.get('branchOffset'))) as any;
     });
@@ -42,6 +43,7 @@ describe('native local Git workspace paging and routes',()=>{
   it('aborts the prior task route and ignores its late local and GitHub responses',async()=>{
     const oldLocal=deferred<any>(),oldGithub=deferred<any>();
     vi.mocked(api).mockImplementation((url)=>{
+      if(url==='/api/github/auth')return Promise.resolve({state:'idle',cliAvailable:true,authenticated:false}) as any;
       if(url.includes('old-task'))return (url.endsWith('/github')?oldGithub.promise:oldLocal.promise) as any;
       if(url.endsWith('/github'))return Promise.resolve(github) as any;
       return Promise.resolve(page('C:/new-repo')) as any;
@@ -54,5 +56,44 @@ describe('native local Git workspace paging and routes',()=>{
     expect(screen.queryByText('old-repo')).toBeNull();expect(screen.queryByText('old/cloud')).toBeNull();
     const oldCall=vi.mocked(api).mock.calls.find(([url])=>(url as string).includes('old-task'));
     expect(oldCall?.[2]?.aborted).toBe(true);
+  });
+
+  it('uses the Git tab project-root snapshot only when there is no task route',async()=>{
+    vi.mocked(api).mockImplementation(async url=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github'))return github as any;
+      return page('D:/fixture root') as any;
+    });
+    render(<LocalGitWorkspace projectRoot="D:/fixture root"/>);
+    await screen.findByText('D:/fixture root');
+    expect(vi.mocked(api).mock.calls.map(([url])=>url)).toContain('/api/git-workspace?root=D%3A%2Ffixture%20root&offset=0&branchOffset=0');
+
+    cleanup();vi.resetAllMocks();
+    vi.mocked(api).mockImplementation(async url=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.includes('/tasks/captured-task/'))return page('D:/captured-task') as any;
+      return github as any;
+    });
+    render(<LocalGitWorkspace taskId="captured-task" projectRoot="D:/settings-after-open"/>);
+    await screen.findByText('D:/captured-task');
+    expect(vi.mocked(api).mock.calls.some(([url])=>(url as string).includes('root='))).toBe(false);
+  });
+
+  it('starts device sign-in, opens the verification page in a peer Browser workspace, and can cancel',async()=>{
+    const openBrowserTab=vi.fn();
+    const pending={state:'awaiting',cliAvailable:true,authenticated:false,attemptId:'fixture-attempt',verificationUrl:'https://github.com/login/device',userCode:'ABCD-1234',expiresAt:Date.now()+60_000};
+    vi.mocked(api).mockImplementation(async(url,body)=>{
+      if(url==='/api/github/auth')return (body as any)?.action==='start'?pending:{state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github'))return github as any;
+      return page('C:/fixture') as any;
+    });
+    render(<LocalGitWorkspace projectRoot="C:/fixture" onOpenBrowserTab={openBrowserTab}/>);
+    const signIn=await screen.findByRole('button',{name:'Sign in with GitHub'});
+    await waitFor(()=>expect((signIn as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(signIn);
+    expect(await screen.findByText('ABCD-1234')).toBeTruthy();
+    await waitFor(()=>expect(openBrowserTab).toHaveBeenCalledWith('https://github.com/login/device'));
+    fireEvent.click(screen.getByRole('button',{name:'Open verification page'}));
+    expect(openBrowserTab).toHaveBeenCalledTimes(2);
   });
 });

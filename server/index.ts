@@ -12,13 +12,16 @@ import { cancelTask, getRuntimeStatus, initialize, listAgentMemProjects, refresh
 import { approvalDecisionSchema, sessionTitleSchema, settingsSchema, userTaskSchema } from './contracts.js';
 import { readGitHubWorkspace } from './github.js';
 import { readGitHubMetadata, readGitWorkspace } from './git-workspace.js';
+import { GitHubAuthService } from './github-auth.js';
 
 const app=express();const server=createServer(app);const port=Number(process.env.PORT||4174);const host='127.0.0.1';const version=createRequire(import.meta.url)('../package.json').version as string;
+const githubAuth=new GitHubAuthService();
 const nonce=randomBytes(24).toString('base64url');
 const here=path.dirname(fileURLToPath(import.meta.url));
 const production=process.env.NODE_ENV==='production';
 app.disable('x-powered-by');app.use(express.json({limit:'17mb'}));
 function isLoopbackHost(raw:string|undefined){if(!raw)return false;const v=raw.split(':')[0].replace(/^\[|\]$/g,'').toLowerCase();return ['127.0.0.1','localhost','::1'].includes(v);}
+function requestedProjectRoot(req:express.Request){const value=req.query.root;if(value===undefined)return getState().settings.projectRoot;if(typeof value!=='string'||value.length>1024)throw new Error('Choose one project folder of 1024 characters or fewer.');return value;}
 app.use((req,res,next)=>{if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}const origin=req.headers.origin;const allowed=!origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${port}`||origin===`http://localhost:${port}`;if(!allowed){res.status(403).json({error:'Request origin rejected.'});return;}next();});
 app.use('/api',(req,res,next)=>{if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}if(req.method!=='GET'&&req.method!=='HEAD'){
   const origin=req.headers.origin;const allowed=!origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${port}`||origin===`http://localhost:${port}`;
@@ -28,8 +31,9 @@ app.get('/api/bootstrap',async(_req,res)=>{await loadState();res.json({state:get
 app.get('/api/state',(_req,res)=>res.json({state:getState(),runtime:getRuntimeStatus()}));
 app.get('/api/agentmem/projects',async(_req,res)=>{try{res.json({projects:await listAgentMemProjects()});}catch(e){res.status(503).json({error:errorMessage(e)});}});
 app.get('/api/tasks/:id/git',async(req,res)=>{const task=getTask(req.params.id);if(!task){res.status(404).json({error:'Task not found.'});return;}try{res.json(await readWorkspaceGitSnapshot(task.userRoot));}catch(e){res.status(503).json({error:errorMessage(e)});}});
-app.get('/api/git-workspace',async(req,res)=>{try{const offset=Number(req.query.offset||0),branchOffset=Number(req.query.branchOffset||0);res.json(await readGitWorkspace(getState().settings.projectRoot,offset,undefined,branchOffset));}catch(e){res.status(503).json({error:errorMessage(e)});}});
-app.get('/api/git-workspace/github',async(_req,res)=>{try{res.json(await readGitHubMetadata(getState().settings.projectRoot));}catch(e){res.status(503).json({error:errorMessage(e)});}});
+app.get('/api/git-workspace',async(req,res)=>{try{const offset=Number(req.query.offset||0),branchOffset=Number(req.query.branchOffset||0);res.json(await readGitWorkspace(requestedProjectRoot(req),offset,undefined,branchOffset));}catch(e){res.status(503).json({error:errorMessage(e)});}});
+app.get('/api/git-workspace/github',async(req,res)=>{try{res.json(await readGitHubMetadata(requestedProjectRoot(req)));}catch(e){res.status(503).json({error:errorMessage(e)});}});
+app.post('/api/github/auth',async(req,res)=>{const body=req.body;if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>key!=='action')||!['status','start','cancel'].includes(body.action)){res.status(400).json({error:'Choose a valid GitHub sign-in action.'});return;}try{res.json(body.action==='status'?await githubAuth.status():body.action==='start'?await githubAuth.start():await githubAuth.cancel());}catch(e){res.status(503).json({error:errorMessage(e)});}});
 app.get('/api/tasks/:id/git-workspace',async(req,res)=>{const task=getTask(req.params.id);if(!task){res.status(404).json({error:'Task not found.'});return;}try{const offset=Number(req.query.offset||0),branchOffset=Number(req.query.branchOffset||0);res.json(await readGitWorkspace(task.userRoot,offset,undefined,branchOffset));}catch(e){res.status(503).json({error:errorMessage(e)});}});
 app.get('/api/tasks/:id/git-workspace/github',async(req,res)=>{const task=getTask(req.params.id);if(!task){res.status(404).json({error:'Task not found.'});return;}try{res.json(await readGitHubMetadata(task.userRoot));}catch(e){res.status(503).json({error:errorMessage(e)});}});
 app.get('/api/tasks/:id/passes/:passId/git',async(req,res)=>{const task=getTask(req.params.id);if(!task){res.status(404).json({error:'Task not found.'});return;}const pass=task.passes?.find(row=>row.id===req.params.passId);if(!pass){res.status(404).json({error:'Pass not found.'});return;}res.json(pass.gitDiff||{status:'unavailable',message:'Codex did not report a tracked turn diff for this pass. Workspace changes are not used as a substitute.'});});

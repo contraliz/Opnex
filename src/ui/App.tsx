@@ -1,16 +1,18 @@
 import { createRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertCircle, Check, ChevronDown, ChevronRight, Command, FileText, Folder, GitBranch, Globe, MessageSquarePlus, PanelLeft, PanelRight, Plus, Search, Settings2, ShieldCheck, Square, Terminal, X } from 'lucide-react';
+import { Activity, AlertCircle, Check, ChevronDown, Command, FileText, Folder, GitBranch, Globe, MessageSquarePlus, PanelLeft, PanelRight, Plus, Search, Settings2, ShieldCheck, Square, Terminal, X } from 'lucide-react';
 import { api, bootstrap } from './api';
 import { Markdown } from './Markdown';
 import Composer from './Composer';
 import { prepareMarkdownSubmission } from './LiveMarkdownEditor';
 import SettingsDialog from './SettingsDialog';
 import { SessionDialog, SessionRow } from './SessionControls';
+import { HeadsUpPanel } from './HeadsUpPanel';
 import { PassGitDiff } from './PassGitDiff';
 import { EmbeddedWorkspace } from './EmbeddedWorkspace';
 import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitPane, type SessionPane } from './paneGroups';
 import { formatBrowserAnnotation } from './browser-annotation';
-import type { AppState, Assignment, BrowserAnnotation, Runtime, Task, TaskPass, Message, TaskAttachment } from '../types';
+import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
+import type { AppState, Assignment, BrowserAnnotation, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
 
 const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
 const stamp=(s:string)=>new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(new Date(s));
@@ -27,110 +29,829 @@ async function encodeAttachments(files:FileList|null,existing:TaskAttachment[]):
   if(total>12*1024*1024)throw new Error('Attachments exceed the 12 MiB total limit.');
   return Promise.all(selected.map(async file=>{const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return{name:file.name,type:file.type,size:file.size,data:btoa(binary)};}));
 }
-export default function App(){
-  const [state,setState]=useState<AppState|null>(null);const [runtime,setRuntime]=useState<Runtime|null>(null);const [drafts,setDrafts]=useState<Record<string,string>>({});const [pendingAttachments,setPendingAttachments]=useState<Record<string,TaskAttachment[]>>({});const [panes,setPanes]=useState<SessionPane[]>([{id:'pane:root',tabs:['new:0'],activeTab:'new:0',weight:1}]);const [draggedTab,setDraggedTab]=useState<string|null>(null);const [dropTarget,setDropTarget]=useState<{paneId:string;half:'left'|'right'}|null>(null);const [loading,setLoading]=useState(true);const [error,setError]=useState('');const [settingsOpen,setSettingsOpen]=useState(false);const [settingsMounted,setSettingsMounted]=useState(false);const [sessionDialog,setSessionDialog]=useState<{kind:'rename'|'delete';taskId:string}|null>(null);const [sessionDialogOpen,setSessionDialogOpen]=useState(false);const [sessionDialogMounted,setSessionDialogMounted]=useState(false);const [inspector,setInspector]=useState(false);const [inspectorMounted,setInspectorMounted]=useState(false);const [inspectorDetails,setInspectorDetails]=useState(false);const [sidebarCollapsed,setSidebarCollapsed]=useState(false);const [sidebarWidth,setSidebarWidth]=useState(296);const [workspaceMode,setWorkspaceMode]=useState<'tasks'|'browser'|'github'>('tasks');const [dockMode,setDockMode]=useState<'browser'|'github'|null>(null);const [sending,setSending]=useState(false);const [retryingPassId,setRetryingPassId]=useState('');const [expanded,setExpanded]=useState<Record<string,boolean>>({});const inputRef=useRef<HTMLElement|null>(null);const paneInputRefs=useRef<Record<string,React.RefObject<HTMLElement|null>>>({});const scrollRef=useRef<HTMLDivElement>(null);const inspectorTriggerRef=useRef<HTMLButtonElement>(null);const sendingRef=useRef(false);const handledWorkspaceCommand=useRef('');const resizeRef=useRef<{kind:'sidebar'|'pane';x:number;width:number;left?:string;right?:string;pointerId:number}|null>(null);
-  const [tabDropTarget,setTabDropTarget]=useState<string|null>(null);const tabDropTargetRef=useRef<string|null>(null);
-  const rootPane=panes[0];const tabs=rootPane?.tabs||[];const activeTab=rootPane?.activeTab||'new:0';const setTabs=(value:string[]|((current:string[])=>string[]))=>setPanes(current=>{const root=current[0];const next=typeof value==='function'?value(root.tabs):value;return normalizePanes([{...root,tabs:next,activeTab:next.includes(root.activeTab)?root.activeTab:next[0]||root.activeTab},...current.slice(1)],makeFallbackTab);});const setActiveTab=(value:string)=>setPanes(current=>current.map((pane,index)=>index===0?{...pane,activeTab:value}:pane));const paneInputRef=(id:string)=>paneInputRefs.current[id]??=(createRef<HTMLElement>());
-  const active=activeTab.startsWith('new:')?null:state?.tasks.find(t=>t.id===activeTab)||null;const draft=drafts[activeTab]||'';const attachments=pendingAttachments[activeTab]||[];const setDraft=(value:string)=>setDrafts(current=>({...current,[activeTab]:value}));const setFiles=async(files:FileList|null)=>{try{const added=await encodeAttachments(files,pendingAttachments[activeTab]||[]);setPendingAttachments(current=>({...current,[activeTab]:[...(current[activeTab]||[]),...added]}));setError('');}catch(e){setError(String(e));}};const removeFile=(index:number)=>setPendingAttachments(current=>({...current,[activeTab]:(current[activeTab]||[]).filter((_,i)=>i!==index)}));const currentPass=active?.passes?.find(pass=>pass.id===active.currentPassId);const busy=!!active&&['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(active.phase);const workerOk=!!runtime?.codex.workerAvailable;const canSend=(!!draft.trim()||attachments.length>0)&&!sending&&!!runtime;const visibleMessageCount=active?.messages.filter(message=>message.role!=='worker'&&(message.role!=='system'||!message.text.startsWith('Worker activity:'))).length||0;const orchestratorReasoningGrowth=(active?.reasoningSummaries?.filter(x=>x.role==='orchestrator').reduce((n,x)=>n+x.text.length,0)||0)+(active?.reasoningRawContent?.filter(x=>x.role==='orchestrator').reduce((n,x)=>n+x.text.length,0)||0);
-  const models=useMemo(()=>runtime?.codex.models||[],[runtime]);
-  const refresh=async()=>{try{const x=await api<{state:AppState;runtime:Runtime}>('/api/state');setState(x.state);setRuntime(x.runtime);}catch(e){setError(String(e));}};
-  useEffect(()=>{let alive=true;bootstrap().then(x=>{if(!alive)return;setState(x.state);setRuntime(x.runtime);if(x.state.activeTaskId){setTabs([x.state.activeTaskId]);setActiveTab(x.state.activeTaskId);}if(!x.state.settings.projectRoot){setSettingsMounted(true);setSettingsOpen(true);}setLoading(false);}).catch(e=>{if(alive){setError(String(e));setLoading(false);}});const source=new EventSource('/events');source.onmessage=e=>{try{const v=JSON.parse(e.data);if(v.state&&alive){setState(v.state);setRuntime(v.runtime);}}catch{}};source.onerror=()=>{if(alive)void refresh();};const timer=setInterval(()=>void refresh(),10000);return()=>{alive=false;source.close();clearInterval(timer);};},[]);
-  useEffect(()=>{if(settingsOpen||!settingsMounted)return;const timer=window.setTimeout(()=>setSettingsMounted(false),110);return()=>window.clearTimeout(timer);},[settingsOpen,settingsMounted]);
-  useEffect(()=>{if(sessionDialogOpen||!sessionDialogMounted)return;const timer=window.setTimeout(()=>{setSessionDialogMounted(false);setSessionDialog(null);},110);return()=>window.clearTimeout(timer);},[sessionDialogOpen,sessionDialogMounted]);
-  useEffect(()=>{if(inspector||!inspectorMounted)return;const timer=window.setTimeout(()=>{setInspectorMounted(false);setInspectorDetails(false);},160);return()=>window.clearTimeout(timer);},[inspector,inspectorMounted]);
-  useEffect(()=>{const el=scrollRef.current;if(el)el.scrollTop=el.scrollHeight;},[visibleMessageCount]);
-  useEffect(()=>{const el=scrollRef.current;if(!el)return;const nearBottom=el.scrollHeight-el.scrollTop-el.clientHeight<180;if(nearBottom)el.scrollTop=el.scrollHeight;},[orchestratorReasoningGrowth]);
-  useEffect(()=>{const command=active?.workspaceCommand;if(!command||handledWorkspaceCommand.current===command.id)return;handledWorkspaceCommand.current=command.id;if(command.placement==='full'){setWorkspaceMode(command.mode);setDockMode(null);}else{setWorkspaceMode('tasks');setDockMode(command.mode);}},[active?.id,active?.workspaceCommand?.id]);
-  useEffect(()=>{if(!inspector)return;const onKey=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.stopPropagation();setInspectorDetails(false);setInspector(false);inspectorTriggerRef.current?.focus();}};const onPointer=(event:PointerEvent)=>{if(!(event.target as Element)?.closest('.inspector-popover,.details-toggle')){setInspectorDetails(false);setInspector(false);}};window.addEventListener('keydown',onKey);window.addEventListener('pointerdown',onPointer);return()=>{window.removeEventListener('keydown',onKey);window.removeEventListener('pointerdown',onPointer);};},[inspector]);
-  useEffect(()=>{const onShortcut=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='n'){event.preventDefault();openNewTab();}};window.addEventListener('keydown',onShortcut);return()=>window.removeEventListener('keydown',onShortcut);},[]);
-  const openNewTab=()=>{const id=makeFallbackTab();setTabs(current=>[...current,id]);setActiveTab(id);setWorkspaceMode('tasks');setDockMode(null);setInspector(false);setError('');window.setTimeout(()=>inputRef.current?.focus(),0);};
-  const setPaneTabs=(paneId:string,value:string[]|((current:string[])=>string[]))=>setPanes(current=>current.map(pane=>pane.id===paneId?{...pane,tabs:typeof value==='function'?value(pane.tabs):value}:pane));
-  const setPaneActive=(paneId:string,tab:string)=>setPanes(current=>current.map(pane=>pane.id===paneId?{...pane,activeTab:tab}:pane));
-  const openTaskTab=async(id:string)=>{setPanes(current=>{let next=current.map(pane=>({...pane,tabs:pane.tabs.filter(tab=>tab!==id)})).filter(pane=>pane.tabs.length);if(!next.length)next=[{id:'pane:root',tabs:[id],activeTab:id,weight:1}];else next[0]={...next[0],tabs:[...next[0].tabs,id],activeTab:id};return normalizePanes(next,makeFallbackTab);});setWorkspaceMode('tasks');setDockMode(null);setInspector(false);try{await api('/api/tasks/'+id+'/select',{});await refresh();}catch(e){setError(String(e));}};
-  const clearTabDrop=()=>{tabDropTargetRef.current=null;setTabDropTarget(null);};
-  const moveTab=(source:string,target:string)=>{clearTabDrop();setDraggedTab(null);setDropTarget(null);setPanes(current=>moveTabToTab(current,source,target));};
-  const tabUnderPointer=(event:React.DragEvent<HTMLElement>)=>{const fromTarget=(event.target as HTMLElement).closest<HTMLElement>('[data-session-tab]');const fromPoint=document.elementFromPoint?.(event.clientX,event.clientY)?.closest<HTMLElement>('[data-session-tab]');const direct=fromTarget&&event.currentTarget.contains(fromTarget)?fromTarget:fromPoint&&event.currentTarget.contains(fromPoint)?fromPoint:null;if(direct)return direct.dataset.sessionTab||null;const tabs=Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[data-session-tab]'));return tabs.reduce<HTMLElement|null>((nearest,item)=>!nearest||Math.abs(item.getBoundingClientRect().left+item.getBoundingClientRect().width/2-event.clientX)<Math.abs(nearest.getBoundingClientRect().left+nearest.getBoundingClientRect().width/2-event.clientX)?item:nearest,null)?.dataset.sessionTab||null;};
-  const allowTabDrop=(event:React.DragEvent<HTMLElement>)=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-tab')){event.preventDefault();event.dataTransfer.dropEffect='move';const target=tabUnderPointer(event);tabDropTargetRef.current=target;setTabDropTarget(target);}};
-  const dropTabOnStrip=(event:React.DragEvent<HTMLElement>)=>{const source=event.dataTransfer.getData('application/x-pseudoharness-session-tab');const target=tabUnderPointer(event)||tabDropTargetRef.current;if(source&&target){event.preventDefault();event.stopPropagation();moveTab(source,target);}};
-  const finishTabDrag=(source:string)=>{const target=tabDropTargetRef.current;clearTabDrop();setDraggedTab(null);setDropTarget(null);if(target&&target!==source)setPanes(current=>moveTabToTab(current,source,target));};
-  const splitTab=(source:string,targetPaneId:string,side:'left'|'right')=>{clearTabDrop();setDraggedTab(null);setDropTarget(null);setPanes(current=>{const sourceIndex=current.findIndex(pane=>pane.tabs.includes(source));const target=current.find(pane=>pane.id===targetPaneId);if(sourceIndex<0||!target)return current;const rect=document.querySelector('.workspace-content')?.getBoundingClientRect();const total=current.reduce((sum,pane)=>sum+pane.weight,0);const targetWidth=rect?rect.width*target.weight/total:0;if(targetWidth<336)return current;let next=[...current];const sourcePane=next[sourceIndex];const remain=sourcePane.tabs.filter(tab=>tab!==source);if(remain.length)next[sourceIndex]={...sourcePane,tabs:remain,activeTab:remain.includes(sourcePane.activeTab)?sourcePane.activeTab:remain[0]};else if(next.length===1||sourcePane.id===targetPaneId){const fallback=makeFallbackTab();next[sourceIndex]={...sourcePane,tabs:[fallback],activeTab:fallback};}else next.splice(sourceIndex,1);return splitPane(next,source,targetPaneId,side,makePaneId(),true);});};
-  const dropPane=(event:React.DragEvent<HTMLElement>,paneId:string)=>{const tab=event.dataTransfer.getData('application/x-pseudoharness-session-tab');if(!tab)return;event.preventDefault();event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();const side=event.nativeEvent.clientX<rect.left+rect.width/2?'left':'right';setWorkspaceMode('tasks');setDockMode(null);splitTab(tab,paneId,side);};
-  const closeTab=(id:string)=>{const group=panes.find(pane=>pane.tabs.includes(id));const wasActive=group?.activeTab===id;setPanes(current=>closePaneTab(current,id,makeFallbackTab));setDrafts(current=>{const copy={...current};delete copy[id];return copy;});setPendingAttachments(current=>{const copy={...current};delete copy[id];return copy;});if(wasActive&&group?.id===rootPane.id){const fallback=group.tabs.find(tab=>tab!==id);if(fallback){setActiveTab(fallback);if(!fallback.startsWith('new:'))void api('/api/tasks/'+fallback+'/select',{}).then(()=>refresh()).catch(e=>setError(String(e)));}}};
-  const resizePanePair=(leftId:string,rightId:string,delta:number)=>{const rect=document.querySelector('.workspace-content')?.getBoundingClientRect();if(!rect)return;setPanes(current=>resizeAdjacentPanes(current,leftId,rightId,delta,rect.width,168).panes);};
-  const beginResize=(event:React.PointerEvent<HTMLDivElement>,kind:'sidebar'|'pane',left?:string,right?:string)=>{event.preventDefault();event.currentTarget.setPointerCapture(event.pointerId);resizeRef.current={kind,x:event.clientX,width:kind==='sidebar'?(sidebarCollapsed?0:sidebarWidth):0,left,right,pointerId:event.pointerId};};
-  const moveResize=(event:React.PointerEvent<HTMLDivElement>)=>{const drag=resizeRef.current;if(!drag||drag.pointerId!==event.pointerId)return;const delta=event.clientX-drag.x;drag.x=event.clientX;if(drag.kind==='sidebar'){const width=drag.width+delta;drag.width=width;if(width<112){setSidebarCollapsed(true);return;}setSidebarCollapsed(false);setSidebarWidth(Math.max(112,Math.min(420,width)));return;}if(drag.left&&drag.right)resizePanePair(drag.left,drag.right,delta);};
-  const endResize=(event:React.PointerEvent<HTMLDivElement>)=>{if(resizeRef.current?.pointerId===event.pointerId)resizeRef.current=null;};
-  const setFilesFor=async(tab:string,files:FileList|null)=>{try{const added=await encodeAttachments(files,pendingAttachments[tab]||[]);setPendingAttachments(current=>({...current,[tab]:[...(current[tab]||[]),...added]}));setError('');}catch(e){setError(String(e));}};
-  const removeFileFor=(tab:string,index:number)=>setPendingAttachments(current=>({...current,[tab]:(current[tab]||[]).filter((_,i)=>i!==index)}));
-  const submit=async()=>{const submitted=prepareMarkdownSubmission(draft);if(sendingRef.current||sending||(!attachments.length&&submitted===null))return;const message=submitted||'';const sentAttachments=attachments;sendingRef.current=true;setSending(true);setError('');setDraft('');try{
-    if(active?.phase==='escalated')await api('/api/tasks/'+active.id+'/escalation',{message,attachments:sentAttachments});
-    else if(active)await api('/api/tasks/'+active.id+'/messages',{message,attachments:sentAttachments});
-    else {const created=await api<Task>('/api/tasks',{message,attachments:sentAttachments});if(created?.id){setTabs(current=>current.map(tab=>tab===activeTab?created.id:tab));setActiveTab(created.id);}}
-    setPendingAttachments(current=>({...current,[activeTab]:[]}));await refresh();
-  }catch(e){setError(String(e));setDraft(message);}finally{sendingRef.current=false;setSending(false);inputRef.current?.focus();}};
-  const submitSideTab=async(tab:string)=>{const submitted=prepareMarkdownSubmission(drafts[tab]||'');const files=pendingAttachments[tab]||[];if(sendingRef.current||sending||(!files.length&&submitted===null))return;const message=submitted||'';const task=state?.tasks.find(item=>item.id===tab);sendingRef.current=true;setSending(true);setError('');setDrafts(current=>({...current,[tab]:''}));try{if(task?.phase==='escalated')await api('/api/tasks/'+task.id+'/escalation',{message,attachments:files});else if(task)await api('/api/tasks/'+task.id+'/messages',{message,attachments:files});else{const created=await api<Task>('/api/tasks',{message,attachments:files});if(created?.id)setPanes(current=>current.map(pane=>pane.tabs.includes(tab)?{...pane,tabs:pane.tabs.map(item=>item===tab?created.id:item),activeTab:pane.activeTab===tab?created.id:pane.activeTab}:pane));}setPendingAttachments(current=>({...current,[tab]:[]}));await refresh();}catch(e){setError(String(e));setDrafts(current=>({...current,[tab]:message}));}finally{sendingRef.current=false;setSending(false);}};
-  const addBrowserAnnotation=(annotation:BrowserAnnotation,comment:string)=>{const block=formatBrowserAnnotation(annotation,comment);const current=drafts[activeTab]||'';setDraft(`${current.trim()}${current.trim()?'\n\n':''}${block}`);setWorkspaceMode('tasks');setDockMode(null);setError('Browser annotation added to the message draft.');};
-  const openSettings=()=>{setSettingsMounted(true);setSettingsOpen(true);};
-  const closeSettings=()=>setSettingsOpen(false);
-  const openSessionDialog=useCallback((kind:'rename'|'delete',taskId:string)=>{setSessionDialog({kind,taskId});setSessionDialogMounted(true);setSessionDialogOpen(true);},[]);
-  const closeSessionDialog=()=>setSessionDialogOpen(false);
-  const newTask=()=>openNewTab();
-  const stop=async()=>{if(!active)return;try{await api('/api/tasks/'+active.id+'/cancel',{});await refresh();}catch(e){setError(String(e));}};
-  const retryAgentMem=async(passId:string)=>{if(!active)return;setRetryingPassId(passId);setError('');try{await api('/api/tasks/'+active.id+'/passes/'+passId+'/agentmem/retry',{});await refresh();}catch(e){setError(String(e));}finally{setRetryingPassId('');}};
-  const settingsQueue=useRef<Promise<void>>(Promise.resolve());const settingsDraft=useRef<NonNullable<AppState>['settings']|null>(null);
-  const updateSettings=(patch:Partial<NonNullable<AppState>['settings']>)=>{if(!state)return Promise.resolve();const next={...(settingsDraft.current||state.settings),...patch};settingsDraft.current=next;settingsQueue.current=settingsQueue.current.then(async()=>{try{await api('/api/settings',next);await refresh();}catch(e){setError(String(e));}finally{if(settingsDraft.current===next)settingsDraft.current=null;}});return settingsQueue.current;};
-  const setModel=async(id:string)=>{const found=models.find(m=>m.id===id);if(!found)return;const effort=found.efforts.includes(state?.settings.orchestratorEffort||'')?state!.settings.orchestratorEffort:found.efforts.includes('high')?'high':found.efforts[0];await updateSettings({orchestratorModel:id,orchestratorEffort:effort});};
-  const approve=async(requestId:string|number,decision:'accept'|'decline'|'cancel')=>{if(!active)return;try{await api('/api/tasks/'+active.id+'/approval',{requestId,decision});await refresh();}catch(e){setError(String(e));}};
-  const selectTask=useCallback((id:string)=>{void openTaskTab(id);},[tabs]);
-  const renameSession=async(taskId:string,title:string)=>{try{await api('/api/tasks/'+taskId+'/rename',{title});await refresh();closeSessionDialog();}catch(e){setError(String(e));}};
-  const deleteSession=async(taskId:string)=>{try{await api('/api/tasks/'+taskId+'/delete',{});setPanes(current=>normalizePanes(current.map(pane=>{const next=pane.tabs.filter(tab=>tab!==taskId);return{...pane,tabs:next,activeTab:next.includes(pane.activeTab)?pane.activeTab:next[0]||pane.activeTab};}),makeFallbackTab));setDrafts(current=>{const next={...current};delete next[taskId];return next;});setPendingAttachments(current=>{const next={...current};delete next[taskId];return next;});await refresh();closeSessionDialog();}catch(e){setError(String(e));}};
-  if(loading)return <div className="boot"><div className="brand-mark">P</div><span>Starting Pseudoharness</span></div>;
-  const composerHint=active?.phase==='escalated'?'A decision will be sent to the hard-task orchestrator…':'Ask a question or describe work for the router to classify.';
-  const tabTasks=tabs.filter(tab=>tab.startsWith('new:')||state?.tasks.some(task=>task.id===tab));
-  const currentWorkerStatus=!active?'No active session':active.phase==='worker_running'?'Working':currentPass?.receipt?'Done':currentPass?.workerThreadId?'Ready':'Not started';
-  const openLatestChanges=()=>{if(!active)return;const pass=[...(active.passes||[])].reverse().find(item=>item.receipt);if(pass){setExpanded(value=>({...value,[`receipt:${pass.id}`]:true}));window.setTimeout(()=>document.querySelector('.conversation')?.scrollTo({top:document.querySelector('.conversation')?.scrollHeight||0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'}),80);}setInspector(false);};
-  return <div className={`app-shell ${sidebarCollapsed?'sidebar-collapsed':''}`} style={{'--sidebar-width':sidebarCollapsed?'0px':`${sidebarWidth}px`} as React.CSSProperties}>
-    <nav className="activity-rail" aria-label="App navigation"><button className="rail-toggle" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} aria-expanded={!sidebarCollapsed} aria-controls="primary-sidebar" onClick={()=>setSidebarCollapsed(value=>!value)}><PanelLeft size={17}/></button><button role="tab" aria-label="Sessions" aria-current={workspaceMode==='tasks'?'page':undefined} onClick={()=>{setWorkspaceMode('tasks');setDockMode(null);}}><FileText size={17}/></button><button role="tab" draggable aria-label="Browser" aria-current={workspaceMode==='browser'?'page':undefined} onDragStart={event=>{event.dataTransfer.setData('application/x-pseudoharness-workspace','browser');event.dataTransfer.effectAllowed='move';}} onClick={()=>{setWorkspaceMode('browser');setDockMode(null);}}><Globe size={17}/></button><button role="tab" draggable aria-label="GitHub" aria-current={workspaceMode==='github'?'page':undefined} onDragStart={event=>{event.dataTransfer.setData('application/x-pseudoharness-workspace','github');event.dataTransfer.effectAllowed='move';}} onClick={()=>{setWorkspaceMode('github');setDockMode(null);}}><GitBranch size={17}/></button><div className="rail-spacer"/><button aria-label="Settings" onClick={openSettings}><Settings2 size={17}/></button></nav>
-    <aside id="primary-sidebar" aria-label="Session explorer" className="sidebar" aria-hidden={sidebarCollapsed} inert={sidebarCollapsed}>
-      <div className="sidebar-tools"><span className="sidebar-title">Sessions</span><button className="icon-btn" aria-label="New session" onClick={newTask}><Plus size={16}/></button><button className="icon-btn" aria-label="Search sessions" onClick={()=>document.querySelector<HTMLInputElement>('.session-search')?.focus()}><Search size={15}/></button></div>
-      <input className="session-search" type="search" aria-label="Search sessions" placeholder="Filter sessions" onChange={event=>{const query=event.target.value.toLocaleLowerCase();document.querySelectorAll<HTMLElement>('.session-row').forEach(row=>{row.hidden=!!query&&!row.innerText.toLocaleLowerCase().includes(query);});}} />
-      <nav className="task-list" aria-label="Sessions">{state?.tasks.map(t=><SessionRow key={t.id} task={t} selected={panes.some(pane=>pane.activeTab===t.id)} onSelect={selectTask} onSessionAction={openSessionDialog}/>)}</nav>
-      <div className="sidebar-bottom"><button className="project-mini" aria-label={`${rootLabel(state?.settings.projectRoot)} project settings`} onClick={openSettings}><Folder size={15}/><span className="project-mini-text">{rootLabel(state?.settings.projectRoot)}</span></button></div>
-    </aside>
-    <div className="sidebar-resizer" role="separator" aria-label="Resize session explorer" aria-orientation="vertical" aria-valuemin={112} aria-valuenow={sidebarCollapsed?0:sidebarWidth} tabIndex={0} onPointerDown={event=>beginResize(event,'sidebar')} onPointerMove={moveResize} onPointerUp={endResize} onLostPointerCapture={endResize} onKeyDown={event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();const next=sidebarWidth+(event.key==='ArrowRight'?16:-16);if(next<112)setSidebarCollapsed(true);else{setSidebarCollapsed(false);setSidebarWidth(Math.min(420,next));}}}} />
-    <div className="workspace-area">
-    <main className="main-column">
-      <header className="topbar"><div className="document-tabs" role="tablist" aria-label="Open sessions" onDragOver={allowTabDrop} onDrop={dropTabOnStrip}>{tabTasks.map(tab=>{const task=state?.tasks.find(item=>item.id===tab);const selected=tab===activeTab;return <div className={`document-tab ${selected?'active':''} ${tabDropTarget===tab?'tab-drop-target':''}`} key={tab} data-session-tab={tab} draggable onDragStart={event=>{clearTabDrop();setDraggedTab(tab);event.dataTransfer.setData('application/x-pseudoharness-session-tab',tab);event.dataTransfer.effectAllowed='move';}} onDragEnd={()=>finishTabDrag(tab)} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-tab')){event.preventDefault();tabDropTargetRef.current=tab;setTabDropTarget(tab);}}} onDrop={event=>{const source=event.dataTransfer.getData('application/x-pseudoharness-session-tab');if(source){event.preventDefault();event.stopPropagation();moveTab(source,tab);}}}><button role="tab" aria-selected={selected} onClick={()=>{setActiveTab(tab);setWorkspaceMode('tasks');setDockMode(null);if(task)void api('/api/tasks/'+task.id+'/select',{}).then(()=>refresh()).catch(e=>setError(String(e)));}}><MessageSquarePlus size={13}/><span>{tab.startsWith('new:')?'New session':task?.title||'Session'}</span></button><button className="tab-close" aria-label={`Close ${tab.startsWith('new:')?'new session':task?.title||'session'} tab`} onClick={()=>closeTab(tab)}><X size={13}/></button></div>;})}<button className="new-tab" aria-label="Open new session tab" onClick={newTask}><Plus size={15}/></button></div><div className="top-actions">{busy&&workspaceMode==='tasks'&&<button className="stop-btn" onClick={stop}><Square size={12} fill="currentColor"/>Stop</button>}<button ref={inspectorTriggerRef} className="details-toggle" aria-label="Details" aria-expanded={inspector} aria-controls="task-inspector" disabled={workspaceMode!=='tasks'||!!dockMode} onClick={()=>{if(!inspector)setInspectorMounted(true);setInspector(value=>!value);setInspectorDetails(false);}}><PanelRight size={17}/></button></div></header>
-      <div className={`workspace-content mode-${workspaceMode} ${dockMode?'has-docked-workspace':''} ${panes.length>1?'has-session-panes has-side-session':''} ${panes.length>1&&panes[0].id!=='pane:root'?'side-left':''} ${draggedTab?'dragging-session':''}`} style={{gridTemplateColumns:panes.flatMap((pane,index)=>index<panes.length-1?[`minmax(0,${pane.weight}fr)`,'5px']:[`minmax(0,${pane.weight}fr)`]).join(' ')}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-workspace'))event.preventDefault();}} onDrop={event=>{const mode=event.dataTransfer.getData('application/x-pseudoharness-workspace');if(mode==='browser'||mode==='github'){event.preventDefault();setDockMode(mode);setWorkspaceMode('tasks');return;}const tab=event.dataTransfer.getData('application/x-pseudoharness-session-tab');if(tab){event.preventDefault();const rect=event.currentTarget.getBoundingClientRect();splitTab(tab,panes[0].id,event.clientX<rect.left+rect.width/2?'left':'right');}}}>
-      {panes.map((pane,index)=>{const tab=pane.activeTab;const task=tab.startsWith('new:')?null:state?.tasks.find(item=>item.id===tab)||null;const paneDraft=drafts[tab]||'';const files=pendingAttachments[tab]||[];const paneBusy=!!task&&['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(task.phase);const paneDisabled=(!paneDraft.trim()&&!files.length)||sending||!runtime;const col=index*2+1;return <div className="pane-grid-group" key={pane.id}>
-        {index>0&&<div className="workspace-resizer" role="separator" aria-label={`Resize pane ${index}`} aria-orientation="vertical" aria-valuemin={168} aria-valuenow={Math.round(pane.weight/(pane.weight+panes[index-1].weight)*100)} tabIndex={0} style={{gridColumn:col-1,gridRow:1}} onPointerDown={event=>beginResize(event,'pane',panes[index-1].id,pane.id)} onPointerMove={moveResize} onPointerUp={endResize} onLostPointerCapture={endResize} onKeyDown={event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();resizePanePair(panes[index-1].id,pane.id,(event.key==='ArrowRight'?1:-1)*24);}}}/>}
-        {index===0?<div className={`task-view pane-body ${!active?'new-tab-view':''} ${dropTarget?.paneId===pane.id?`drop-half-${dropTarget.half}`:''}`} style={{gridColumn:col,gridRow:1}} onDragOver={event=>{if((event.target as HTMLElement).closest('.side-session-heading'))return;if(event.dataTransfer.types.includes('application/x-pseudoharness-session-tab')){event.preventDefault();clearTabDrop();const rect=event.currentTarget.getBoundingClientRect();setDropTarget({paneId:pane.id,half:event.clientX<rect.left+rect.width/2?'left':'right'});}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setDropTarget(null);}} onDrop={event=>dropPane(event,pane.id)}>
-          {active?<div className="conversation" ref={scrollRef}>{active.messages.filter(message=>!message.passId).map(message=><ConversationMessage key={message.id} message={message}/>)}{active.passes?.map(pass=><PassPanel key={pass.id} pass={pass} messages={active.messages.filter(message=>message.passId===pass.id)} active={pass.id===active.currentPassId} task={active} assignmentExpanded={expanded[`assignment:${pass.id}`]??false} receiptExpanded={expanded[`receipt:${pass.id}`]??false} workerActivityExpanded={expanded[`workerActivity:${pass.id}`]??false} retrying={retryingPassId===pass.id} onRetryAgentMem={()=>retryAgentMem(pass.id)} toggleAssignment={()=>setExpanded(current=>({...current,[`assignment:${pass.id}`]:!current[`assignment:${pass.id}`]}))} toggleReceipt={()=>setExpanded(current=>({...current,[`receipt:${pass.id}`]:!current[`receipt:${pass.id}`]}))} toggleWorkerActivity={()=>setExpanded(current=>({...current,[`workerActivity:${pass.id}`]:!current[`workerActivity:${pass.id}`]}))}/>)}{active.approvalRequests?.map(request=><ApprovalCard key={String(request.requestId)} request={request} onDecision={decision=>approve(request.requestId,decision)}/>)}</div>:<div className="new-tab-actions"><button onClick={newTask}><MessageSquarePlus size={14}/>SESSION</button><button onClick={()=>{setWorkspaceMode('browser');setDockMode(null);}}><Globe size={14}/>BROWSER</button><button onClick={()=>{setWorkspaceMode('github');setDockMode(null);}}><GitBranch size={14}/>GITHUB</button><div className="new-tab-context">{rootLabel(state?.settings.projectRoot)} <span>·</span> {runtime?.codex.state==='connected'?'Connected':'Codex offline'}</div></div>}
-          <div className="composer-dock"><Composer value={draft} setValue={setDraft} submit={submit} disabled={!canSend} hint={composerHint} inputRef={inputRef} model={state?.settings.orchestratorModel||'gpt-6-sol'} effort={state?.settings.orchestratorEffort||'high'} approvalPolicy={state?.settings.approvalPolicy||'on-request'} models={models} workerReady={workerOk} configDisabled={busy||sending} onModelChange={setModel} onEffortChange={value=>void updateSettings({orchestratorEffort:value})} onApprovalChange={value=>void updateSettings({approvalPolicy:value})} busy={busy} attachments={attachments} onFiles={setFiles} onRemoveFile={removeFile}/></div>
-        </div>:<section className={`session-pane side-session-view pane-body ${dropTarget?.paneId===pane.id?`drop-half-${dropTarget.half}`:''}`} aria-label={`Session pane ${index+1}`} style={{gridColumn:col,gridRow:1}} onDragOver={event=>{if((event.target as HTMLElement).closest('.side-session-heading'))return;if(event.dataTransfer.types.includes('application/x-pseudoharness-session-tab')){event.preventDefault();clearTabDrop();const rect=event.currentTarget.getBoundingClientRect();setDropTarget({paneId:pane.id,half:event.clientX<rect.left+rect.width/2?'left':'right'});}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setDropTarget(null);}} onDrop={event=>{if((event.target as HTMLElement).closest('.side-session-heading'))return;dropPane(event,pane.id);}}>
-          <div className="side-session-heading" role="tablist" aria-label={index===1?'Side pane sessions':`Pane ${index+1} sessions`} onDragOver={allowTabDrop} onDrop={dropTabOnStrip}>{pane.tabs.map(item=>{const itemTask=state?.tasks.find(candidate=>candidate.id===item);return <div className={`document-tab ${pane.activeTab===item?'active':''} ${tabDropTarget===item?'tab-drop-target':''}`} key={item} data-session-tab={item} draggable onDragStart={event=>{clearTabDrop();setDraggedTab(item);event.dataTransfer.setData('application/x-pseudoharness-session-tab',item);event.dataTransfer.effectAllowed='move';}} onDragEnd={()=>finishTabDrag(item)} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-tab')){event.preventDefault();tabDropTargetRef.current=item;setTabDropTarget(item);}}} onDrop={event=>{const source=event.dataTransfer.getData('application/x-pseudoharness-session-tab');if(source){event.preventDefault();event.stopPropagation();moveTab(source,item);}}}><button role="tab" aria-selected={pane.activeTab===item} onClick={()=>{setPaneActive(pane.id,item);if(itemTask)void api('/api/tasks/'+item+'/select',{}).then(()=>refresh()).catch(e=>setError(String(e)));}}><span>{item.startsWith('new:')?'New session':itemTask?.title||'Session'}</span></button><button className="tab-close" aria-label={`Close ${item.startsWith('new:')?'new session':itemTask?.title||'session'} tab`} onClick={()=>closeTab(item)}><X size={13}/></button></div>;})}<button className="new-tab" aria-label={index===1?'New session in side pane':`New session in pane ${index+1}`} onClick={()=>{const id=makeFallbackTab();setPaneTabs(pane.id,current=>[...current,id]);setPaneActive(pane.id,id);}}><Plus size={15}/></button></div>
-          <div className="conversation">{task?.messages.filter(message=>!message.passId).map(message=><ConversationMessage key={message.id} message={message}/>)}{task?.passes?.map(pass=><PassPanel key={pass.id} pass={pass} messages={task.messages.filter(message=>message.passId===pass.id)} active={pass.id===task.currentPassId} task={task} assignmentExpanded={false} receiptExpanded={false} workerActivityExpanded={false} retrying={false} onRetryAgentMem={()=>{}} toggleAssignment={()=>{}} toggleReceipt={()=>{}} toggleWorkerActivity={()=>{}}/>)}{!task&&drafts[tab]&&<div className="message user-message">{drafts[tab]}</div>}</div>
-          <div className="composer-dock side-composer-dock"><Composer value={paneDraft} setValue={value=>setDrafts(current=>({...current,[tab]:value}))} submit={()=>submitSideTab(tab)} disabled={paneDisabled} hint={composerHint} inputRef={paneInputRef(pane.id)} model={state?.settings.orchestratorModel||'gpt-6-sol'} effort={state?.settings.orchestratorEffort||'high'} approvalPolicy={state?.settings.approvalPolicy||'on-request'} models={models} workerReady={workerOk} configDisabled={paneBusy||sending} onModelChange={setModel} onEffortChange={value=>void updateSettings({orchestratorEffort:value})} onApprovalChange={value=>void updateSettings({approvalPolicy:value})} busy={paneBusy} attachments={files} onFiles={selected=>setFilesFor(tab,selected)} onRemoveFile={index=>removeFileFor(tab,index)}/></div>
-        </section>}</div>;})}
-      <EmbeddedWorkspace mode={workspaceMode==='github'?'github':dockMode||'browser'} task={active} placement={workspaceMode==='tasks'?'side':'full'} docked={workspaceMode==='tasks'&&!!dockMode} onSummary={()=>{setWorkspaceMode('tasks');setDockMode(null);}} onAnnotation={addBrowserAnnotation} />
-      </div>
-    </main>
-    {workspaceMode==='tasks'&&inspectorMounted&&<aside id="task-inspector" aria-label="Session details" className={`inspector inspector-popover ${inspectorDetails?'details-open':''}`} data-open={inspector} aria-hidden={!inspector} inert={!inspector}><header><span>{active?.userRoot?rootLabel(active.userRoot):rootLabel(state?.settings.projectRoot)}</span><button className="icon-btn" aria-label="Close details" onClick={()=>{setInspector(false);inspectorTriggerRef.current?.focus();}}><X size={15}/></button></header><button className="inspector-action" onClick={openLatestChanges}><FileText size={15}/><span>Changes</span><ChevronRight size={14}/></button><section className="inspector-summary"><span>Subagents</span><div><Activity size={15}/><strong>{currentWorkerStatus}</strong>{currentPass?.workerThreadId&&<small>gpt-6-luna · high</small>}</div></section><section className="inspector-summary sources-summary"><span>Sources</span><div><span className={`tiny-dot ${state?.settings.agentmemProjectId&&runtime?.agentmem.projectVerified?'online':'offline'}`}/><strong>AgentMem</strong><small>{!state?.settings.agentmemProjectId?'Disabled':runtime?.agentmem.projectVerified?'Connected':'Unavailable'}</small></div></section><button className="inspector-view-all" onClick={()=>setInspectorDetails(value=>!value)}>{inspectorDetails?'Hide details':'View all'} <ChevronRight size={14}/></button><div className="inspector-details-shell" data-open={inspectorDetails} aria-hidden={!inspectorDetails} inert={!inspectorDetails}><div className="inspector-scroll"><div className="inspect-section"><div className="inspect-label">Status</div><div className="inspect-phase"><span className={`phase-indicator ${active?.phase||'intake'}`}/>{active?(phaseText[active.phase]||active.phase):'No active session'}</div><p className="inspect-help">{active?.phase==='worker_running'?'The orchestrator is dormant until your input, an explicit decision escalation, or the worker receipt.':'Only a validated structured outcome can advance this task.'}</p></div>{currentPass?.routeDecision&&<div className="inspect-section"><div className="inspect-label">Routing decision</div><div className="model-row"><span>Route</span><b>{(currentPass.routeDecision.effectiveRoute||currentPass.routeDecision.route).replaceAll('_',' ')}</b></div><div className="model-row"><span>Rule</span><b>{currentPass.routeDecision.rule_id}</b></div><div className="model-row"><span>Router</span><b>{currentPass.routeDecision.model} · {currentPass.routeDecision.effort} · {currentPass.routeDecision.speed}</b></div><p className="inspect-help">{currentPass.routeDecision.justification}</p>{currentPass.routeDecision.fallback&&<p className="inspect-help">Conservative fallback after invalid routing output or a routing-only tool violation.</p>}</div>}<div className="inspect-section"><div className="inspect-label">Models for hard tasks</div><div className="model-row"><span>Orchestrator</span><b>{state?.settings.orchestratorModel}</b></div><div className="model-row"><span>Reasoning effort</span><b>{state?.settings.orchestratorEffort}</b></div><div className="model-row"><span>Worker</span><b>gpt-6-luna · high</b></div><button className="text-button" onClick={openSettings}>Change settings <ChevronRight size={13}/></button></div><div className="inspect-section"><div className="inspect-label">Current project settings</div><div className="project-path">{state?.settings.projectRoot||'Choose a project root'}</div><div className="model-row"><span>AgentMem for new tasks</span><b>{state?.settings.agentmemProjectId||'Disabled'}</b></div><div className="model-row"><span>AgentMem status</span><b>{!state?.settings.agentmemProjectId?'Disabled':runtime?.agentmem.projectVerified&&runtime.agentmem.detail.includes(state.settings.agentmemProjectId)?'Connected':runtime?.agentmem.connected?'Selected · not verified':'Unavailable'}</b></div><button className="text-button" onClick={openSettings}>Project settings <ChevronRight size={13}/></button></div>{active&&<><div className="inspect-section historical-context"><div className="inspect-label">This session used</div><div className="project-path">{active.userRoot||'Project root not recorded'}</div><div className="model-row"><span>AgentMem project</span><b>{active.agentmemProjectId||'Disabled'}</b></div>{active.agentmemTaskId&&<><div className="model-row"><span>AgentMem task receipt</span><b>{active.agentmemRecordStatus==='done'?'AgentMem task done':active.agentmemRecordStatus==='released'?'Ownership released':active.agentmemRecordStatus==='failed'?'Save failed':active.receipt?.status==='blocked'&&active.agentmemRecordStatus?'Saved · task blocked; lease released':active.agentmemRecordStatus==='saving'?'Saving receipt…':active.agentmemRecordStatus==='in_progress'?'Receipt saved · task open':active.agentmemRecordStatus?'Saved · completion pending':'Work record open'}</b></div>{active.agentmemRecordError&&<p className="inspect-help">{active.agentmemRecordError}</p>}</>}</div><Disclosure title="Current pass session IDs" icon={<Command size={14}/>} open={expanded.session||false} onToggle={()=>setExpanded(x=>({...x,session:!x.session}))}><SessionIdRow role="Router" threadId={currentPass?.routerThreadId}/><SessionIdRow role="Direct" threadId={currentPass?.directThreadId}/><SessionIdRow role="Simple" threadId={currentPass?.simpleThreadId}/><SessionIdRow role="Orchestrator" threadId={currentPass?currentPass.orchestratorThreadId:active.orchestratorThreadId}/><SessionIdRow role="Worker" threadId={currentPass?currentPass.workerThreadId:active.workerThreadId}/></Disclosure></>}<div className="scope-note"><ShieldCheck size={14}/><span>{state?.settings.approvalPolicy==='full-access'?'Hard-task roles use full access. Router and direct-answer roles stay read-only; simple writes stay inside the selected project root.':'Router and direct-answer roles stay read-only; simple writes stay inside the project root; hard-task roles follow the selected approval policy.'}</span></div></div></div></aside>}
+export default function App() {
+  const [state, setState] = useState<AppState | null>(null);
+  const [runtime, setRuntime] = useState<Runtime | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [pendingAttachments, setPendingAttachments] = useState<Record<string, TaskAttachment[]>>({});
+  const [panes, setPanes] = useState<SessionPane[]>([{ id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 }]);
+  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabRegistry>({});
+  const [focusedPaneId, setFocusedPaneId] = useState('pane:root');
+  const [tabErrors, setTabErrors] = useState<Record<string, string>>({});
+  const [headsUpOpen, setHeadsUpOpen] = useState<Record<string, boolean>>({});
+  const [sendingTabs, setSendingTabs] = useState<Record<string, boolean>>({});
+  const [draggedTab, setDraggedTab] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ paneId: string; half: 'left' | 'right' } | null>(null);
+  const [tabDropTarget, setTabDropTarget] = useState<string | null>(null);
+  const [sessionArrival, setSessionArrival] = useState('');
+  const [closingTabs, setClosingTabs] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsMounted, setSettingsMounted] = useState(false);
+  const [sessionDialog, setSessionDialog] = useState<{ kind: 'rename' | 'delete'; taskId: string } | null>(null);
+  const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
+  const [sessionDialogMounted, setSessionDialogMounted] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(296);
+  const [retryingPassId, setRetryingPassId] = useState('');
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [query, setQuery] = useState('');
+  const paneInputRefs = useRef<Record<string, any>>({});
+  const headsUpTriggerRefs = useRef<Record<string, any>>({});
+  const sessionScrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const scrollMemory = useRef<Record<string, { messages: number; reasoning: number }>>({});
+  const nearBottom = useRef<Record<string, boolean>>({});
+  const sendingRef = useRef<Set<string>>(new Set());
+  const handledWorkspaceCommand = useRef<Set<string>>(new Set());
+  const resizeRef = useRef<any>(null);
+  const tabDropTargetRef = useRef<string | null>(null);
+  const closeTimers = useRef<Record<string, number>>({});
+  const settingsQueue = useRef(Promise.resolve());
+  const settingsDraft = useRef<Settings | null>(null);
+  const rootPane = panes[0] || { id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 };
+  const models = useMemo(() => runtime?.codex.models || [], [runtime]);
+
+  const taskForTab = (id: string): Task | null => state?.tasks.find(task => task.id === id) || null;
+  const setTabError = (id: string, message: string) => setTabErrors(current => ({ ...current, [id]: message }));
+  const clearTabError = (id: string) => setTabErrors(current => {
+    if (!(id in current)) return current;
+    const next = { ...current };
+    delete next[id];
+    return next;
+  });
+  const tabInputRef = (id: string) => paneInputRefs.current[id] ??= createRef();
+  const headsUpTriggerRef = (id: string) => headsUpTriggerRefs.current[id] ??= createRef<HTMLButtonElement>();
+  const setPaneTabs = (paneId: string, value: string[] | ((current: string[]) => string[])) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, tabs: typeof value === 'function' ? value(pane.tabs) : value } : pane));
+  const setPaneActive = (paneId: string, tab: string) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, activeTab: tab } : pane));
+  const refresh = async () => {
+    try {
+      const value = await api('/api/state');
+      setState(value.state);
+      setRuntime(value.runtime);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+  const openSettings = () => {
+    setSettingsMounted(true);
+    setSettingsOpen(true);
+  };
+  const closeSettings = () => setSettingsOpen(false);
+  const openSessionDialog = useCallback((kind: 'rename' | 'delete', taskId: string) => {
+    setSessionDialog({ kind, taskId });
+    setSessionDialogMounted(true);
+    setSessionDialogOpen(true);
+  }, []);
+  const closeSessionDialog = () => setSessionDialogOpen(false);
+  const makeTabArrival = (id: string) => {
+    setSessionArrival(id);
+    window.setTimeout(() => setSessionArrival(current => current === id ? '' : current), 280);
+  };
+  const activateSessionTab = (id: string) => {
+    const existing = panes.find(pane => pane.tabs.includes(id));
+    const target = existing || panes.find(pane => pane.id === focusedPaneId) || rootPane;
+    if (!existing) setPaneTabs(target.id, current => current.includes(id) ? current : [...current, id]);
+    setPaneActive(target.id, id);
+    setFocusedPaneId(target.id);
+    if (!id.startsWith('new:')) {
+      void api('/api/tasks/' + id + '/select', {}).then(() => refresh()).catch(cause => setTabError(id, String(cause)));
+    }
+  };
+  const openNewTabInPane = (requestedPaneId: string) => {
+    const paneId = panes.some(pane => pane.id === requestedPaneId) ? requestedPaneId : rootPane.id;
+    const id = makeFallbackTab();
+    setPaneTabs(paneId, current => [...current, id]);
+    setPaneActive(paneId, id);
+    setFocusedPaneId(paneId);
+    clearTabError(id);
+    makeTabArrival(id);
+    window.setTimeout(() => paneInputRefs.current[id]?.current?.focus(), 0);
+  };
+  const openNewTab = () => openNewTabInPane(panes.some(pane => pane.id === focusedPaneId) ? focusedPaneId : rootPane.id);
+  const openWorkspaceTab = (
+    kind: Exclude<WorkspaceTabRecord['kind'], 'session'>,
+    requestedPaneId: string,
+    contextTabId: string | null,
+    initialUrl?: string,
+  ) => {
+    const paneId = panes.some(pane => pane.id === requestedPaneId) ? requestedPaneId : rootPane.id;
+    const currentWorkspace = contextTabId ? workspaceTabs[contextTabId] : undefined;
+    const originTabId = currentWorkspace
+      ? currentWorkspace.originTabId
+      : contextTabId && workspaceTabKind(contextTabId) === 'session' ? contextTabId : null;
+    const originTaskId = originTabId && !originTabId.startsWith('new:') ? originTabId : null;
+    const originTask = originTaskId ? taskForTab(originTaskId) : null;
+    const projectRoot = currentWorkspace?.projectRoot || originTask?.userRoot || state?.settings.projectRoot || '';
+    const id = createWorkspaceTabId(kind, Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9));
+    const record = createWorkspaceTabRecord(kind, id, {
+      originTabId,
+      projectRoot,
+      ...(kind === 'browser' && initialUrl ? { initialUrl } : {}),
+      ...(kind === 'git' && initialUrl ? { focusUrl: initialUrl } : {}),
+    });
+    setWorkspaceTabs(current => registerWorkspaceTab(current, record));
+    setPaneTabs(paneId, current => [...current, id]);
+    setPaneActive(paneId, id);
+    setFocusedPaneId(paneId);
+    makeTabArrival(id);
+    return id;
+  };
+  const updateWorkspaceOrigins = (oldTabId: string, taskId: string) => {
+    setWorkspaceTabs(current => {
+      let changed = false;
+      const next: Record<string, WorkspaceTabRecord> = { ...current };
+      for (const [id, tab] of Object.entries(current)) {
+        if (tab.originTabId !== oldTabId) continue;
+        next[id] = { ...tab, originTabId: taskId, originTaskId: taskId };
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  };
+  const addBrowserAnnotation = (record: WorkspaceTabRecord, annotation: BrowserAnnotation, comment: string) => {
+    const target = record.originTabId;
+    if (!target) {
+      setError('This Browser tab has no originating session to receive an annotation.');
+      return;
+    }
+    if (record.originTaskId && !taskForTab(record.originTaskId)) {
+      setError('The session that opened this Browser tab was deleted; the annotation was not redirected.');
+      return;
+    }
+    const block = formatBrowserAnnotation(annotation, comment);
+    setDrafts(current => {
+      const previous = current[target] || '';
+      return { ...current, [target]: previous.trim() + (previous.trim() ? '\n\n' : '') + block };
+    });
+    setTabError(target, 'Browser annotation added to this session draft.');
+    activateSessionTab(target);
+  };
+  const returnToOrigin = (record: WorkspaceTabRecord | undefined) => {
+    if (!record?.originTabId) return;
+    if (record.originTaskId && !taskForTab(record.originTaskId)) {
+      setError('The originating session was deleted.');
+      return;
+    }
+    activateSessionTab(record.originTabId);
+  };
+  const openTaskTab = (id: string) => activateSessionTab(id);
+  const clearTabDrop = () => {
+    tabDropTargetRef.current = null;
+    setTabDropTarget(null);
+  };
+  const readDraggedTab = (dataTransfer: DataTransfer) => dataTransfer.getData('application/x-pseudoharness-workspace-tab') || dataTransfer.getData('application/x-pseudoharness-session-tab');
+  const tabUnderPointer = (event: React.DragEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null;
+    const fromTarget = target?.closest<HTMLElement>('[data-workspace-tab]') || target?.closest<HTMLElement>('[data-session-tab]');
+    const point = document.elementFromPoint?.(event.clientX, event.clientY) as HTMLElement | null;
+    const fromPoint = point?.closest<HTMLElement>('[data-workspace-tab]') || point?.closest<HTMLElement>('[data-session-tab]');
+    const direct = fromTarget && event.currentTarget.contains(fromTarget) ? fromTarget : fromPoint && event.currentTarget.contains(fromPoint) ? fromPoint : null;
+    if (direct) return direct.dataset.workspaceTab || direct.dataset.sessionTab || null;
+    const candidates = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[data-workspace-tab], [data-session-tab]'));
+    const nearest = candidates.reduce<HTMLElement | null>((best, item) => {
+      if (!best) return item;
+      const distance = Math.abs(item.getBoundingClientRect().left + item.getBoundingClientRect().width / 2 - event.clientX);
+      const bestDistance = Math.abs(best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2 - event.clientX);
+      return distance < bestDistance ? item : best;
+    }, null);
+    return nearest?.dataset.workspaceTab || nearest?.dataset.sessionTab || null;
+  };
+  const allowTabDrop = (event: React.DragEvent<HTMLElement>) => {
+    const types = Array.from(event.dataTransfer.types);
+    if (types.includes('application/x-pseudoharness-workspace-tab') || types.includes('application/x-pseudoharness-session-tab')) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      const target = tabUnderPointer(event);
+      tabDropTargetRef.current = target;
+      setTabDropTarget(target);
+    }
+  };
+  const moveTab = (source: string, target: string) => {
+    clearTabDrop();
+    setDraggedTab(null);
+    setDropTarget(null);
+    const pane = panes.find(item => item.tabs.includes(target));
+    if (pane) setFocusedPaneId(pane.id);
+    setPanes(current => moveTabToTab(current, source, target));
+  };
+  const dropTabOnStrip = (event: React.DragEvent<HTMLElement>) => {
+    const source = readDraggedTab(event.dataTransfer);
+    const target = tabUnderPointer(event) || tabDropTargetRef.current;
+    if (!source || !target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    moveTab(source, target);
+  };
+  const finishTabDrag = (source: string) => {
+    const target = tabDropTargetRef.current;
+    clearTabDrop();
+    setDraggedTab(null);
+    setDropTarget(null);
+    if (target && target !== source) moveTab(source, target);
+  };
+  const splitTab = (source: string, targetPaneId: string, side: 'left' | 'right') => {
+    clearTabDrop();
+    setDraggedTab(null);
+    setDropTarget(null);
+    setPanes(current => {
+      const sourceIndex = current.findIndex(pane => pane.tabs.includes(source));
+      const target = current.find(pane => pane.id === targetPaneId);
+      if (sourceIndex < 0 || !target) return current;
+      const rect = document.querySelector('.workspace-content')?.getBoundingClientRect();
+      const total = current.reduce((sum, pane) => sum + pane.weight, 0);
+      const targetWidth = rect ? rect.width * target.weight / total : 0;
+      if (targetWidth < 336) return current;
+      const next = [...current];
+      const sourcePane = next[sourceIndex];
+      const remaining = sourcePane.tabs.filter(tab => tab !== source);
+      if (remaining.length) next[sourceIndex] = { ...sourcePane, tabs: remaining, activeTab: remaining.includes(sourcePane.activeTab) ? sourcePane.activeTab : remaining[0] };
+      else if (next.length === 1 || sourcePane.id === targetPaneId) {
+        const fallback = makeFallbackTab();
+        next[sourceIndex] = { ...sourcePane, tabs: [fallback], activeTab: fallback };
+      } else next.splice(sourceIndex, 1);
+      return splitPane(next, source, targetPaneId, side, makePaneId(), true);
+    });
+    setFocusedPaneId(targetPaneId);
+  };
+  const dropPane = (event: React.DragEvent<HTMLElement>, paneId: string) => {
+    const mode = event.dataTransfer.getData('application/x-pseudoharness-workspace');
+    if (mode) {
+      const kind = workspaceKindForMode(mode);
+      if (kind) {
+        event.preventDefault();
+        event.stopPropagation();
+        const pane = panes.find(item => item.id === paneId);
+        openWorkspaceTab(kind, paneId, pane?.activeTab || null);
+        return;
+      }
+    }
+    const tab = readDraggedTab(event.dataTransfer);
+    if (!tab) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    splitTab(tab, paneId, event.nativeEvent.clientX < rect.left + rect.width / 2 ? 'left' : 'right');
+  };
+  const closeTab = (id: string) => {
+    if (closeTimers.current[id]) return;
+    setClosingTabs(current => ({ ...current, [id]: true }));
+    closeTimers.current[id] = window.setTimeout(() => {
+      delete closeTimers.current[id];
+      const group = panes.find(pane => pane.tabs.includes(id));
+      const wasActive = group?.activeTab === id;
+      if (wasActive && group) {
+        const index = group.tabs.indexOf(id);
+        const fallback = group.tabs[index > 0 ? index - 1 : 1];
+        if (fallback && workspaceTabKind(fallback) === 'session' && !fallback.startsWith('new:')) {
+          void api('/api/tasks/' + fallback + '/select', {}).then(() => refresh()).catch(cause => setTabError(fallback, String(cause)));
+        } else if (!fallback && panes.length > 1) {
+          const groupIndex = panes.findIndex(pane => pane.id === group.id);
+          const neighbor = panes[groupIndex === 0 ? 1 : Math.max(0, groupIndex - 1)];
+          const neighborTab = neighbor?.activeTab;
+          if (neighborTab && workspaceTabKind(neighborTab) === 'session' && !neighborTab.startsWith('new:')) {
+            void api('/api/tasks/' + neighborTab + '/select', {}).then(() => refresh()).catch(cause => setTabError(neighborTab, String(cause)));
+          }
+        }
+      }
+      setPanes(current => closePaneTab(current, id, makeFallbackTab));
+      setWorkspaceTabs(current => removeWorkspaceTab(current, id));
+      setDrafts(current => { const next = { ...current }; delete next[id]; return next; });
+      setPendingAttachments(current => { const next = { ...current }; delete next[id]; return next; });
+      setTabErrors(current => { const next = { ...current }; delete next[id]; return next; });
+      setHeadsUpOpen(current => { const next = { ...current }; delete next[id]; return next; });
+      delete paneInputRefs.current[id];
+      delete headsUpTriggerRefs.current[id];
+      setClosingTabs(current => { const next = { ...current }; delete next[id]; return next; });
+      if (wasActive && group && group.tabs.length === 1 && panes.length > 1) {
+        const groupIndex = panes.findIndex(pane => pane.id === group.id);
+        const neighbor = panes[groupIndex === 0 ? 1 : Math.max(0, groupIndex - 1)];
+        if (neighbor) setFocusedPaneId(neighbor.id);
+      }
+    }, 180);
+  };
+  const setFilesFor = async (tab: string, files: FileList | null) => {
+    try {
+      const added = await encodeAttachments(files, pendingAttachments[tab] || []);
+      setPendingAttachments(current => ({ ...current, [tab]: [...(current[tab] || []), ...added] }));
+      clearTabError(tab);
+    } catch (cause) {
+      setTabError(tab, String(cause));
+    }
+  };
+  const removeFileFor = (tab: string, index: number) => setPendingAttachments(current => ({ ...current, [tab]: (current[tab] || []).filter((_, item) => item !== index) }));
+  const submitTab = async (tab: string) => {
+    const submitted = prepareMarkdownSubmission(drafts[tab] || '');
+    const files = pendingAttachments[tab] || [];
+    const task = taskForTab(tab);
+    if (sendingRef.current.has(tab) || (!files.length && submitted === null)) return;
+    const message = submitted || '';
+    sendingRef.current.add(tab);
+    setSendingTabs(current => ({ ...current, [tab]: true }));
+    clearTabError(tab);
+    setDrafts(current => ({ ...current, [tab]: '' }));
+    try {
+      if (task?.phase === 'escalated') await api('/api/tasks/' + task.id + '/escalation', { message, attachments: files });
+      else if (task) await api('/api/tasks/' + task.id + '/messages', { message, attachments: files });
+      else {
+        const created = await api('/api/tasks', { message, attachments: files });
+        if (created?.id) {
+          setPanes(current => current.map(pane => pane.tabs.includes(tab)
+            ? { ...pane, tabs: pane.tabs.map(item => item === tab ? created.id : item), activeTab: pane.activeTab === tab ? created.id : pane.activeTab }
+            : pane));
+          updateWorkspaceOrigins(tab, created.id);
+          setState(current => current ? { ...current, tasks: [created, ...current.tasks.filter(item => item.id !== created.id)] } : current);
+          makeTabArrival(created.id);
+        }
+      }
+      setPendingAttachments(current => { const next = { ...current }; delete next[tab]; return next; });
+      setDrafts(current => { const next = { ...current }; delete next[tab]; return next; });
+      await refresh();
+    } catch (cause) {
+      setTabError(tab, String(cause));
+      setDrafts(current => ({ ...current, [tab]: message }));
+    } finally {
+      sendingRef.current.delete(tab);
+      setSendingTabs(current => { const next = { ...current }; delete next[tab]; return next; });
+    }
+  };
+  const stopTask = async (taskId: string) => {
+    try {
+      await api('/api/tasks/' + taskId + '/cancel', {});
+      await refresh();
+    } catch (cause) {
+      setTabError(taskId, String(cause));
+    }
+  };
+  const retryAgentMemFor = async (taskId: string, passId: string) => {
+    setRetryingPassId(passId);
+    clearTabError(taskId);
+    try {
+      await api('/api/tasks/' + taskId + '/passes/' + passId + '/agentmem/retry', {});
+      await refresh();
+    } catch (cause) {
+      setTabError(taskId, String(cause));
+    } finally {
+      setRetryingPassId('');
+    }
+  };
+  const approveTask = async (taskId: string, requestId: string | number, decision: 'accept' | 'decline' | 'cancel') => {
+    try {
+      await api('/api/tasks/' + taskId + '/approval', { requestId, decision });
+      await refresh();
+    } catch (cause) {
+      setTabError(taskId, String(cause));
+    }
+  };
+  const updateSettings = (patch: Partial<Settings>) => {
+    if (!state) return Promise.resolve();
+    const next = { ...(settingsDraft.current || state.settings), ...patch };
+    settingsDraft.current = next;
+    settingsQueue.current = settingsQueue.current.then(async () => {
+      try {
+        await api('/api/settings', next);
+        await refresh();
+      } catch (cause) {
+        setError(String(cause));
+      } finally {
+        if (settingsDraft.current === next) settingsDraft.current = null;
+      }
+    });
+    return settingsQueue.current;
+  };
+  const setModel = async (id: string) => {
+    const found = models.find(model => model.id === id);
+    if (!found) return;
+    const currentEffort = state?.settings.orchestratorEffort || '';
+    const effort = found.efforts.includes(currentEffort) ? currentEffort : found.efforts.includes('high') ? 'high' : found.efforts[0] || '';
+    await updateSettings({ orchestratorModel: id, orchestratorEffort: effort });
+  };
+  const renameSession = async (taskId: string, title: string) => {
+    try {
+      await api('/api/tasks/' + taskId + '/rename', { title });
+      await refresh();
+      closeSessionDialog();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+  const deleteSession = async (taskId: string) => {
+    try {
+      await api('/api/tasks/' + taskId + '/delete', {});
+      setPanes(current => normalizePanes(current.map(pane => {
+        const next = pane.tabs.filter(tab => tab !== taskId);
+        return { ...pane, tabs: next, activeTab: next.includes(pane.activeTab) ? pane.activeTab : next[0] || pane.activeTab };
+      }), makeFallbackTab));
+      setDrafts(current => { const next = { ...current }; delete next[taskId]; return next; });
+      setPendingAttachments(current => { const next = { ...current }; delete next[taskId]; return next; });
+      setTabErrors(current => { const next = { ...current }; delete next[taskId]; return next; });
+      await refresh();
+      closeSessionDialog();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+  const selectTask = (id: string) => openTaskTab(id);
+
+  useEffect(() => {
+    let alive = true;
+    bootstrap().then(value => {
+      if (!alive) return;
+      setState(value.state);
+      setRuntime(value.runtime);
+      if (value.state.activeTaskId) {
+        const id = value.state.activeTaskId;
+        setPanes([{ id: 'pane:root', tabs: [id], activeTab: id, weight: 1 }]);
+      }
+      if (!value.state.settings.projectRoot) {
+        setSettingsMounted(true);
+        setSettingsOpen(true);
+      }
+      setLoading(false);
+    }).catch(cause => {
+      if (alive) {
+        setError(String(cause));
+        setLoading(false);
+      }
+    });
+    const source = new EventSource('/events');
+    source.onmessage = event => {
+      try {
+        const value = JSON.parse(event.data);
+        if (value.state && alive) {
+          setState(value.state);
+          setRuntime(value.runtime);
+        }
+      } catch {
+      }
+    };
+    source.onerror = () => { if (alive) void refresh(); };
+    const timer = setInterval(() => void refresh(), 10_000);
+    return () => {
+      alive = false;
+      source.close();
+      clearInterval(timer);
+    };
+  }, []);
+  useEffect(() => {
+    if (settingsOpen || !settingsMounted) return;
+    const timer = window.setTimeout(() => setSettingsMounted(false), 110);
+    return () => window.clearTimeout(timer);
+  }, [settingsOpen, settingsMounted]);
+  useEffect(() => {
+    if (sessionDialogOpen || !sessionDialogMounted) return;
+    const timer = window.setTimeout(() => {
+      setSessionDialogMounted(false);
+      setSessionDialog(null);
+    }, 110);
+    return () => window.clearTimeout(timer);
+  }, [sessionDialogOpen, sessionDialogMounted]);
+  useEffect(() => {
+    for (const pane of panes) {
+      for (const id of pane.tabs) {
+        if (workspaceTabKind(id) !== 'session' || id.startsWith('new:')) continue;
+        const task = taskForTab(id);
+        const element = sessionScrollRefs.current[id];
+        if (!task || !element) continue;
+        const messages = task.messages.length + (task.passes?.length || 0);
+        const reasoning = (task.reasoningSummaries || []).reduce((total, item) => total + item.text.length, 0)
+          + (task.reasoningRawContent || []).reduce((total, item) => total + item.text.length, 0);
+        const previous = scrollMemory.current[id];
+        const selected = pane.activeTab === id;
+        if (!previous || selected && (messages !== previous.messages || reasoning !== previous.reasoning) && nearBottom.current[id] !== false) {
+          element.scrollTop = element.scrollHeight;
+          nearBottom.current[id] = true;
+        }
+        scrollMemory.current[id] = { messages, reasoning };
+      }
+    }
+    const openIds = new Set(panes.flatMap(pane => pane.tabs));
+    for (const id of Object.keys(scrollMemory.current)) {
+      if (openIds.has(id)) continue;
+      delete scrollMemory.current[id];
+      delete nearBottom.current[id];
+      delete sessionScrollRefs.current[id];
+    }
+  }, [panes, state?.tasks]);
+  useEffect(() => {
+    for (const pane of panes) {
+      if (workspaceTabKind(pane.activeTab) !== 'session') continue;
+      const task = taskForTab(pane.activeTab);
+      const command = task?.workspaceCommand;
+      if (!command) continue;
+      const key = task.id + ':' + command.id;
+      if (handledWorkspaceCommand.current.has(key)) continue;
+      const kind = workspaceKindForMode(String(command.mode || ''));
+      if (!kind) continue;
+      handledWorkspaceCommand.current.add(key);
+      const requestedUrl = typeof (command as { url?: unknown }).url === 'string' ? (command as { url: string }).url : undefined;
+      openWorkspaceTab(kind, pane.id, pane.activeTab, requestedUrl);
+    }
+  }, [panes, state?.tasks]);
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        openNewTab();
+      }
+    };
+    window.addEventListener('keydown', onShortcut);
+    return () => window.removeEventListener('keydown', onShortcut);
+  }, []);
+
+  if (loading) return <div className="boot"><div className="brand-mark">P</div><span>Starting Pseudoharness</span></div>;
+
+  const paneComposer = (tab: string, task: Task | null) => {
+    const value = drafts[tab] || '';
+    const files = pendingAttachments[tab] || [];
+    const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
+    const disabled = !value.trim() && !files.length || !!sendingTabs[tab] || !runtime;
+    return <Composer
+      value={value}
+      setValue={next => setDrafts(current => ({ ...current, [tab]: next }))}
+      submit={() => void submitTab(tab)}
+      disabled={disabled}
+      hint={task?.phase === 'escalated' ? 'A decision will be sent to this session’s orchestrator…' : 'Ask a question or describe work for the router to classify.'}
+      inputRef={tabInputRef(tab)}
+      model={state?.settings.orchestratorModel || 'gpt-6-sol'}
+      effort={state?.settings.orchestratorEffort || 'high'}
+      approvalPolicy={state?.settings.approvalPolicy || 'on-request'}
+      models={models}
+      workerReady={!!runtime?.codex.workerAvailable}
+      configDisabled={busy || !!sendingTabs[tab]}
+      onModelChange={value => void setModel(value)}
+      onEffortChange={value => void updateSettings({ orchestratorEffort: value })}
+      onApprovalChange={value => void updateSettings({ approvalPolicy: value })}
+      busy={busy}
+      attachments={files}
+      onFiles={selected => void setFilesFor(tab, selected)}
+      onRemoveFile={index => removeFileFor(tab, index)}
+    />;
+  };
+  const renderNewTabActions = (pane: SessionPane, tab: string, task: Task | null) => (
+    <div className="new-tab-actions">
+      <button onClick={() => openNewTabInPane(pane.id)}><MessageSquarePlus size={14} />SESSION</button>
+      <button onClick={() => openWorkspaceTab('browser', pane.id, tab)}><Globe size={14} />BROWSER</button>
+      <button onClick={() => openWorkspaceTab('git', pane.id, tab)}><GitBranch size={14} />GIT</button>
+      <div className="new-tab-context">{rootLabel(task?.userRoot || state?.settings.projectRoot)} <span>·</span> {runtime?.codex.state === 'connected' ? 'Connected' : 'Codex offline'}</div>
     </div>
-    {error&&<div className="toast-error" role="alert"><AlertCircle size={15}/>{error}<button className="icon-btn" aria-label="Dismiss" onClick={()=>setError('')}><X size={14}/></button></div>}
-    {settingsMounted&&state&&<SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={refresh} saved={async settings=>{try{await api('/api/settings',settings);await refresh();return true;}catch(e){setError(String(e));return false;}}}/>}
-    {sessionDialogMounted&&sessionDialog&&<SessionDialog open={sessionDialogOpen} kind={sessionDialog.kind} task={state?.tasks.find(t=>t.id===sessionDialog.taskId)} close={closeSessionDialog} rename={renameSession} remove={deleteSession}/>}
+  );
+  const renderSessionPaneActions = (tab: string, task: Task | null) => {
+    const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
+    return <div className="session-pane-actions" data-session-actions-for={tab} role="group" aria-label={(task?.title || 'New session') + ' controls'}>
+      {busy && <button className="session-pane-action session-pane-stop" aria-label="Stop" title="Stop this session" onClick={() => void stopTask(tab)}><Square size={13} fill="currentColor" /></button>}
+      <button ref={headsUpTriggerRef(tab)} className="session-pane-action details-toggle heads-up-toggle" aria-label="Heads-up" title="Heads-up"
+        aria-expanded={!!headsUpOpen[tab]} onClick={() => setHeadsUpOpen(current => ({ ...current, [tab]: !current[tab] }))}><PanelRight size={16} /></button>
+    </div>;
+  };
+  const renderPaneTabs = (pane: SessionPane, index: number, split: boolean) => {
+    const listLabel = split ? index === 1 ? 'Side pane workspaces' : 'Pane ' + (index + 1) + ' workspaces' : 'Open workspaces';
+    return <div className={'document-tabs ' + (split ? 'split-pane-tabbar' : '')} role="tablist" aria-label={listLabel}
+      style={split ? { gridColumn: index * 2 + 1, gridRow: 1 } : undefined} onDragOver={allowTabDrop} onDrop={dropTabOnStrip}>
+      {pane.tabs.map(tab => {
+        const kind = workspaceTabKind(tab);
+        const task = kind === 'session' ? taskForTab(tab) : null;
+        const title = workspaceTabTitle(tab, task?.title);
+        const selected = pane.activeTab === tab;
+        const symbol = kind === 'browser' ? <Globe size={13} /> : kind === 'git' ? <GitBranch size={13} /> : index === 0 && !split ? <MessageSquarePlus size={13} /> : null;
+        return <div className={'document-tab ' + (selected ? 'active ' : '') + (tabDropTarget === tab ? 'tab-drop-target ' : '') + (sessionArrival === tab ? 'session-arrived tab-arrived ' : '') + (closingTabs[tab] ? 'tab-closing' : '')}
+          key={tab} data-workspace-tab={tab} data-session-tab={tab} draggable={!closingTabs[tab]}
+          onDragStart={event => {
+            clearTabDrop();
+            setDraggedTab(tab);
+            event.dataTransfer.setData('application/x-pseudoharness-workspace-tab', tab);
+            event.dataTransfer.setData('application/x-pseudoharness-session-tab', tab);
+            event.dataTransfer.effectAllowed = 'move';
+          }}
+          onDragEnd={() => finishTabDrag(tab)}
+          onDragOver={event => {
+            if (Array.from(event.dataTransfer.types).some(type => type === 'application/x-pseudoharness-workspace-tab' || type === 'application/x-pseudoharness-session-tab')) {
+              event.preventDefault();
+              tabDropTargetRef.current = tab;
+              setTabDropTarget(tab);
+            }
+          }}
+          onDrop={event => {
+            const source = readDraggedTab(event.dataTransfer);
+            if (!source) return;
+            event.preventDefault();
+            event.stopPropagation();
+            moveTab(source, tab);
+          }}>
+          <button role="tab" aria-label={title} aria-selected={selected} onClick={() => {
+            setPaneActive(pane.id, tab);
+            setFocusedPaneId(pane.id);
+            if (kind === 'session' && !tab.startsWith('new:')) {
+              void api('/api/tasks/' + tab + '/select', {}).then(() => refresh()).catch(cause => setTabError(tab, String(cause)));
+            }
+          }}>{symbol}<span>{title}</span></button>
+          <button className="tab-close" aria-label={'Close ' + title + ' tab'} onClick={() => closeTab(tab)} disabled={!!closingTabs[tab]}><X size={13} /></button>
+        </div>;
+      })}
+      <button className="new-tab" aria-label={split ? index === 1 ? 'New session in side pane' : 'New session in pane ' + (index + 1) : 'Open new session tab'} onClick={() => openNewTabInPane(pane.id)}><Plus size={15} /></button>
+    </div>;
+  };
+  const renderWorkspaceTab = (tab: string, pane: SessionPane, index: number) => {
+    const kind = workspaceTabKind(tab);
+    const selected = pane.activeTab === tab;
+    const task = kind === 'session' ? taskForTab(tab) : null;
+    const record = workspaceTabs[tab];
+    const contextTask = record?.originTaskId ? taskForTab(record.originTaskId) : null;
+    const isSession = kind === 'session';
+    const baseClass = (index > 0 ? 'session-pane side-session-view ' : 'task-view ') + 'pane-body ' + (!task && isSession ? 'new-tab-view ' : '') + (sessionArrival === tab ? 'session-entering ' : '') + (selected ? 'workspace-tab-active ' : '') + (dropTarget?.paneId === pane.id ? 'drop-half-' + dropTarget.half : '');
+    const row = panes.length > 1 ? 2 : 1;
+    const column = index * 2 + 1;
+    const onDragOver = (event: React.DragEvent<HTMLElement>) => {
+      const types = Array.from(event.dataTransfer.types);
+      if (types.includes('application/x-pseudoharness-workspace-tab') || types.includes('application/x-pseudoharness-session-tab')) {
+        event.preventDefault();
+        clearTabDrop();
+        const rect = event.currentTarget.getBoundingClientRect();
+        setDropTarget({ paneId: pane.id, half: event.clientX < rect.left + rect.width / 2 ? 'left' : 'right' });
+      }
+    };
+    if (kind === 'browser' || kind === 'git') {
+      return <div key={tab} data-workspace-tab={tab} data-tab-kind={kind} className={baseClass + ' peer-workspace-pane ' + (kind === 'browser' ? 'browser-peer-tab' : 'git-peer-tab')}
+        style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
+        onClick={() => setFocusedPaneId(pane.id)} onDragOver={onDragOver}
+        onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
+        onDrop={event => dropPane(event, pane.id)}>
+        <EmbeddedWorkspace mode={kind === 'browser' ? 'browser' : 'github'} task={contextTask} placement="full" docked={false}
+          workspaceId={tab} active={selected} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={record?.projectRoot}
+          onOpenBrowserTab={url => openWorkspaceTab('browser', pane.id, tab, url)}
+          onSummary={() => returnToOrigin(record)}
+          onAnnotation={(annotation, comment) => record && addBrowserAnnotation(record, annotation, comment)} />
+      </div>;
+    }
+    const taskView = task ? <div className="conversation" ref={element => { sessionScrollRefs.current[tab] = element; }}
+      onScroll={event => {
+        const element = event.currentTarget;
+        nearBottom.current[tab] = element.scrollHeight - element.scrollTop - element.clientHeight < 180;
+      }}>
+      {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
+      {task.messages.filter(message => !message.passId).map(message => <ConversationMessage key={message.id} message={message} />)}
+      {task.passes?.map(pass => <PassPanel key={pass.id} pass={pass} messages={task.messages.filter(message => message.passId === pass.id)}
+        active={pass.id === task.currentPassId} task={task}
+        assignmentExpanded={expanded['assignment:' + pass.id] ?? false} receiptExpanded={expanded['receipt:' + pass.id] ?? false}
+        workerActivityExpanded={expanded['workerActivity:' + pass.id] ?? false} retrying={retryingPassId === pass.id}
+        onRetryAgentMem={() => void retryAgentMemFor(task.id, pass.id)}
+        toggleAssignment={() => setExpanded(current => ({ ...current, ['assignment:' + pass.id]: !current['assignment:' + pass.id] }))}
+        toggleReceipt={() => setExpanded(current => ({ ...current, ['receipt:' + pass.id]: !current['receipt:' + pass.id] }))}
+        toggleWorkerActivity={() => setExpanded(current => ({ ...current, ['workerActivity:' + pass.id]: !current['workerActivity:' + pass.id] }))} />)}
+      {task.approvalRequests?.map(request => <ApprovalCard key={String(request.requestId)} request={request} onDecision={decision => void approveTask(task.id, request.requestId, decision)} />)}
+    </div> : <div className="new-tab-center">
+      {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
+      <div className="composer-dock">{paneComposer(tab, null)}</div>
+      {renderNewTabActions(pane, tab, null)}
+    </div>;
+    return <div key={tab} data-workspace-tab={tab} data-tab-kind="session" className={baseClass} style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
+      onClick={() => setFocusedPaneId(pane.id)} onDragOver={onDragOver}
+      onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
+      onDrop={event => dropPane(event, pane.id)}>
+      {renderSessionPaneActions(tab, task)}
+      {task && <>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task)}</div></>}
+      {!task && taskView}
+      <HeadsUpPanel task={task} settings={state!.settings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
+        onClose={() => setHeadsUpOpen(current => ({ ...current, [tab]: false }))}
+        onOpenSettings={openSettings} triggerRef={headsUpTriggerRef(tab)} />
+    </div>;
+  };
+
+  return <div className={'app-shell ' + (sidebarCollapsed ? 'sidebar-collapsed' : '')} style={{ '--sidebar-width': sidebarCollapsed ? '0px' : sidebarWidth + 'px' } as React.CSSProperties}>
+    <nav className="activity-rail" aria-label="App navigation">
+      <button className="rail-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} aria-controls="primary-sidebar" onClick={() => setSidebarCollapsed(value => !value)}><PanelLeft size={17} /></button>
+      <button role="tab" aria-label="Sessions" onClick={() => {
+        const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
+        if (workspaceTabKind(pane.activeTab) !== 'session') activateSessionTab(pane.tabs.find(tab => workspaceTabKind(tab) === 'session') || 'new:0');
+      }}><FileText size={17} /></button>
+      <button role="tab" draggable aria-label="Browser" aria-current={panes.some(pane => workspaceTabKind(pane.activeTab) === 'browser') ? 'page' : undefined}
+        onDragStart={event => { event.dataTransfer.setData('application/x-pseudoharness-workspace', 'browser'); event.dataTransfer.effectAllowed = 'move'; }}
+        onClick={() => {
+          const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
+          openWorkspaceTab('browser', pane.id, pane.activeTab);
+        }}><Globe size={17} /></button>
+      <button role="tab" draggable aria-label="Git" aria-current={panes.some(pane => workspaceTabKind(pane.activeTab) === 'git') ? 'page' : undefined}
+        onDragStart={event => { event.dataTransfer.setData('application/x-pseudoharness-workspace', 'git'); event.dataTransfer.effectAllowed = 'move'; }}
+        onClick={() => {
+          const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
+          openWorkspaceTab('git', pane.id, pane.activeTab);
+        }}><GitBranch size={17} /></button>
+      <div className="rail-spacer" />
+      <button aria-label="Settings" onClick={openSettings}><Settings2 size={17} /></button>
+    </nav>
+    <aside id="primary-sidebar" aria-label="Session explorer" className="sidebar" aria-hidden={sidebarCollapsed} inert={sidebarCollapsed}>
+      <div className="sidebar-tools">
+        <span className="sidebar-title">Sessions</span>
+        <button className="icon-btn" aria-label="New session" onClick={openNewTab}><Plus size={16} /></button>
+        <button className="icon-btn" aria-label="Search sessions" onClick={() => document.querySelector<HTMLInputElement>('.session-search')?.focus()}><Search size={15} /></button>
+      </div>
+      <input className="session-search" type="search" aria-label="Search sessions" placeholder="Filter sessions" value={query} onChange={event => setQuery(event.target.value)} />
+      <nav className="task-list" aria-label="Sessions">{(state?.tasks || []).filter(task => !query.trim() || task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(task => <SessionRow key={task.id} task={task} selected={panes.some(pane => pane.activeTab === task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} />)}</nav>
+      <div className="sidebar-bottom"><button className="project-mini" aria-label={rootLabel(state?.settings.projectRoot) + ' project settings'} onClick={openSettings}><Folder size={15} /><span className="project-mini-text">{rootLabel(state?.settings.projectRoot)}</span></button></div>
+    </aside>
+    <div className="sidebar-resizer" role="separator" aria-label="Resize session explorer" aria-orientation="vertical" aria-valuemin={112} aria-valuenow={sidebarCollapsed ? 0 : sidebarWidth} tabIndex={0}
+      onPointerDown={event => {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        resizeRef.current = { kind: 'sidebar', x: event.clientX, width: sidebarCollapsed ? 0 : sidebarWidth, pointerId: event.pointerId };
+      }}
+      onPointerMove={event => {
+        const drag = resizeRef.current;
+        if (!drag || drag.pointerId !== event.pointerId || drag.kind !== 'sidebar') return;
+        const width = drag.width + event.clientX - drag.x;
+        drag.x = event.clientX;
+        drag.width = width;
+        if (width < 112) setSidebarCollapsed(true);
+        else {
+          setSidebarCollapsed(false);
+          setSidebarWidth(Math.max(112, Math.min(420, width)));
+        }
+      }}
+      onPointerUp={event => { if (resizeRef.current?.pointerId === event.pointerId) resizeRef.current = null; }}
+      onLostPointerCapture={() => { resizeRef.current = null; }}
+      onKeyDown={event => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        const width = sidebarWidth + (event.key === 'ArrowRight' ? 16 : -16);
+        if (width < 112) setSidebarCollapsed(true);
+        else {
+          setSidebarCollapsed(false);
+          setSidebarWidth(Math.min(420, width));
+        }
+      }}
+    />
+    <div className="workspace-area">
+      <main className="main-column">
+        {panes.length === 1 && <header className="topbar">{renderPaneTabs(rootPane, 0, false)}</header>}
+        <div className={'workspace-content mode-tasks ' + (panes.length > 1 ? 'has-session-panes has-side-session ' : '') + (draggedTab ? 'dragging-session' : '')}
+          style={{ gridTemplateColumns: panes.flatMap((pane, index) => index < panes.length - 1 ? ['minmax(0,' + pane.weight + 'fr)', '5px'] : ['minmax(0,' + pane.weight + 'fr)']).join(' '), transition: 'grid-template-columns 180ms cubic-bezier(.2,.75,.25,1)' }}
+          onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('application/x-pseudoharness-workspace')) event.preventDefault(); }}
+          onDrop={event => {
+            const mode = event.dataTransfer.getData('application/x-pseudoharness-workspace');
+            const kind = workspaceKindForMode(mode);
+            if (kind) {
+              event.preventDefault();
+              const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
+              openWorkspaceTab(kind, pane.id, pane.activeTab);
+              return;
+            }
+            const tab = readDraggedTab(event.dataTransfer);
+            if (!tab) return;
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            splitTab(tab, panes[0].id, event.clientX < rect.left + rect.width / 2 ? 'left' : 'right');
+          }}>
+          {panes.map((pane, index) => <div className="pane-grid-group" key={pane.id}>
+            {panes.length > 1 && renderPaneTabs(pane, index, true)}
+            {index > 0 && <div className="workspace-resizer" role="separator" aria-label={'Resize pane ' + index} aria-orientation="vertical"
+              aria-valuemin={168} aria-valuenow={Math.round(pane.weight / (pane.weight + panes[index - 1].weight) * 100)} tabIndex={0}
+              style={{ gridColumn: index * 2, gridRow: '1 / -1' }}
+              onPointerDown={event => {
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                resizeRef.current = { kind: 'pane', x: event.clientX, left: panes[index - 1].id, right: pane.id, pointerId: event.pointerId };
+              }}
+              onPointerMove={event => {
+                const drag = resizeRef.current;
+                if (!drag || drag.pointerId !== event.pointerId || drag.kind !== 'pane') return;
+                const delta = event.clientX - drag.x;
+                drag.x = event.clientX;
+                const rect = document.querySelector('.workspace-content')?.getBoundingClientRect();
+                if (rect && drag.left && drag.right) setPanes(current => resizeAdjacentPanes(current, drag.left, drag.right, delta, rect.width, 168).panes);
+              }}
+              onPointerUp={event => { if (resizeRef.current?.pointerId === event.pointerId) resizeRef.current = null; }}
+              onLostPointerCapture={() => { resizeRef.current = null; }}
+              onKeyDown={event => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                event.preventDefault();
+                const rect = document.querySelector('.workspace-content')?.getBoundingClientRect();
+                if (rect) setPanes(current => resizeAdjacentPanes(current, panes[index - 1].id, pane.id, (event.key === 'ArrowRight' ? 1 : -1) * 24, rect.width, 168).panes);
+              }} />}
+            {pane.tabs.map(tab => renderWorkspaceTab(tab, pane, index))}
+          </div>)}
+        </div>
+      </main>
+    </div>
+    {error && <div className="toast-error" role="alert"><AlertCircle size={15} />{error}<button className="icon-btn" aria-label="Dismiss app error" onClick={() => setError('')}><X size={14} /></button></div>}
+    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={refresh} saved={async settings => {
+      try {
+        await api('/api/settings', settings);
+        await refresh();
+        return true;
+      } catch (cause) {
+        setError(String(cause));
+        return false;
+      }
+    }} />}
+    {sessionDialogMounted && sessionDialog && <SessionDialog open={sessionDialogOpen} kind={sessionDialog.kind} task={state?.tasks.find(task => task.id === sessionDialog.taskId)} close={closeSessionDialog} rename={renameSession} remove={deleteSession} />}
   </div>;
 }
+
 
 function ConversationMessage({message:m}:{message:Message}){
   if(m.role==='user')return <div className="message user-message" key={m.id}><div className="user-avatar">U</div><div className="message-main"><div className="message-meta"><strong>You</strong><span>{stamp(m.createdAt)}</span></div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
   if(m.role==='system')return <div className={`system-event ${m.text.startsWith('Worker activity:')?'progress-event':''}`} key={m.id}><span className="event-glyph">{m.text.startsWith('Worker activity:')?<Activity size={14}/>:<AlertCircle size={14}/>}</span><span>{m.text.replace(/^Worker activity: /,'')}</span></div>;
   return <div className="message agent-message" key={m.id}><div className={`agent-avatar ${m.role}`}>{m.role==='worker'?<Terminal size={15}/>:<Command size={15}/>}</div><div className="message-main"><div className="message-meta"><strong>{m.role==='worker'?'Luna worker':m.role==='router'?'Routing agent':m.role==='direct'?'Direct answer':m.role==='simple'?'Luna simple implementation':'Orchestrator'}</strong><span>{stamp(m.createdAt)}</span>{(['worker','router','direct','simple'].includes(m.role))&&<span className="model-chip">gpt-6-luna · {m.role==='worker'?'high':m.role==='simple'?'xhigh':m.role==='router'?'low · Fast':'low'}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
-}
-
-function SessionIdRow({role,threadId}:{role:'Router'|'Direct'|'Simple'|'Orchestrator'|'Worker';threadId?:string}){
-  return <div className="session-id"><span>{role}</span><code>{threadId||'Not started'}</code></div>;
 }
 
 function ReasoningResponse({turn,summaries,rawContent,live,fallbackTime}:{turn:NonNullable<TaskPass['reasoningTurns']>[number];summaries:NonNullable<TaskPass['reasoningSummaries']>;rawContent:NonNullable<TaskPass['reasoningRawContent']>;live:boolean;fallbackTime:string}){

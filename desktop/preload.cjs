@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const bridge={
+  openCodexThread:threadId=>ipcRenderer.invoke('pseudoharness:open-codex-thread',threadId),
   browser:{
     list:()=>ipcRenderer.invoke('pseudoharness:browser-list'),
     open:(url,pane='main')=>ipcRenderer.invoke('pseudoharness:browser-open',{url,pane}),
@@ -16,6 +17,13 @@ const bridge={
     setBounds:bounds=>ipcRenderer.invoke('pseudoharness:browser-bounds',bounds),
     hide:()=>ipcRenderer.invoke('pseudoharness:browser-hide'),
     clearData:()=>ipcRenderer.invoke('pseudoharness:browser-clear-data'),
+    workspaceGet:workspaceId=>ipcRenderer.invoke('pseudoharness:browser-workspace-get',{workspaceId}),
+    workspaceOpen:(workspaceId,url)=>ipcRenderer.invoke('pseudoharness:browser-workspace-open',{workspaceId,url}),
+    workspaceRelease:workspaceId=>ipcRenderer.invoke('pseudoharness:browser-workspace-release',{workspaceId}),
+    workspaceSetBounds:(workspaceId,bounds,active)=>ipcRenderer.invoke('pseudoharness:browser-workspace-bounds',{workspaceId,bounds,active}),
+    workspaceNavigate:(workspaceId,navigation)=>ipcRenderer.invoke('pseudoharness:browser-workspace-navigate',{workspaceId,navigation}),
+    workspaceSetCommenting:(workspaceId,enabled)=>ipcRenderer.invoke('pseudoharness:browser-workspace-commenting',{workspaceId,enabled}),
+    workspaceAnnotationOverlay:(workspaceId,visible)=>ipcRenderer.invoke('pseudoharness:browser-workspace-annotation-overlay',{workspaceId,visible}),
     onEvent:callback=>{const listener=(_event,payload)=>callback(payload);ipcRenderer.on('pseudoharness:browser-event',listener);return()=>ipcRenderer.removeListener('pseudoharness:browser-event',listener);},
   },
 };
