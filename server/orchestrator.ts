@@ -137,7 +137,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const root=task.userRoot,writeRoots=role==='simple'?simpleWriteRoots!:[];
   const serviceTier=role==='router'?'priority':undefined;
   const carried=attachmentUserInput(pass.attachments||[]);
-  const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,`${finalPrompt}${carried.text}`,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier,carried.items),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
+  const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,`${finalPrompt}${carried.text}`,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier,carried.images),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
   if(!response)return;
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.activeTurnId=id;t.activeRole=role;});
@@ -170,8 +170,8 @@ async function startOrchestrator(task:Task,payload:string,action:'assignment'|'r
   allowanceBaselines.set(task.orchestratorThreadId!,await readAllowanceSnapshot());
   const carried=attachmentUserInput(pass?.attachments||[]);const enrichedInput=`${input}${carried.text}`;
   const response=action==='review'
-    ? await agentCodex.reviewTurn(task.orchestratorThreadId,enrichedInput,modelId,state.settings.orchestratorEffort,approvalPolicy,carried.items)
-    : await agentCodex.startTurn(task.orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],approvalPolicy,allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,undefined,carried.items);
+    ? await agentCodex.reviewTurn(task.orchestratorThreadId,enrichedInput,modelId,state.settings.orchestratorEffort,approvalPolicy,carried.images)
+    : await agentCodex.startTurn(task.orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],approvalPolicy,allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,undefined,carried.images);
   const live=getTask(task.id); if(live&&live.phase==='cancelled')return;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;t.activeTurnId=response.turn?.id||response.turnId||undefined; t.activeRole='orchestrator';if(t.activeTurnId)beginReasoningTurn(t,'orchestrator',task.orchestratorThreadId!,t.activeTurnId,modelId,state.settings.orchestratorEffort);});
   const id=response.turn?.id||response.turnId;if(id) await processDeferred(task.id,id);
@@ -215,8 +215,8 @@ async function startWorkerStage(task:Task,assignment:Assignment,stage:WorkerStag
   if(!workerPassIsCurrent(task.id,passId))return;
   allowanceBaselines.set(task.workerThreadId,await readAllowanceSnapshot());
   if(!workerPassIsCurrent(task.id,passId))return;
-  const carried=stage==='execute'?attachmentUserInput(pass.attachments||[]):{items:[],text:''};
-  const response=await agentCodex.startTurn(task.workerThreadId,`${workerPrompt}${carried.text}`,'worker','gpt-6-luna','high',task.userRoot,stageWriteRoots,approvalPolicy,outputSchema,undefined,carried.items);
+  const carried=stage==='execute'?attachmentUserInput(pass.attachments||[]):{images:[],text:''};
+  const response=await agentCodex.startTurn(task.workerThreadId,`${workerPrompt}${carried.text}`,'worker','gpt-6-luna','high',task.userRoot,stageWriteRoots,approvalPolicy,outputSchema,undefined,carried.images);
   if(!workerPassIsCurrent(task.id,passId)){const id=response.turn?.id||response.turnId;if(id)try{await agentCodex.interrupt(task.workerThreadId,id);}catch{}return;}
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled')return;t.activeTurnId=id;t.activeRole='worker';if(id)beginReasoningTurn(t,'worker',task.workerThreadId!,id,'gpt-6-luna','high');});

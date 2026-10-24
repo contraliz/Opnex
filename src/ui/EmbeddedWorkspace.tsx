@@ -7,9 +7,9 @@ import './EmbeddedWorkspace.css';
 const LocalGitWorkspace=lazy(()=>import('./LocalGitWorkspace').then(module=>({default:module.LocalGitWorkspace})));
 const DEFAULT_BROWSER_URL='https://www.google.com/';
 
-type Props={mode:'browser'|'github';task:Task|null;placement:'full'|'side';docked:boolean;workspaceId?:string;active?:boolean;initialUrl?:string;projectRoot?:string;onOpenBrowserTab?:(url?:string)=>void;onSummary?:()=>void;onAnnotation?:(annotation:BrowserAnnotation,comment:string)=>void};
+type Props={mode:'browser'|'github';task:Task|null;placement:'full'|'side';docked:boolean;workspaceId?:string;active?:boolean;sidebarCollapsed?:boolean;sidebarWidth?:number;initialUrl?:string;projectRoot?:string;onOpenBrowserTab?:(url?:string)=>void;onSummary?:()=>void;onAnnotation?:(annotation:BrowserAnnotation,comment:string)=>void};
 
-export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active=true,initialUrl,projectRoot,onOpenBrowserTab,onAnnotation}:Props){
+export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active=true,sidebarCollapsed=false,sidebarWidth=0,initialUrl,projectRoot,onOpenBrowserTab,onAnnotation}:Props){
   const bridge=window.pseudoharnessDesktop?.browser;
   const hostId=workspaceId||`browser:${task?.id||'legacy'}`;
   const [page,setPage]=useState<EmbeddedBrowserTab|null>(null);
@@ -85,9 +85,11 @@ export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active
   useLayoutEffect(()=>{
     if(mode!=='browser'||!bridge)return;
     let raf=0;
+    let settleTimer:number|undefined;
     let last:{x:number;y:number;width:number;height:number}|null=null;
     let stable=0;
     let frames=0;
+    let shellTransitionRunning=false;
     const visible=isVisible;
     const measure=()=>{
       const rect=hostRef.current?.getBoundingClientRect();
@@ -98,18 +100,33 @@ export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active
       if(key!==boundsKeyRef.current){boundsKeyRef.current=key;const bounds:BrowserWorkspaceBounds=next?{...next,annotationHeight:overlayHeight}:null;void bridge.workspaceSetBounds(hostId,bounds,visible).catch(setErrorFrom);}
       if(next&&last&&next.x===last.x&&next.y===last.y&&next.width===last.width&&next.height===last.height)stable++;else stable=0;
       last=next;frames++;
-      if(frames<40&&stable<3)raf=requestAnimationFrame(measure);
+      if((shellTransitionRunning||frames<40)&&stable<3)raf=requestAnimationFrame(measure);
     };
-    const schedule=()=>{cancelAnimationFrame(raf);last=null;stable=0;frames=0;measure();};
+    const schedule=()=>{
+      cancelAnimationFrame(raf);last=null;stable=0;frames=0;measure();
+      if(settleTimer)window.clearTimeout(settleTimer);
+      settleTimer=window.setTimeout(()=>{last=null;stable=0;frames=0;measure();},220);
+    };
+    const shell=rootRef.current?.closest<HTMLElement>('.app-shell')||null;
+    const onShellTransition=(event:Event)=>{
+      const transition=event as TransitionEvent;
+      if(event.target!==shell||transition.propertyName!=='grid-template-columns')return;
+      shellTransitionRunning=event.type==='transitionrun';
+      schedule();
+    };
     schedule();
     const observer=typeof ResizeObserver==='undefined'?null:new ResizeObserver(schedule);
     if(rootRef.current)observer?.observe(rootRef.current);
     if(hostRef.current)observer?.observe(hostRef.current);
     window.addEventListener('resize',schedule);
+    window.addEventListener('pseudoharness:shell-layout',schedule);
+    shell?.addEventListener('transitionrun',onShellTransition);
+    shell?.addEventListener('transitionend',onShellTransition);
+    shell?.addEventListener('transitioncancel',onShellTransition);
     rootRef.current?.addEventListener('transitionend',schedule);
     rootRef.current?.addEventListener('animationend',schedule);
-    return()=>{observer?.disconnect();window.removeEventListener('resize',schedule);rootRef.current?.removeEventListener('transitionend',schedule);rootRef.current?.removeEventListener('animationend',schedule);cancelAnimationFrame(raf);};
-  },[active,annotation,bridge,docked,hostId,mode,placement]);
+    return()=>{observer?.disconnect();window.removeEventListener('resize',schedule);window.removeEventListener('pseudoharness:shell-layout',schedule);shell?.removeEventListener('transitionrun',onShellTransition);shell?.removeEventListener('transitionend',onShellTransition);shell?.removeEventListener('transitioncancel',onShellTransition);rootRef.current?.removeEventListener('transitionend',schedule);rootRef.current?.removeEventListener('animationend',schedule);cancelAnimationFrame(raf);if(settleTimer)window.clearTimeout(settleTimer);};
+  },[active,annotation,bridge,docked,hostId,mode,placement,sidebarCollapsed,sidebarWidth]);
 
   const navigate=async(value=address)=>{
     if(!bridge){setError('The embedded browser needs the Electron desktop shell.');return;}
