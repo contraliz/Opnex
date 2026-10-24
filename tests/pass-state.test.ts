@@ -13,6 +13,16 @@ describe('per-pass task state',()=>{
     const previous=loaded.passes![0].usage;const userMessage:Message={id:'later',role:'user',text:'Next pass',createdAt:'2026-10-19T00:02:00Z'};loaded.messages.push(userMessage);beginPass(loaded,userMessage.text,userMessage.id);
     expect(loaded.passes![0].usage).toEqual(previous);expect(loaded.passes![0].usage?.orchestrator?.groups?.[0].model).toBe('gpt-6.1-sol');expect(loaded.passes![0].usage?.orchestrator?.allowance?.fiveHourWindow?.firstSampledAt).toBe('2026-10-19T00:00:00Z');expect(loaded.passes![1].usage).toBeUndefined();
   });
+  it('removes legacy raw reasoning content while preserving readable summaries and activity rows',()=>{
+    const task=taskFixture() as any;task.reasoningRawContent=[{text:'LEGACY_PRIVATE_RAW'}];task.passes![0].reasoningRawContent=[{text:'LEGACY_PRIVATE_RAW'}];task.reasoningSummaries=[{role:'orchestrator',threadId:'orch-one',turnId:'turn-one',itemId:'r',summaryIndex:0,text:'Readable summary'}];task.liveActivity=[{role:'orchestrator',threadId:'orch-one',turnId:'turn-one',itemId:'commentary',kind:'commentary',itemType:'agentMessage',title:'',text:'Visible commentary',status:'completed',startedAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:01:00Z'}];
+    const loaded=upgradeStoredState({version:2,settings:{},tasks:[task],activeTaskId:task.id}).tasks[0];
+    expect(loaded).not.toHaveProperty('reasoningRawContent');expect(loaded.passes![0]).not.toHaveProperty('reasoningRawContent');expect(loaded.liveActivity?.[0].text).toBe('Visible commentary');expect(loaded.passes![0].reasoningSummaries?.[0].text).toBe('Readable summary');expect(JSON.stringify(loaded)).not.toContain('LEGACY_PRIVATE_RAW');
+  });
+  it('marks in-flight activity interrupted when a saved session restarts mid-turn',()=>{
+    const task=taskFixture();task.phase='worker_running';task.activeRole='worker';task.activeTurnId='turn-one';task.reasoningTurns=[{role:'worker',threadId:'worker-one',turnId:'turn-one',requestedModel:'gpt-6-luna',requestedEffort:'high',status:'streaming'}];task.liveActivity=[{role:'worker',threadId:'worker-one',turnId:'turn-one',itemId:'cmd',kind:'tool',itemType:'commandExecution',title:'npm test',status:'running',startedAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:00:00Z'}];
+    const loaded=upgradeStoredState({version:2,settings:{},tasks:[task],activeTaskId:task.id}).tasks[0];
+    expect(loaded.phase).toBe('paused_after_restart');expect(loaded.reasoningTurns?.[0].status).toBe('interrupted');expect(loaded.liveActivity?.[0].status).toBe('interrupted');expect(loaded.activeTurnId).toBeUndefined();
+  });
   it('starts an independent pass and leaves prior assignment, receipt and thread ids attached to the previous pass',()=>{
     const task=taskFixture();syncCurrentPass(task);const userMessage:Message={id:'user-two',role:'user',text:'Second prompt',createdAt:'2026-10-19T00:01:00Z'};task.messages.push(userMessage);const second=beginPass(task,userMessage.text,userMessage.id);
     expect(userMessage.passId).toBe(second.id);expect(currentPass(task)?.id).toBe(second.id);
@@ -53,7 +63,7 @@ describe('per-pass task state',()=>{
     expect(state.tasks.find(t=>t.id==='legacy-task')?.agentmemProjectId).toBe('configured-project');
   });
   it('preserves role-labeled visible answers for follow-ups while excluding assignments, receipts, and worker output',()=>{
-    const direct={...taskFixture().passes![0],id:'direct',index:1,userInput:'What is 1+1?',userInputs:['What is 1+1?','Do not delegate.'],resolution:'direct' as const,publicAnswer:'1 + 1 = 2.',reasoningSummaries:[{role:'orchestrator' as const,threadId:'orch',turnId:'turn',itemId:'reason',summaryIndex:0,text:'PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD',passId:'direct'}],reasoningRawContent:[{role:'orchestrator' as const,threadId:'orch',turnId:'turn',itemId:'reason',contentIndex:0,text:'PRIVATE_RAW_REASONING_SHOULD_NOT_FORWARD',passId:'direct'}],assignment:{...assignment,outcome:'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD'},receipt:{...receipt,result:'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD'}};
+    const direct={...taskFixture().passes![0],id:'direct',index:1,userInput:'What is 1+1?',userInputs:['What is 1+1?','Do not delegate.'],resolution:'direct' as const,publicAnswer:'1 + 1 = 2.',reasoningSummaries:[{role:'orchestrator' as const,threadId:'orch',turnId:'turn',itemId:'reason',summaryIndex:0,text:'PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD',passId:'direct'}],assignment:{...assignment,outcome:'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD'},receipt:{...receipt,result:'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD'}};
     const delegated={...taskFixture().passes![0],id:'delegated',index:2,userInput:'Return my requested result.',userInputs:['Return my requested result.'],reviewNote:'The requested result is 2.',resolution:'delegated' as const,phase:'accepted' as const,assignment:{...assignment,outcome:'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD'},receipt:{...receipt,result:'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD'}};
     const context=buildPriorConversationContext([direct,delegated],'current');
     const text=formatCurrentPassConversation('Double that result.',context);
