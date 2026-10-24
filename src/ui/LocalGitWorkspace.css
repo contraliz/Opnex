@@ -18,6 +18,42 @@
 .git-sign-in-button:hover:not(:disabled),.github-device-actions button:hover:not(:disabled) { border-color: #a78bfa; background: #302c38; color: #fff; }
 .git-sign-in-button:disabled,.github-device-actions button:disabled { opacity: .45; cursor: default; }
 
+/* Keep graph rows on the same fixed grid as their SVG paths. The shared
+   stylesheet's enter animation shifts rows independently from that graph. */
+.git-workspace .git-commit-graph { grid-auto-rows: var(--git-graph-row-height); }
+.git-workspace .git-commit-row {
+  --git-commit-row-gap: 9px;
+  box-sizing: border-box;
+  grid-template-columns: var(--git-graph-width) minmax(0,1fr) auto auto;
+  height: var(--git-graph-row-height);
+  min-height: var(--git-graph-row-height);
+  animation: none;
+}
+.git-workspace .git-commit-row:hover { background: transparent; }
+.git-workspace .git-commit-row::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  clip-path: inset(0 0 0 calc(var(--git-graph-width) + var(--git-commit-row-gap)));
+  background: transparent;
+  content: '';
+  pointer-events: none;
+  transition: background-color .12s ease;
+}
+.git-workspace .git-commit-row:hover::before { background-color: #252525; }
+.git-workspace .git-commit-row > * { position: relative; z-index: 1; }
+.git-workspace .git-commit-row > .git-graph-space {
+  z-index: 2;
+  box-sizing: border-box;
+  height: var(--git-graph-row-height);
+}
+.git-workspace .git-graph-lines .git-commit-connector { stroke: #766e94; stroke-width: 1.1; opacity: .78; }
+.git-workspace .git-graph-lines .git-commit-connector.head-connector { stroke: #bbaaf1; opacity: .9; }
+
+@media (max-width: 1120px) {
+  .git-workspace .git-commit-row { --git-commit-row-gap: 6px; }
+}
+
 .github-device-panel {
   flex: 0 0 auto;
   display: flex;

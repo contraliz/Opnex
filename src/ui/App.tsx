@@ -54,6 +54,11 @@ export default function App() {
   const [sessionDialogMounted, setSessionDialogMounted] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(296);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  useEffect(()=>{
+    const frame=requestAnimationFrame(()=>window.dispatchEvent(new Event('pseudoharness:shell-layout')));
+    return()=>cancelAnimationFrame(frame);
+  },[sidebarCollapsed,sidebarWidth]);
   const [retryingPassId, setRetryingPassId] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState('');
@@ -677,7 +682,7 @@ export default function App() {
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
         onDrop={event => dropPane(event, pane.id)}>
         <EmbeddedWorkspace mode={kind === 'browser' ? 'browser' : 'github'} task={contextTask} placement="full" docked={false}
-          workspaceId={tab} active={selected} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={record?.projectRoot}
+          workspaceId={tab} active={selected} sidebarCollapsed={sidebarCollapsed} sidebarWidth={sidebarWidth} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={record?.projectRoot}
           onOpenBrowserTab={url => openWorkspaceTab('browser', pane.id, tab, url)}
           onSummary={() => returnToOrigin(record)}
           onAnnotation={(annotation, comment) => record && addBrowserAnnotation(record, annotation, comment)} />
@@ -717,7 +722,7 @@ export default function App() {
     </div>;
   };
 
-  return <div className={'app-shell ' + (sidebarCollapsed ? 'sidebar-collapsed' : '')} style={{ '--sidebar-width': sidebarCollapsed ? '0px' : sidebarWidth + 'px' } as React.CSSProperties}>
+  return <div className={'app-shell ' + (sidebarCollapsed ? 'sidebar-collapsed ' : '') + (sidebarResizing ? 'sidebar-resizing' : '')} style={{ '--sidebar-width': sidebarCollapsed ? '0px' : sidebarWidth + 'px' } as React.CSSProperties}>
     <nav className="activity-rail" aria-label="App navigation">
       <button className="rail-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} aria-controls="primary-sidebar" onClick={() => setSidebarCollapsed(value => !value)}><PanelLeft size={17} /></button>
       <button role="tab" aria-label="Sessions" onClick={() => {
@@ -753,6 +758,7 @@ export default function App() {
       onPointerDown={event => {
         event.preventDefault();
         event.currentTarget.setPointerCapture(event.pointerId);
+        setSidebarResizing(true);
         resizeRef.current = { kind: 'sidebar', x: event.clientX, width: sidebarCollapsed ? 0 : sidebarWidth, pointerId: event.pointerId };
       }}
       onPointerMove={event => {
@@ -767,8 +773,9 @@ export default function App() {
           setSidebarWidth(Math.max(112, Math.min(420, width)));
         }
       }}
-      onPointerUp={event => { if (resizeRef.current?.pointerId === event.pointerId) resizeRef.current = null; }}
-      onLostPointerCapture={() => { resizeRef.current = null; }}
+      onPointerUp={event => { if (resizeRef.current?.pointerId === event.pointerId) { resizeRef.current = null; setSidebarResizing(false); } }}
+      onPointerCancel={() => { resizeRef.current = null; setSidebarResizing(false); }}
+      onLostPointerCapture={() => { resizeRef.current = null; setSidebarResizing(false); }}
       onKeyDown={event => {
         if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
         event.preventDefault();

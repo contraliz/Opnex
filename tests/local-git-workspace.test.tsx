@@ -16,6 +16,31 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 afterEach(()=>{cleanup();sessionStorage.clear();vi.resetAllMocks();});
 
 describe('native local Git workspace paging and routes',()=>{
+  it('connects the actual lane node toward commit text and omits the duplicate glyph',async()=>{
+    const graphCommits=[
+      {hash:'merge',parents:['main','feature'],author:'Fixture',date:'2026-10-24T00:00:00Z',subject:'merge commit',refs:[]},
+      {hash:'main',parents:['base'],author:'Fixture',date:'2026-10-24T00:00:00Z',subject:'main commit',refs:[]},
+      {hash:'feature',parents:['base'],author:'Fixture',date:'2026-10-24T00:00:00Z',subject:'feature commit',refs:[]},
+      {hash:'base',parents:[],author:'Fixture',date:'2026-10-24T00:00:00Z',subject:'base commit',refs:[]},
+    ];
+    vi.mocked(api).mockImplementation(async url=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github'))return github as any;
+      return {...page('C:/fixture'),commits:graphCommits} as any;
+    });
+    render(<LocalGitWorkspace projectRoot="C:/fixture"/>);
+    fireEvent.click(await screen.findByRole('button',{name:'History'}));
+    await screen.findByText('feature commit');
+
+    const rows=[...document.querySelectorAll<HTMLElement>('.git-commit-row')];
+    const featureRow=rows.find(row=>row.querySelector('.git-commit-copy strong')?.textContent==='feature commit');
+    const connectorPaths=[...document.querySelectorAll<SVGPathElement>('.git-graph-lines .git-commit-connector')];
+    expect(connectorPaths).toHaveLength(graphCommits.length);
+    expect(featureRow?.querySelector('.git-graph-space > i')?.getAttribute('style')).toContain('left: 19px');
+    expect(connectorPaths[2].getAttribute('d')).toBe('M 19 125 H 43');
+    expect(document.querySelector('.commit-glyph')).toBeNull();
+  });
+
   it('keeps branch and history pages independently while alternating their load-more controls',async()=>{
     vi.mocked(api).mockImplementation(async url=>{
       if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;

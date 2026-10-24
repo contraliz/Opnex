@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { AppServer, approvalResponse, assertAgentIsolationConfig, assertInstructionIsolation, appAgentBaseInstructions, buildOrchestratorDeveloperInstructions, makeThreadParams, makeThreadResumeParams, makeTurnParams } from '../server/codex.js';
+import { AppServer, approvalResponse, assertAgentIsolationConfig, assertInstructionIsolation, appAgentBaseInstructions, buildOrchestratorDeveloperInstructions, makeAppServerUserInput, makeThreadParams, makeThreadResumeParams, makeTurnParams } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
 import { authorizesWorkerWorkspaceTool, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from '../server/workspace-tools.js';
 
@@ -60,10 +60,17 @@ describe('Codex approval and turn configuration',()=>{
     expect(simple).not.toHaveProperty('serviceTierForTurn');expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:false});
     for(const role of ['router','direct','simple','orchestrator','worker'] as const){const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'});expect(thread.config).toMatchObject({project_doc_max_bytes:0,project_doc_fallback_filenames:[],projects:{'/tmp/project':{trust_level:'untrusted'}}});expect(thread.baseInstructions).toBe(appAgentBaseInstructions('/tmp/project'));expect(thread.baseInstructions).toContain(`Host platform: ${process.platform}`);}
   });
-  it('adds supplied inline image inputs after the role prompt',()=>{
-    const image={type:'image',image_url:'data:image/png;base64,iVBORw0KGgo='};
-    const turn=makeTurnParams({threadId:'router',input:'Describe the image',role:'router',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'},inputItems:[image]});
-    expect(turn.input).toEqual([{type:'text',text:'Describe the image'},image]);
+  it('serializes attachment image data through the app-server user-input adapter',()=>{
+    const image={mediaType:'image/png' as const,data:'iVBORw0KGgo='};
+    const input=makeAppServerUserInput('Describe the image',[image]);
+    expect(input).toEqual([{type:'text',text:'Describe the image'},{type:'image',url:'data:image/png;base64,iVBORw0KGgo='}]);
+    const turn=makeTurnParams({threadId:'router',input:'Describe the image',role:'router',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'},images:[image]});
+    expect(turn.input).toEqual(input);
+  });
+  it('uses the same app-server user-input adapter for review turns',async()=>{
+    const client=new AppServer();(client as any).verifiedAgentThreads.add('thread');const request=vi.fn().mockResolvedValue({turn:{id:'review'}});(client as any).request=request;
+    await client.reviewTurn('thread','Review this image','gpt-6.1-sol','low','on-request',[{mediaType:'image/webp',data:'UklGRg=='}]);
+    expect(request.mock.calls[0][1].input).toEqual([{type:'text',text:'Review this image'},{type:'image',url:'data:image/webp;base64,UklGRg=='}]);client.close();
   });
   it('fails closed unless the app-server explicitly reports no instruction sources for agent threads',()=>{
     expect(()=>assertInstructionIsolation({instructionSources:[]})).not.toThrow();

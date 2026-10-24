@@ -5,8 +5,10 @@ export const MAX_ATTACHMENT_BYTES=5*1024*1024;
 export const MAX_ATTACHMENT_TOTAL_BYTES=12*1024*1024;
 const imageTypes=new Set(['image/png','image/jpeg','image/webp']);
 const textTypes=new Set(['text/plain','text/markdown','text/csv','application/json']);
+export type AttachmentImageInput={mediaType:'image/png'|'image/jpeg'|'image/webp';data:string};
 const attachmentSchema=z.object({name:z.string().min(1).max(160),type:z.string().max(100),size:z.number().int().positive().max(MAX_ATTACHMENT_BYTES),data:z.string().min(1).max(Math.ceil(MAX_ATTACHMENT_BYTES*4/3)+8)}).strict();
 export type TaskAttachment=z.infer<typeof attachmentSchema>;
+function isImageType(type:string):type is AttachmentImageInput['mediaType'] { return imageTypes.has(type); }
 
 export function validateAttachments(value:unknown):TaskAttachment[]{
   const files=z.array(attachmentSchema).max(MAX_ATTACHMENT_COUNT).parse(value??[]);let total=0;
@@ -22,7 +24,7 @@ export function validateAttachments(value:unknown):TaskAttachment[]{
   });
 }
 export function attachmentUserInput(files:TaskAttachment[]){
-  const items:Array<Record<string,string>>=[];const text:string[]=[];
-  for(const file of files)if(imageTypes.has(file.type))items.push({type:'image',image_url:`data:${file.type};base64,${file.data}`});else text.push(`\n\n--- Selected attachment: ${file.name} (${file.type}) ---\n${new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from(file.data,'base64'))}\n--- End attachment ---`);
-  return {items,text:text.join('')};
+  const images:AttachmentImageInput[]=[];const text:string[]=[];
+  for(const file of files)if(isImageType(file.type))images.push({mediaType:file.type,data:file.data});else text.push(`\n\n--- Selected attachment: ${file.name} (${file.type}) ---\n${new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from(file.data,'base64'))}\n--- End attachment ---`);
+  return {images,text:text.join('')};
 }
