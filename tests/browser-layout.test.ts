@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const css=readFileSync(new URL('../src/ui/EmbeddedWorkspace.css',import.meta.url),'utf8');
+const css=readFileSync(new URL('../src/ui/EmbeddedWorkspace.css',import.meta.url),'utf8').replace(/\r\n/g,'\n');
 
 describe('native browser responsive toolbar',()=>{
   it('wraps controls when the Browser pane is narrow and keeps the address field usable',()=>{
