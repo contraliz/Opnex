@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import packagedLauncher from '../desktop/packaged-launcher.cjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-desktop-smoke-'));
@@ -13,6 +13,7 @@ const packagedProfileDirectory = path.join(tempDirectory, 'packaged-profile');
 await Promise.all([mkdir(profileDirectory), mkdir(packagedProfileDirectory)]);
 const electronCli = path.join(projectRoot, 'node_modules', 'electron', 'cli.js');
 const appEntry = path.join(projectRoot, 'desktop', 'main.cjs');
+const { findPackagedLauncher } = packagedLauncher;
 let verifiedCookie = false;
 const observedRequests = [];
 const testServer = createServer((request, response) => {
@@ -22,27 +23,6 @@ const testServer = createServer((request, response) => {
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   response.end('<!doctype html><title>Browser session smoke</title><p>Profile persistence check</p>');
 });
-
-function findPackagedLauncher(directory) {
-  if (!existsSync(directory)) return null;
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const candidate = path.join(directory, entry.name);
-    if (process.platform === 'win32' && entry.isDirectory() && entry.name === 'win-unpacked') {
-      const executable = path.join(candidate, 'Pseudoharness.exe');
-      if (existsSync(executable)) return { executable, args: [] };
-    }
-    if (process.platform === 'darwin' && entry.isDirectory()) {
-      const appBundle = entry.name.endsWith('.app') ? candidate : path.join(candidate, 'Pseudoharness.app');
-      const executable = path.join(appBundle, 'Contents', 'MacOS', 'Pseudoharness');
-      if (existsSync(executable)) return { executable, args: [] };
-    }
-    if (entry.isDirectory()) {
-      const nested = findPackagedLauncher(candidate);
-      if (nested) return nested;
-    }
-  }
-  return null;
-}
 
 async function launchSmoke(url, profile, launcher) {
   const child = spawn(launcher.executable, launcher.args, {
@@ -85,7 +65,7 @@ try {
   const launchers = [{ label: 'source', executable: process.execPath, args: [electronCli, appEntry], profile: profileDirectory }];
   if (process.argv.includes('--packaged')) {
     const packaged = findPackagedLauncher(path.join(projectRoot, 'desktop-release'));
-    if (!packaged) throw new Error('Packaged Electron application was not found in desktop-release.');
+    if (!packaged) throw new Error(`Packaged Electron application for ${process.platform}/${process.arch} was not found in desktop-release.`);
     launchers.push({ label: 'packaged', ...packaged, profile: packagedProfileDirectory });
   }
   for (const launcher of launchers) {
