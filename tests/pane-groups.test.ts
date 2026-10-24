@@ -8,6 +8,17 @@ const three: SessionPane[] = [
 ];
 
 describe('horizontal pane groups', () => {
+  it('splits, moves, and closes Browser and Git peer tabs with the same pane rules as sessions', () => {
+    const initial: SessionPane[] = [{ id: 'root', tabs: ['task-1', 'git:two'], activeTab: 'task-1', weight: 1 }];
+    const split = splitPane(initial, 'browser:one', 'root', 'right', 'browser-pane', true);
+    expect(split.map(pane => pane.tabs)).toEqual([['task-1', 'git:two'], ['browser:one']]);
+    const moved = moveTabToTab(split, 'browser:one', 'git:two');
+    expect(moved).toEqual([{ id: 'root', tabs: ['task-1', 'browser:one', 'git:two'], activeTab: 'browser:one', weight: 1 }]);
+    const closed = closePaneTab(moved, 'git:two', () => 'new:fallback');
+    expect(closed[0].tabs).toEqual(['task-1', 'browser:one']);
+    expect(closed[0].activeTab).toBe('browser:one');
+  });
+
   it('splits any pane on either side and preserves the existing groups and ratios', () => {
     const left = splitPane(three, 'new:left', 'b', 'left', 'x', true);
     expect(left.map(pane => pane.id)).toEqual(['a', 'x', 'b', 'c']);

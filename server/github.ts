@@ -4,6 +4,7 @@ import path from 'node:path';
 
 export type GitHubCommandResult={code:number|null;stdout:string;stderr:string};
 export type GitHubCommandRunner=(executable:'git'|'gh',args:string[],cwd:string)=>Promise<GitHubCommandResult>;
+export type GitHubCliAuthStatus={available:boolean;authenticated:boolean;account?:string};
 export type GitHubWorkspace={available:boolean;authenticated:boolean;account?:string;repository?:{name:string;url:string;defaultBranch:string};branch?:string;pullRequest?:{number:number;title:string;url:string;headBranch:string;baseBranch:string;state:string;isDraft:boolean;reviewDecision?:string;checks?:{name:string;state:string;conclusion?:string}[]};detail?:string};
 
 const run:GitHubCommandRunner=(executable,args,cwd)=>new Promise((resolve,reject)=>{
@@ -26,6 +27,18 @@ function parsePullRequest(value:any):GitHubWorkspace['pullRequest']{
   if(!value||typeof value.number!=='number'||typeof value.title!=='string'||typeof value.url!=='string')return;
   const checks=Array.isArray(value.statusCheckRollup)?value.statusCheckRollup.flatMap((check:any)=>typeof check?.name==='string'?[{name:check.name,state:String(check.status||check.state||'UNKNOWN'),...(typeof check.conclusion==='string'?{conclusion:check.conclusion}:{})}]:[]):[];
   return {number:value.number,title:value.title,url:value.url,headBranch:String(value.headRefName||''),baseBranch:String(value.baseRefName||''),state:String(value.state||''),isDraft:value.isDraft===true,...(typeof value.reviewDecision==='string'?{reviewDecision:value.reviewDecision}:{}),...(checks.length?{checks:checks.slice(0,80)}:{})};
+}
+
+export async function readGitHubCliAuthStatus(runner:GitHubCommandRunner=run,cwd=process.cwd()):Promise<GitHubCliAuthStatus>{
+  try{
+    const result=await runner('gh',['auth','status','--hostname','github.com'],cwd);
+    const authenticated=result.code===0;
+    const account=authenticated?`${result.stdout}\n${result.stderr}`.match(/Logged in to github\.com account ([A-Za-z0-9-]+)/i)?.[1]:undefined;
+    return {available:true,authenticated,...(account?{account}:{})};
+  }catch(error){
+    const missing=(error as NodeJS.ErrnoException)?.code==='ENOENT';
+    return {available:!missing,authenticated:false};
+  }
 }
 
 export async function readGitHubWorkspace(inputRoot:string,runner:GitHubCommandRunner=run):Promise<GitHubWorkspace>{

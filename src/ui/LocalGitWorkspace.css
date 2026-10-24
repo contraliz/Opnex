@@ -1,0 +1,52 @@
+.git-auth-controls { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-left: auto; }
+.git-workspace-header .git-auth-state { margin-left: 0; }
+.git-sign-in-button,.github-device-actions button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #4a4a4a;
+  border-radius: 6px;
+  background: #2a2a2a;
+  color: #e4e4e4;
+  cursor: pointer;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.git-sign-in-button:hover:not(:disabled),.github-device-actions button:hover:not(:disabled) { border-color: #a78bfa; background: #302c38; color: #fff; }
+.git-sign-in-button:disabled,.github-device-actions button:disabled { opacity: .45; cursor: default; }
+
+.github-device-panel {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 22px;
+  border-bottom: 1px solid #34313b;
+  background: #24212a;
+  color: #e7e2ef;
+}
+.github-device-panel > svg { flex: 0 0 auto; color: #a78bfa; }
+.github-device-panel > div { min-width: 0; display: grid; gap: 4px; }
+.github-device-panel > div > strong { font-size: 11px; font-weight: 600; }
+.github-device-panel > div > span { color: #bcb5c8; font-size: 10px; line-height: 1.45; }
+.github-device-panel > button { margin-left: auto; border: 0; background: transparent; color: #bbb2c8; cursor: pointer; font-size: 10px; }
+.github-device-panel > button:hover { color: #fff; }
+.github-device-panel.failed,.github-device-panel.expired { border-color: #423535; background: #2b2223; color: #eacaca; }
+.github-device-panel.failed > svg,.github-device-panel.expired > svg { color: #d39298; }
+.github-device-panel.cancelled { background: #242424; border-color: #333; }
+.github-device-copy { flex: 1 1 auto; }
+.github-device-copy > code { width: fit-content; margin-top: 3px; padding: 6px 11px; border: 1px solid #4a4455; border-radius: 6px; background: #19171e; color: #f5edff; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 18px; letter-spacing: .13em; }
+.github-device-copy > small { color: #c4b9d2; font-size: 10px; }
+.github-device-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.github-device-actions button { min-height: 28px; background: #292630; }
+.github-device-actions button:last-child { background: transparent; }
+
+@media (max-width: 720px) {
+  .git-workspace-header { flex-wrap: wrap; padding: 10px 14px; }
+  .git-auth-controls { flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-start; margin-left: 0; }
+  .github-device-panel { align-items: flex-start; flex-wrap: wrap; padding: 12px 14px; }
+  .github-device-actions { flex: 1 1 100%; justify-content: flex-start; }
+}

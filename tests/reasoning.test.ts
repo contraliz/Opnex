@@ -56,10 +56,10 @@ describe('Codex reasoning channels',()=>{
     const t=task();beginReasoningTurn(t,'worker','worker-thread','worker-turn','gpt-6-luna','high');
     expect(applyCodexReasoningNotification(t,'model/rerouted',event('worker-thread','worker-turn',{fromModel:'gpt-6-luna',toModel:'gpt-6-luna-fast',reason:'service route'}))).toBe(true);
     applyCodexReasoningNotification(t,'item/reasoning/summaryTextDelta',event('worker-thread','worker-turn',{itemId:'w',summaryIndex:0,delta:'Worker summary'}));
-    t.phase='reviewing';t.activeRole='orchestrator';t.activeTurnId='review-turn';t.activeModelId='gpt-6-sol';t.activeEffort='high';
-    beginReasoningTurn(t,'orchestrator','orchestrator-thread','review-turn','gpt-6-sol','high');
+    t.phase='reviewing';t.activeRole='orchestrator';t.activeTurnId='review-turn';t.activeModelId='gpt-6.1-sol';t.activeEffort='low';
+    beginReasoningTurn(t,'orchestrator','orchestrator-thread','review-turn','gpt-6.1-sol','low');
     applyCodexReasoningNotification(t,'item/reasoning/summaryTextDelta',event('orchestrator-thread','review-turn',{itemId:'o',summaryIndex:0,delta:'Review summary'}));
-    expect(t.reasoningSummaries?.map(x=>[x.role,x.turnId,x.requestedModel,x.effectiveModel])).toEqual([['worker','worker-turn','gpt-6-luna','gpt-6-luna-fast'],['orchestrator','review-turn','gpt-6-sol',undefined]]);
+    expect(t.reasoningSummaries?.map(x=>[x.role,x.turnId,x.requestedModel,x.effectiveModel])).toEqual([['worker','worker-turn','gpt-6-luna','gpt-6-luna-fast'],['orchestrator','review-turn','gpt-6.1-sol',undefined]]);
     expect(applyCodexReasoningNotification(t,'item/reasoning/summaryTextDelta',event('worker-thread','worker-turn',{itemId:'w',summaryIndex:0,delta:'must not leak'}))).toBe(false);
   });
   it('rejects cross-role, stale-turn, malformed, and unrelated events without persisting opaque response items',()=>{
@@ -67,7 +67,7 @@ describe('Codex reasoning channels',()=>{
     beginReasoningTurn(t,'worker','worker-thread','worker-turn','gpt-6-luna','high');
     expect(applyCodexReasoningNotification(t,'item/reasoning/textDelta',event('worker-thread','worker-turn',{itemId:'r',contentIndex:0,delta:'worker raw'}))).toBe(true);
     t.phase='reviewing';t.activeRole='orchestrator';t.activeTurnId='review-turn';
-    beginReasoningTurn(t,'orchestrator','orchestrator-thread','review-turn','gpt-6-sol','high');
+    beginReasoningTurn(t,'orchestrator','orchestrator-thread','review-turn','gpt-6.1-sol','low');
     expect(applyCodexReasoningNotification(t,'item/reasoning/textDelta',event('orchestrator-thread','worker-turn',{itemId:'r',contentIndex:0,delta:'cross role'}))).toBe(false);
     expect(applyCodexReasoningNotification(t,'item/reasoning/textDelta',event('worker-thread','old-turn',{itemId:'r',contentIndex:0,delta:'stale'}))).toBe(false);
     expect(applyCodexReasoningNotification(t,'item/reasoning/textDelta',event('orchestrator-thread','review-turn',{itemId:'r',contentIndex:-1,delta:'bad index'}))).toBe(false);

@@ -2,13 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createGitHubPullRequest, pushGitHubBranch, readGitHubWorkspace, type GitHubCommandRunner } from '../server/github.js';
+import { createGitHubPullRequest, pushGitHubBranch, readGitHubCliAuthStatus, readGitHubWorkspace, type GitHubCommandRunner } from '../server/github.js';
 
 let root='';
 afterEach(async()=>{if(root)await rm(root,{recursive:true,force:true});root='';});
 async function workspace(){root=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-github-'));return root;}
 
 describe('task-bound GitHub workflows',()=>{
+  it('returns only authenticated account metadata from the GitHub CLI status check',async()=>{
+    const runner:GitHubCommandRunner=vi.fn(async()=>({code:0,stdout:'Logged in to github.com account demo-user (keyring)',stderr:'Token: ghp_supersecret1234567890'}));
+    await expect(readGitHubCliAuthStatus(runner,process.cwd())).resolves.toEqual({available:true,authenticated:true,account:'demo-user'});
+    expect(JSON.stringify(await readGitHubCliAuthStatus(runner,process.cwd()))).not.toContain('ghp_supersecret');
+  });
+
   it('reports auth and PR status without returning raw CLI output',async()=>{
     await workspace();const runner:GitHubCommandRunner=vi.fn(async(executable,args)=>{
       if(executable==='git'&&args[0]==='branch')return {code:0,stdout:'feature/demo\n',stderr:''};

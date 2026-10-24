@@ -1,0 +1,213 @@
+.embedded-workspace.native-browser-workspace {
+  position: relative;
+  flex: 1 1 0;
+  align-self: stretch;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #1b1b1b;
+  container-name: native-browser-workspace;
+  container-type: inline-size;
+}
+
+.native-browser-toolbar {
+  z-index: 2;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid #333;
+  background: #191919;
+}
+
+.native-browser-title {
+  flex: 0 1 158px;
+  min-width: 78px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  color: #d7d7d7;
+  font-size: 11px;
+}
+
+.native-browser-title > svg:first-child { flex: 0 0 auto; color: #a78bfa; }
+.native-browser-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-browser-title .spinning { flex: 0 0 auto; color: #a78bfa; }
+
+.native-browser-address {
+  flex: 1 1 280px;
+  min-width: 120px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.native-browser-nav { flex: 0 0 auto; display: flex; align-items: center; gap: 1px; }
+.native-browser-nav button,.native-browser-action {
+  min-width: 30px;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #aaa;
+  cursor: pointer;
+}
+.native-browser-nav button:hover:not(:disabled),.native-browser-action:hover:not(:disabled) { background: #292929; color: #eee; }
+.native-browser-nav button:disabled,.native-browser-action:disabled { opacity: .38; cursor: default; }
+
+.native-browser-address-wrap { position: relative; flex: 1 1 auto; min-width: 48px; display: flex; flex-direction: column; gap: 6px; }
+.native-browser-address input {
+  width: 100%;
+  min-width: 48px;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #393939;
+  border-radius: 999px;
+  outline: 0;
+  background: #242424;
+  color: #e7e7e7;
+  font-size: 11px;
+  text-align: center;
+}
+.native-browser-address input:focus-visible { border-color: #a78bfa; box-shadow: 0 0 0 2px #a78bfa33; }
+.native-browser-address input::placeholder { color: #858585; }
+.native-browser-go {
+  flex: 0 0 auto;
+  min-width: 37px;
+  height: 31px;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  background: #292929;
+  color: #ddd;
+  cursor: pointer;
+  font-size: 10px;
+}
+.native-browser-go:hover { border-color: #a78bfa; color: #fff; }
+
+.native-browser-suggestions {
+  width: 100%;
+  max-height: 170px;
+  display: grid;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid #3b3b3b;
+  border-radius: 8px;
+  background: #222;
+  box-shadow: 0 10px 24px #0008;
+}
+.native-browser-suggestions button {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #e5e5e5;
+  text-align: left;
+  cursor: pointer;
+}
+.native-browser-suggestions button:hover,.native-browser-suggestions button[aria-selected="true"] { background: #38333f; }
+.native-browser-suggestions small { overflow: hidden; color: #999; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+
+.native-browser-action { flex: 0 0 auto; min-width: 32px; white-space: nowrap; font-size: 10px; }
+.native-browser-new-tab { width: 32px; padding: 0; }
+.native-browser-clear-data { width: 32px; padding: 0; }
+.native-browser-toolbar.has-address-suggestions { align-items: flex-start; }
+.native-browser-toolbar.has-address-suggestions .native-browser-title,.native-browser-toolbar.has-address-suggestions > .native-browser-action { margin-top: 1px; }
+.native-browser-toolbar.has-address-suggestions .native-browser-nav,.native-browser-toolbar.has-address-suggestions .native-browser-go { margin-top: 0; }
+.native-browser-toolbar.has-address-suggestions .native-browser-address { align-items: flex-start; }
+
+.native-browser-feedback {
+  z-index: 1;
+  flex: 0 0 auto;
+  min-height: 33px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  border-bottom: 1px solid #423535;
+  background: #2b2223;
+  color: #e8c5c5;
+  font-size: 10px;
+}
+.native-browser-feedback[role="status"] { background: #222932; color: #c5d4e8; }
+.native-browser-feedback button { margin-left: auto; display: inline-grid; place-items: center; border: 0; background: transparent; color: inherit; cursor: pointer; }
+
+.native-browser-page {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  overflow: hidden;
+  background: #fff;
+}
+.native-browser-loading,.native-browser-unavailable {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  padding: 24px;
+  background: #1e1e1e;
+  color: #ccc;
+  text-align: center;
+  font-size: 11px;
+}
+.native-browser-unavailable { position: absolute; inset: 48px 0 0; }
+.native-browser-unavailable > svg { color: #a78bfa; }
+.native-browser-unavailable strong { color: #eee; font-size: 13px; }
+.native-browser-unavailable code { color: #c6b1ff; }
+.native-browser-loading > svg { color: #a78bfa; }
+
+.native-browser-load-error {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  background: #202020;
+  color: #ddd;
+}
+.native-browser-load-error > div { max-width: min(640px,75%); display: grid; gap: 7px; }
+.native-browser-load-error strong { color: #eee; font-size: 15px; }
+.native-browser-load-error span { color: #aaa; overflow-wrap: anywhere; font-size: 11px; }
+.native-browser-load-error button { min-height: 31px; padding: 0 12px; border: 1px solid #454545; border-radius: 6px; background: #2a2a2a; color: #eee; cursor: pointer; }
+.native-browser-load-error button:hover { border-color: #a78bfa; }
+
+@container native-browser-workspace (max-width: 680px) {
+  .native-browser-toolbar { flex-wrap: wrap; gap: 6px; padding: 7px 8px; }
+  .native-browser-title { flex: 0 0 auto; max-width: 85px; }
+  .native-browser-address { flex: 1 1 250px; min-width: 48px; order: 3; }
+  .native-browser-action span { display: none; }
+  .native-browser-page { min-height: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .native-browser-toolbar *, .native-browser-feedback *, .native-browser-page * { animation-duration: 0s !important; transition-duration: 0s !important; }
+}
