@@ -6,13 +6,16 @@ const {browserProfilePath}=require('../desktop/browser-profile.cjs') as {browser
 
 describe('local Electron browser profile',()=>{
   it('keeps the persistent Windows browser session under Local AppData',()=>{
-    expect(browserProfilePath({platform:'win32',localAppData:'C:/Users/test/AppData/Local',userData:'C:/Users/test/AppData/Roaming/Pseudoharness'})).toBe(path.join('C:/Users/test/AppData/Local','Pseudoharness','browser-profile'));
+    const localAppData=path.resolve('fixture-local-app-data');
+    const userData=path.resolve('fixture-user-data');
+    expect(browserProfilePath({platform:'win32',localAppData,userData})).toBe(path.join(localAppData,'Pseudoharness','browser-profile'));
   });
   it('keeps disposable smoke profiles isolated under the supplied temporary app-data directory',()=>{
-    expect(browserProfilePath({platform:'win32',localAppData:'C:/Users/test/AppData/Local',userData:'C:/Temp/pseudoharness-smoke',isolated:true})).toBe(path.join('C:/Temp/pseudoharness-smoke','browser-profile'));
+    const userData=path.resolve('fixture-smoke-app-data');
+    expect(browserProfilePath({platform:'win32',localAppData:path.resolve('fixture-local-app-data'),userData,isolated:true})).toBe(path.join(userData,'browser-profile'));
   });
   it('uses the app-local profile directory on macOS and Linux',()=>{
-    const data='C:/Users/test/AppData/Roaming/Pseudoharness';
+    const data=path.resolve('fixture-user-data');
     expect(browserProfilePath({platform:'darwin',userData:data})).toBe(path.join(data,'browser-profile'));
     expect(browserProfilePath({platform:'linux',userData:data})).toBe(path.join(data,'browser-profile'));
   });

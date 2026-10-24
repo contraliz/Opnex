@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createGitHubPullRequest, pushGitHubBranch, readGitHubCliAuthStatus, readGitHubWorkspace, type GitHubCommandRunner } from '../server/github.js';
 
 let root='';
 afterEach(async()=>{if(root)await rm(root,{recursive:true,force:true});root='';});
-async function workspace(){root=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-github-'));return root;}
+async function workspace(){root=await realpath(await mkdtemp(path.join(os.tmpdir(),'pseudoharness-github-')));return root;}
 
 describe('task-bound GitHub workflows',()=>{
   it('returns only authenticated account metadata from the GitHub CLI status check',async()=>{

@@ -5,19 +5,31 @@ Pseudoharness is a local desktop-style Codex request-routing and delegation app.
 ## Requirements
 
 - Node.js 22.12 or newer and npm to run from source or use the portable npm package. The packaged Electron app includes its runtime. Use Node.js 22.22.2 for source checks; it satisfies the locked jsdom test environment's runtime requirements and is the version used in CI.
-- Codex CLI installed, signed in, and able to run `codex app-server --stdio`. Its model catalog must include GPT-6 Luna low effort and the Fast (`priority`) service tier for routing. The runtime must also support the short-lived external-auth bridge, per-thread base/developer instructions, and empty `instructionSources` acknowledgement for new and resumed agent threads; otherwise agent work fails closed. The signed-in account must also have access to the models selected for hard tasks.
+- For model-backed tasks, Codex CLI must be installed and signed in, with `codex app-server --stdio` available. Routing also requires GPT-6 Luna low effort and the Fast (`priority`) service tier. The runtime must support the short-lived external-auth bridge, per-thread base/developer instructions, and empty `instructionSources` acknowledgement for new and resumed agent threads; otherwise agent work fails closed. The signed-in account must have access to the models selected for hard tasks. The app window can still launch without Codex CLI; model and agent actions remain unavailable until the required runtime is available.
 - A workspace directory to choose in Settings.
 - Optional: AgentMem available as an MCP stdio server in the same Codex environment, with a project registered to the selected workspace root.
+- Optional: GitHub CLI (`gh`) for GitHub account and repository features. Local Git workspace data remains available without `gh`.
 
 ### macOS first run
 
-In Terminal, check the existing Codex sign-in with `codex login status`, then run `npm ci` and `npm run dev` from this checkout. Open <http://127.0.0.1:5173> and choose a workspace in Settings. No separate Mac app bundle is required; the app runs locally in your browser and stores its state under `~/Library/Application Support/Pseudoharness`. Use `npm run package` to build the portable npm tarball instead.
+In Terminal, check the existing Codex sign-in with `codex login status`, then run `npm ci --include=dev` and `npm run dev` from this checkout. Open <http://127.0.0.1:5173> and choose a workspace in Settings. No separate Mac app bundle is required; the app runs locally in your browser and stores its state under `~/Library/Application Support/Pseudoharness`. Use `npm run package` to build the portable npm tarball instead.
 
 The model and effort selectors use the catalog returned by the Codex executable the app launches. If an expected model is marked unavailable or its effort selector is disabled, check `codex --version` and point the app at a newer runtime with `CODEX_EXECUTABLE=/path/to/codex npm run dev`. This override leaves the CLI on `PATH` unchanged.
 
 ### Optional Electron desktop shell
 
-Run `npm run desktop` from the source checkout to build and launch the optional Electron shell. It starts the local app backend in the OS-managed Pseudoharness data directory and adds native Browser and local Git workspaces. Session, Browser, and Git are peer tabs in the shared app workspace; opening Browser or Git keeps the session tab and can split or move among panes. Each session's compact Stop and Heads-up icon controls stay inside that session's content, without a separate action bar or tab-strip controls. Each Browser peer owns a persistent-profile native `WebContentsView` that fills its pane. Remote browser pages have no app preload, Node integration, or browser permissions. Site expiry and sign-in policies still apply; use a site's own “remember me” option if it offers one. Browser data can be cleared from Settings. Run `npm run desktop:package` on macOS or Windows to create a desktop build in `desktop-release/` (zip app on macOS, NSIS installer on Windows); these local builds are unsigned. CI targets both operating systems and the package script performs a packaged-app/profile smoke test after packaging, using disposable profiles. `npm run desktop:smoke` runs the source-shell check locally. The regular Vite app, portable npm package, and `npm run start` remain browser-based.
+From a fresh clone, install the locked dependencies before the first launch:
+
+```sh
+git clone https://github.com/contraliz/pseudoharness.git
+cd pseudoharness
+npm ci --include=dev
+npm run desktop
+```
+
+Use Node.js 22.12 or newer. `npm ci --include=dev` installs the project-local development tools used by the source build, including TypeScript, Vite, and Electron, even when `NODE_ENV=production` is set. Run it again after pulling a change to `package-lock.json`. Do not install TypeScript globally or omit development dependencies for a source build; if TypeScript or Vite is missing locally, the build stops with this install instruction before clearing existing build output.
+
+The desktop shell starts the local app backend in the OS-managed Pseudoharness data directory and adds native Browser and local Git workspaces. Session, Browser, and Git are peer tabs in the shared app workspace; opening Browser or Git keeps the session tab and can split or move among panes. Each session's compact Stop and Heads-up icon controls stay inside that session's content, without a separate action bar or tab-strip controls. Each Browser peer owns a persistent-profile native `WebContentsView` that fills its pane. Remote browser pages have no app preload, Node integration, or browser permissions. Site expiry and sign-in policies still apply; use a site's own “remember me” option if it offers one. Browser data can be cleared from Settings. Run `npm run desktop:package` on macOS or Windows to create a desktop build in `desktop-release/` (zip app on macOS, NSIS installer on Windows); these local builds are unsigned. CI targets both operating systems and the package script performs a packaged-app/profile smoke test after packaging, using disposable profiles. `npm run desktop:smoke` runs the source-shell check locally. The regular Vite app, portable npm package, and `npm run start` remain browser-based.
 
 Each **Browser** tab owns one persistent, sandboxed Electron page with compact Codex-like chrome, keyboard-accessible common-address suggestions, bare-host HTTPS normalization, and optional user-directed text annotations. Browser cookies and site storage stay in a local Electron profile and are never forwarded to Pseudoharness task state, AgentMem, or model prompts. The **Git** peer is a local interface for branches, worktrees, commit history, and GitHub repository/PR/issue metadata. Its in-page **Sign in with GitHub** flow uses GitHub CLI's web/device authorization; the user completes authorization in GitHub, and the app never asks for or stores a password or token. The CLI credential store is separate from browser cookies. The app does not push branches or modify GitHub items. New Luna workers can use a bounded workspace tool to open these views and inspect a minimal GitHub status summary, but cannot read browser page contents, obtain cookies, or perform GitHub writes. See [`docs/browser-github-and-parallel-workers.md`](docs/browser-github-and-parallel-workers.md) for data locality, annotations, authentication, and limits.
 
@@ -40,7 +52,7 @@ Codex still provides its mandatory system, platform, security, and tool instruct
 Build a local tarball with the compiled app and its bundled runtime dependencies:
 
 ```sh
-npm ci
+npm ci --include=dev
 npm run package
 ```
 
@@ -56,7 +68,7 @@ Open <http://127.0.0.1:4174>. The app binds to loopback only. Stop it with Ctrl+
 ## Run from source
 
 ```sh
-npm ci
+npm ci --include=dev
 npm run dev
 ```
 
