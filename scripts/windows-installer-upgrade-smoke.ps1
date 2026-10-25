@@ -65,6 +65,21 @@ function Invoke-Uninstall([string] $installPath) {
   }
 }
 
+function Assert-Uninstalled([string] $installPath, [string] $displayName, [string] $registryRoot) {
+  for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
+    $remainingFiles = @()
+    if (Test-Path -LiteralPath $installPath) {
+      $remainingFiles = @(Get-ChildItem -LiteralPath $installPath -Force -ErrorAction SilentlyContinue)
+    }
+    $remainingEntries = @(Get-UninstallEntries $registryRoot $displayName)
+    if ($remainingFiles.Count -eq 0 -and $remainingEntries.Count -eq 0) { return }
+    Start-Sleep -Milliseconds 250
+  }
+
+  $remainingNames = @($remainingFiles | ForEach-Object Name) -join ', '
+  throw "Uninstall left files [$remainingNames] or a registry entry for $displayName."
+}
+
 if ((Test-Path -LiteralPath $dataDirectory) -or (Test-Path -LiteralPath $testRoot)) {
   throw 'The isolated installer test requires fresh, task-owned paths; refusing to reuse existing data.'
 }
@@ -88,9 +103,7 @@ try {
   }
   Get-UninstallEntry 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall' "Pseudoharness $($package.version)" | Out-Null
   Invoke-Uninstall $cleanInstall
-  if (Test-Path -LiteralPath $cleanInstall) {
-    throw 'Clean uninstall left the task-owned install directory behind.'
-  }
+  Assert-Uninstalled $cleanInstall "Pseudoharness $($package.version)" 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 
   # Install the last release in per-user mode, then upgrade in place to per-machine.
   Invoke-Setup $oldSetup $legacyInstall
@@ -115,9 +128,7 @@ try {
   }
 
   Invoke-Uninstall $upgradeInstall
-  if (Test-Path -LiteralPath $upgradeInstall) {
-    throw 'Upgrade uninstall left the task-owned install directory behind.'
-  }
+  Assert-Uninstalled $upgradeInstall "Pseudoharness $($package.version)" 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
   if ((Get-Content -LiteralPath $skillsDatabase -Raw) -ne $markerText -or (Get-Content -LiteralPath $marker -Raw) -ne $markerText) {
     throw 'Uninstall changed or removed saved-skill/app-data test markers.'
   }

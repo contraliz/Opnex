@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to update (for example v1.1.1)
+        required: true
+        type: string
+      build_ref:
+        description: Branch or commit containing the source to package
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -20,10 +30,13 @@ jobs:
           - os: macos-latest
             asset_glob: desktop-release/*.zip
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      BUILD_REF: ${{ inputs.build_ref || github.ref }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ env.BUILD_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.22.2'
@@ -31,7 +44,7 @@ jobs:
       - name: Confirm package version matches tag
         shell: bash
         run: |
-          node -e "const p=require('./package.json'); const tag=process.env.GITHUB_REF_NAME; if (tag !== 'v'+p.version) { console.error('Tag '+tag+' does not match package version '+p.version); process.exit(1); }"
+          node -e "const p=require('./package.json'); const tag=process.env.RELEASE_TAG; if (tag !== 'v'+p.version) { console.error('Tag '+tag+' does not match package version '+p.version); process.exit(1); }"
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
@@ -55,10 +68,13 @@ jobs:
     name: Publish GitHub release
     needs: package
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      BUILD_REF: ${{ inputs.build_ref || github.ref }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ env.BUILD_REF }}
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
@@ -69,13 +85,32 @@ jobs:
           find release-assets -maxdepth 1 -type f -size +0c -print
           test "$(find release-assets -maxdepth 1 -type f -name '*.exe' | wc -l)" -ge 1
           test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -ge 2
+      - name: Confirm the target release already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Invalid release tag: $RELEASE_TAG" >&2; exit 1 ;;
+          esac
+          curl --fail --silent --show-error \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            -o target-release.json
+          node -e "const r=require('./target-release.json'); if (r.tag_name !== process.env.RELEASE_TAG || r.draft) { throw new Error('Target must be an existing published release for this exact tag.'); }"
+      - name: Prepare release notes with build provenance
+        run: |
+          cp "docs/releases/$RELEASE_TAG.md" release-notes.md
+          printf '\nDesktop packages rebuilt from source commit `%s`.\n' "$(git rev-parse HEAD)" >> release-notes.md
       - name: Publish release with desktop packages
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Pseudoharness ${{ github.ref_name }}
-          body_path: docs/releases/${{ github.ref_name }}.md
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Pseudoharness ${{ env.RELEASE_TAG }}
+          body_path: release-notes.md
           draft: false
           prerelease: false
+          overwrite_files: true
           files: release-assets/*
           fail_on_unmatched_files: true
