@@ -7,6 +7,7 @@ import type { Receipt } from './contracts.js';
 import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { resolveMcpHelperLaunch } from './mcp-helper-runtime.js';
 
 type Status = { connected:boolean; projectVerified:boolean; detail:string };
 export type AgentMemProject = { id:string; name:string; description?:string; sourceRoot:string; memoryDirectory:string };
@@ -59,10 +60,8 @@ export class AgentMem {
     const rootKey=(value:string)=>path.resolve(value).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase();
     const repository=rows.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&rootKey(row.root)===rootKey(workspaceRoot));
     if(!repository)throw new Error('The selected AgentMem project has no repository index registered for this exact workspace. Register or select the matching repository index before starting project work.');
-    const modulePath=fileURLToPath(import.meta.url);const development=modulePath.endsWith('.ts');
-    const gatewayPath=development?modulePath.replace(/agentmem\.ts$/,'agentmem-mcp-gateway.ts'):path.join(path.dirname(modulePath),'agentmem-mcp-gateway.js');
-    const nodeArgs=development?['--import','tsx',gatewayPath]:[gatewayPath];
-    return {command:process.execPath,args:nodeArgs,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes'],env:{PSEUDOHARNESS_AGENTMEM_PROJECT_ID:projectId,PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:repository.repository_id,PSEUDOHARNESS_AGENTMEM_COMMAND:this.command,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify(this.args),PSEUDOHARNESS_AGENTMEM_DATA_DIR:this.env.AGENTMEM_DATA_DIR||'',...(process.versions.electron?{ELECTRON_RUN_AS_NODE:'1'}:{})}};
+    const modulePath=fileURLToPath(import.meta.url),launch=resolveMcpHelperLaunch({modulePath,helperFile:modulePath.endsWith('.ts')?'agentmem-mcp-gateway.ts':'agentmem-mcp-gateway.js'});
+    return {command:launch.command,args:launch.args,cwd:launch.cwd,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes'],env:{PSEUDOHARNESS_AGENTMEM_PROJECT_ID:projectId,PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:repository.repository_id,PSEUDOHARNESS_AGENTMEM_COMMAND:this.command,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify(this.args),PSEUDOHARNESS_AGENTMEM_DATA_DIR:this.env.AGENTMEM_DATA_DIR||''}};
   }
   async connect(projectId:string,expectedRoot:string) {
     try {
