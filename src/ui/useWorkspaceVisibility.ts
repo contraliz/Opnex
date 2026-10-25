@@ -1,13 +1,13 @@
 import { useEffect, useState, type RefObject } from 'react';
 
 /** Tracks whether a retained workspace tab is currently rendered and visible. */
-export function useWorkspaceVisibility<T extends HTMLElement>(ref:RefObject<T|null>){
-  const [visible,setVisible]=useState(false);
+export function useWorkspaceVisibility<T extends HTMLElement>(ref:RefObject<T|null>,enabled=true){
+  const [visible,setVisible]=useState(()=>enabled&&document.visibilityState!=='hidden');
   useEffect(()=>{
     const update=()=>{
       const element=ref.current;
       const hasLayout=!!element&&!element.closest('[hidden]');
-      setVisible(document.visibilityState!=='hidden'&&hasLayout);
+      setVisible(enabled&&document.visibilityState!=='hidden'&&hasLayout);
     };
     const onVisibility=()=>update();
     window.addEventListener('focus',onVisibility);
@@ -19,6 +19,6 @@ export function useWorkspaceVisibility<T extends HTMLElement>(ref:RefObject<T|nu
       window.removeEventListener('pageshow',onVisibility);
       document.removeEventListener('visibilitychange',onVisibility);
     };
-  },[ref]);
+  },[enabled,ref]);
   return visible;
 }

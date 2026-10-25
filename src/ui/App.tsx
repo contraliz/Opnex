@@ -742,7 +742,7 @@ export default function App() {
         setDropTarget({ paneId: pane.id, half: event.clientX < rect.left + rect.width / 2 ? 'left' : 'right' });
       }
     };
-    if(kind==='skills')return <div key={tab} data-workspace-tab={tab} data-tab-kind="skills" className={baseClass+' skill-library-tab'} style={{gridColumn:column,gridRow:row}} hidden={!selected} aria-hidden={!selected} inert={!selected} onClick={()=>setFocusedPaneId(pane.id)}><Suspense fallback={<div className="skill-library-loading" role="status">Loading skills…</div>}><SkillsLibraryPage/></Suspense></div>;
+    if(kind==='skills')return <div key={tab} data-workspace-tab={tab} data-tab-kind="skills" className={baseClass+' skill-library-tab'} style={{gridColumn:column,gridRow:row}} hidden={!selected} aria-hidden={!selected} inert={!selected} onClick={()=>setFocusedPaneId(pane.id)}><Suspense fallback={<div className="skill-library-loading" role="status">Loading skills…</div>}><SkillsLibraryPage active={selected}/></Suspense></div>;
     if (kind === 'browser' || kind === 'git') {
       return <div key={tab} data-workspace-tab={tab} data-tab-kind={kind} className={baseClass + ' peer-workspace-pane ' + (kind === 'browser' ? 'browser-peer-tab' : 'git-peer-tab')}
         style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
