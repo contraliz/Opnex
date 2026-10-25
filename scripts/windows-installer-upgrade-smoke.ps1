@@ -18,12 +18,13 @@ if ($LASTEXITCODE -ne 0) {
   throw 'The packaged Windows elevation manifest check failed.'
 }
 
-$oldSetup = Join-Path $testRoot 'Pseudoharness.Setup.1.1.1.exe'
+$oldSetup = $env:PSEUDOHARNESS_LEGACY_SETUP
+if (-not $oldSetup -or -not (Test-Path -LiteralPath $oldSetup -PathType Leaf)) {
+  throw 'The original v1.1.1 per-user installer was not rebuilt from the immutable v1.1.1 tag.'
+}
 $legacyInstall = Join-Path $testRoot 'legacy-per-user'
 $cleanInstall = Join-Path $testRoot 'clean-per-machine'
 $upgradeInstall = $legacyInstall
-$oldSetupUrl = 'https://github.com/contraliz/pseudoharness/releases/download/v1.1.1/Pseudoharness.Setup.1.1.1.exe'
-$oldSetupSha256 = 'AA53AC52EA5384CACA9C7D3C0F6CA219CC0529FE747C55BFCA7225EE936CD527'
 $dataDirectory = Join-Path $env:LOCALAPPDATA 'Pseudoharness'
 $skillsDatabase = Join-Path $dataDirectory 'skills.sqlite3'
 $marker = Join-Path $dataDirectory 'installer-upgrade-smoke.marker'
@@ -91,12 +92,6 @@ if ((Test-Path -LiteralPath $dataDirectory) -or (Test-Path -LiteralPath $testRoo
 
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
-  Invoke-WebRequest -Uri $oldSetupUrl -OutFile $oldSetup
-  $actualSha256 = (Get-FileHash -LiteralPath $oldSetup -Algorithm SHA256).Hash
-  if ($actualSha256 -ne $oldSetupSha256) {
-    throw "The 1.1.1 baseline installer hash did not match the published artifact."
-  }
-
   New-Item -ItemType Directory -Path $dataDirectory | Out-Null
   Set-Content -LiteralPath $skillsDatabase -Value $markerText -NoNewline
   Set-Content -LiteralPath $marker -Value $markerText -NoNewline
