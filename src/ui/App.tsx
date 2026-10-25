@@ -93,7 +93,7 @@ export default function App() {
   const projectExpansionQueue = useRef(Promise.resolve());
   const projectSelectorRef = useRef<HTMLSelectElement>(null);
   const recentSessionNavigation = useRef<{ids:string[];activeId:string|null}|null>(null);
-  const tabDragSuppressUntil = useRef(0);
+  const tabDragSuppressUntil = useRef<{tab:string;until:number}|null>(null);
   const closeTimers = useRef<Record<string, number>>({});
   const settingsQueue = useRef(Promise.resolve());
   const contextSelectionQueue = useRef(Promise.resolve());
@@ -295,6 +295,7 @@ export default function App() {
     moveTab(source, target);
   };
   const finishTabDrag = (source: string) => {
+    tabDragSuppressUntil.current={tab:source,until:Date.now()+600};
     const target = tabDropTargetRef.current;
     clearTabDrop();
     setDraggedTab(null);
@@ -606,8 +607,9 @@ export default function App() {
       if(event.key==='Escape'){if(projectEditor){event.preventDefault();setProjectEditor(null);return;}if(shortcutsOpen){event.preventDefault();setShortcutsOpen(false);return;}if(settingsOpen){event.preventDefault();closeSettings();return;}if(sessionDialogOpen){event.preventDefault();closeSessionDialog();return;}return;}
       if(projectEditor||shortcutsOpen||settingsOpen||sessionDialogOpen)return;
       const isMac=window.pseudoharnessDesktop?.platform==='darwin'||navigator.platform.toLocaleLowerCase().includes('mac');const mod=isMac?event.metaKey:event.ctrlKey;if(!mod||isMac&&event.ctrlKey||!isMac&&event.metaKey)return;
-      const key=event.key.toLowerCase();const allowedAlt=event.altKey&&key==='p';if(event.altKey&&!allowedAlt)return;const target=event.target instanceof HTMLElement?event.target:null;const formControl=!!target&&/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);const editable=!!target?.isContentEditable;
-      if((editable&&key==='b')||((formControl||editable)&&event.shiftKey&&(event.key==='ArrowUp'||event.key==='ArrowDown')))return;
+      const key=event.key.toLowerCase();const allowedAlt=event.altKey&&key==='p';if(event.altKey&&!allowedAlt)return;const target=event.target instanceof HTMLElement?event.target:null;const formControl=!!target&&/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);const editable=!!target?.isContentEditable;const composerEditor=!!target?.closest('.cm-editor');
+      if((formControl||editable)&&!composerEditor)return;
+      if(composerEditor&&(key==='b'||event.shiftKey&&(event.key==='ArrowUp'||event.key==='ArrowDown')))return;
       if(key==='n'&&!event.shiftKey){event.preventDefault();openNewTab();return;}
       if(key===','&&!event.shiftKey){event.preventDefault();openSettings();return;}
       if(key==='b'&&!event.shiftKey){event.preventDefault();setSidebarCollapsed(value=>!value);return;}
@@ -682,15 +684,16 @@ export default function App() {
         const selected = pane.activeTab === tab;
         const symbol = kind === 'browser' ? <Globe size={13} /> : kind === 'git' ? <GitBranch size={13} /> : kind==='skills'?<BookOpen size={13}/>: index === 0 && !split ? <MessageSquarePlus size={13} /> : null;
         const activate=()=>{setPaneActive(pane.id,tab);setFocusedPaneId(pane.id);if(kind==='session'&&!tab.startsWith('new:'))void selectSessionContext(tab).catch(cause=>setTabError(tab,String(cause)));};
-        const activateFromClick=(event:React.MouseEvent<HTMLElement>)=>{if(Date.now()<tabDragSuppressUntil.current||event.target instanceof Element&&event.target.closest('.tab-close')){event.preventDefault();event.stopPropagation();return;}activate();};
+        const activateFromClick=(event:React.MouseEvent<HTMLElement>)=>{if(tabDragSuppressUntil.current?.tab===tab&&Date.now()<tabDragSuppressUntil.current.until||event.target instanceof Element&&event.target.closest('.tab-close')){event.preventDefault();event.stopPropagation();return;}activate();};
         return <div className={'document-tab ' + (selected ? 'active ' : '') + (tabDropTarget === tab ? 'tab-drop-target ' : '') + (sessionArrival === tab ? 'session-arrived tab-arrived ' : '') + (closingTabs[tab] ? 'tab-closing' : '')}
           key={tab} data-workspace-tab={tab} data-session-tab={tab} draggable={!closingTabs[tab]}
           onClick={activateFromClick}
+          onPointerDown={event=>{if(event.button===0&&tabDragSuppressUntil.current?.tab===tab)tabDragSuppressUntil.current=null;}}
           onMouseDown={event=>{if(event.button===1)event.preventDefault();}}
           onAuxClick={event=>{if(event.button===1){event.preventDefault();closeTab(tab);}}}
           onDragStart={event => {
             if(event.target instanceof Element&&event.target.closest('.tab-close')){event.preventDefault();return;}
-            tabDragSuppressUntil.current=Date.now()+600;
+            tabDragSuppressUntil.current={tab,until:Date.now()+600};
             clearTabDrop();
             setDraggedTab(tab);
             event.dataTransfer.setData('application/x-pseudoharness-workspace-tab', tab);
@@ -698,7 +701,7 @@ export default function App() {
             event.dataTransfer.effectAllowed = 'move';
           }}
           onDragEnd={() => finishTabDrag(tab)}
-          onPointerCancel={()=>{clearTabDrop();setDraggedTab(null);setDropTarget(null);tabDragSuppressUntil.current=0;}}
+          onPointerCancel={()=>{clearTabDrop();setDraggedTab(null);setDropTarget(null);tabDragSuppressUntil.current=null;}}
           onDragOver={event => {
             if (Array.from(event.dataTransfer.types).some(type => type === 'application/x-pseudoharness-workspace-tab' || type === 'application/x-pseudoharness-session-tab')) {
               event.preventDefault();
