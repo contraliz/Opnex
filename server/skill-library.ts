@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { stateDirectory } from './paths.js';
@@ -14,12 +14,18 @@ export type SkillVersion={skillId:string;revision:string;name:string;description
 export type SkillSummary={id:string;name:string;description:string;source:string;revision:string;createdAt:string;updatedAt:string;archived:boolean;fileCount:number};
 const databases=new Map<string,DatabaseSync>();
 
+function restrictSkillDatabasePermissions(databasePath:string){
+  if(process.platform==='win32')return;
+  for(const file of [databasePath,`${databasePath}-wal`,`${databasePath}-shm`])if(existsSync(file))chmodSync(file,0o600);
+}
+
 function database(){
   const next=path.join(stateDirectory(),'skills.sqlite3');
   const existing=databases.get(next);if(existing)return existing;
   const opened=new DatabaseSync(next);
   try{
     opened.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;');
+    restrictSkillDatabasePermissions(next);
     const version=Number(opened.prepare('PRAGMA user_version').get()?.user_version||0);
     if(version>2)throw new Error(`The skills database is newer than this version of Pseudoharness can read (schema ${version}).`);
     if(version===0){opened.exec(`BEGIN IMMEDIATE; CREATE TABLE skills(id TEXT PRIMARY KEY, current_revision TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)));

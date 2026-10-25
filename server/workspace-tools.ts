@@ -10,7 +10,14 @@ export function authorizesWorkerWorkspaceTool(task:Task|undefined,pass:TaskPass|
 export function normalizeAgentWorkspaceUrl(input:unknown){
   if(typeof input!=='string'||input.length>2048)throw new Error('Provide a credential-free HTTP or HTTPS URL.');
   let url:URL;try{url=new URL(input);}catch{throw new Error('Provide a complete HTTP or HTTPS URL.');}
-  if(!['https:','http:'].includes(url.protocol)||url.username||url.password||[...url.searchParams.keys()].some(key=>/(token|auth|key|secret|code|session|signature|credential|jwt)/i.test(key)))throw new Error('Workspace URLs must use HTTP or HTTPS and must not contain credentials or authentication parameters.');
+  const credentialKey=/(token|auth|key|secret|code|session|signature|credential|jwt)/i;
+  const hasCredentialParameter=(value:string)=>value.includes('=')&&[...new URLSearchParams(value.replace(/^\?/,'')).keys()].some(key=>credentialKey.test(key));
+  const fragment=url.hash.slice(1);
+  let decodedFragment=fragment;try{decodedFragment=decodeURIComponent(fragment.replaceAll('+',' '));}catch{/* Keep checking the browser's original fragment if it is not valid encoded text. */}
+  // Check the whole fragment (OAuth implicit-flow parameters) and the portion
+  // after a hash-route query marker, while allowing ordinary anchors/routes.
+  const hashQuery=fragment.includes('?')?fragment.slice(fragment.indexOf('?')+1):'';
+  if(!['https:','http:'].includes(url.protocol)||url.username||url.password||hasCredentialParameter(url.search)||hasCredentialParameter(fragment)||hasCredentialParameter(decodedFragment)||hashQuery&&hasCredentialParameter(hashQuery))throw new Error('Workspace URLs must use HTTP or HTTPS and must not contain credentials or authentication parameters.');
   return url.toString();
 }
 

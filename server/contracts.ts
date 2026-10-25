@@ -157,7 +157,7 @@ export const sessionTitleSchema = z.object({ title: z.string().trim().min(1, 'Se
 export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(), z.number()]), decision: z.enum(['accept','decline','cancel']), content:z.record(z.string(),z.unknown()).optional() }).strict();
 export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never' | 'full-access';
 export const settingsSchema = z.object({
-  projectRoot: z.string().trim().min(1).max(1024), agentmemProjectId: z.string().trim().max(128).default(''),
+    projectRoot: z.string().trim().min(1).max(1024), agentmemProjectId: z.string().trim().max(64).regex(/^$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).default(''),
   orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   approvalPolicy: z.enum(['on-request','untrusted','never','full-access']).default('on-request'),
 }).strict();

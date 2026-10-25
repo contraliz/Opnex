@@ -8,11 +8,14 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { resolveMcpHelperLaunch } from './mcp-helper-runtime.js';
+import { parse as parseToml } from 'smol-toml';
 
 type Status = { connected:boolean; projectVerified:boolean; detail:string };
 export type AgentMemProject = { id:string; name:string; description?:string; sourceRoot:string; memoryDirectory:string };
+export type AgentMemSetupMode='register'|'repository'|'ready';
 export type AgentMemAuditScope={taskId:string;passId:string;role:'direct'|'simple'|'orchestrator'|'worker';purpose:string;projectId:string;workspaceRoot:string;threadId?:string;contextId:string};
 export type AgentMemCallAudit={taskId:string;passId:string;role:AgentMemAuditScope['role'];purpose:string;projectId:string;repositoryId?:string;contextId:string;callId:string;method:string;service:'knowledge'|'repository_index'|'unknown';operation:'read'|'write'|'unknown';status:'running'|'completed'|'failed';startedAt:string;updatedAt:string;resultSummary?:string;error?:string};
+function rootKey(value:string){return path.resolve(value).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase();}
 function decisionIdKey(value:string){
   const match=value.toLowerCase().replace(/[^a-z0-9]/g,'').match(/^([a-z]+)0*(\d+)$/);
   return match?`${match[1]}${Number(match[2])}`:'';
@@ -21,14 +24,19 @@ export function relevantDecisions(value:unknown,query:string){
   const records=Array.isArray(value)?value:(value as any)?.decisions||(value as any)?.items||(value as any)?.data?.decisions||[];
   if(!Array.isArray(records))return {items:[],query,match_count:0};
   const queryIds=new Set((query.match(/[a-z]+[-\s]?0*\d+/gi)||[]).map(decisionIdKey).filter(Boolean));
-  const terms=query.toLowerCase().match(/[a-z0-9]{3,}/g)||[];
-  const stopWords=new Set(['what','which','that','this','with','from','about','does','have','into','tell','show','explain','decision','decisions','project']);
-  const queryTerms=[...new Set(terms.filter(term=>!stopWords.has(term)))];
+  const searchableTerms=(source:string)=>{
+    const terms=source.toLocaleLowerCase().match(/[a-z0-9]{3,}/g)||[];
+    const stopWords=new Set(['what','which','that','this','with','from','about','does','have','into','tell','show','explain','decision','decisions','project']);
+    const cjkRuns=source.match(/[\u3400-\u9fff\uf900-\ufaff]+/g)||[];
+    const cjkTerms=cjkRuns.flatMap(run=>Array.from({length:Math.max(0,run.length-1)},(_,index)=>run.slice(index,index+2)));
+    return [...new Set([...terms.filter(term=>!stopWords.has(term)),...cjkTerms])];
+  };
+  const queryTerms=searchableTerms(query);
   const ranked=records.map((record:any)=>{
     const id=typeof record?.id==='string'?decisionIdKey(record.id):'';
-    const text=[record?.title,record?.choice,record?.rationale,record?.original_quote].filter(x=>typeof x==='string').join(' ').toLowerCase();
+    const text=[record?.title,record?.choice,record?.rationale,record?.original_quote].filter(x=>typeof x==='string').join(' ').toLocaleLowerCase();
     const idMatch=!!id&&queryIds.has(id);
-    const score=queryTerms.reduce((total,term)=>total+(text.includes(term)?1:0),0);
+    const score=queryTerms.reduce((total,term)=>total+(new Set(searchableTerms(text)).has(term)?1:0),0);
     return {record,idMatch,score};
   }).filter(x=>x.idMatch||x.score>0).sort((a,b)=>Number(b.idMatch)-Number(a.idMatch)||b.score-a.score);
   return {items:ranked.slice(0,8).map(x=>x.record),query,match_count:ranked.length};
@@ -44,24 +52,55 @@ export class AgentMem {
   withAuditScope<T>(scope:AgentMemAuditScope,run:()=>Promise<T>):Promise<T>{return this.auditScope.run(scope,run);}
   async configure() {
     const codexHome=process.env.CODEX_HOME || path.join(os.homedir(),'.codex');
-    const config=await readFile(path.join(codexHome,'config.toml'),'utf8');
-    const block=config.match(/\[mcp_servers\.agentmem\]([\s\S]*?)(?=\n\[|$)/)?.[1];
-    const command=block?.match(/^\s*command\s*=\s*['"]([^'"\r\n]+)['"]/m)?.[1];
-    const argsRaw=block?.match(/^\s*args\s*=\s*(\[[^\r\n]+\])/m)?.[1];
-    const envBlock=config.match(/\[mcp_servers\.agentmem\.env\]([\s\S]*?)(?=\n\[|$)/)?.[1];
-    if(!command || !argsRaw) throw new Error('No usable AgentMem stdio server is configured in Codex settings.');
-    this.command=command; this.args=JSON.parse(argsRaw.replace(/'/g,'"')) as string[];
-    const dataDir=envBlock?.match(/^\s*AGENTMEM_DATA_DIR\s*=\s*['"]([^'"\r\n]+)['"]/m)?.[1];
-    if(dataDir) this.env.AGENTMEM_DATA_DIR=dataDir;
+    let source:string;
+    try{source=await readFile(path.join(codexHome,'config.toml'),'utf8');}
+    catch(error){throw new Error('Could not read Codex config.toml: '+(error instanceof Error?error.message:'file unavailable'));}
+    let config:Record<string,unknown>;
+    try{config=parseToml(source) as Record<string,unknown>;}
+    catch(error){throw new Error('Could not parse Codex config.toml: '+(error instanceof Error?error.message:'invalid TOML'));}
+    const servers=config.mcp_servers;
+    const server=servers&&typeof servers==='object'&&!Array.isArray(servers)?(servers as Record<string,unknown>).agentmem:undefined;
+    if(!server||typeof server!=='object'||Array.isArray(server))throw new Error('Codex config.toml must define [mcp_servers.agentmem] as a table.');
+    const entry=server as Record<string,unknown>;
+    if(typeof entry.command!=='string'||!entry.command.trim())throw new Error('Codex config.toml [mcp_servers.agentmem] requires a non-empty string command.');
+    const args=entry.args===undefined?[]:entry.args;
+    if(!Array.isArray(args)||!args.every(value=>typeof value==='string'))throw new Error('Codex config.toml [mcp_servers.agentmem].args must be an array of strings when provided.');
+    const configuredEnv=entry.env===undefined?{}:entry.env;
+    if(!configuredEnv||typeof configuredEnv!=='object'||Array.isArray(configuredEnv)||Object.entries(configuredEnv).some(([key,value])=>!key.trim()||typeof value!=='string'))
+      throw new Error('Codex config.toml [mcp_servers.agentmem.env] must contain only named string values.');
+    this.command=entry.command.trim();this.args=args as string[];
+    this.env={...(configuredEnv as Record<string,string>)};
+    for(const key of Object.keys(this.env))if(typeof process.env[key]==='string')this.env[key]=process.env[key]!;
+    // Preserve explicit AgentMem data-root isolation even when set only on the
+    // Pseudoharness launcher rather than in Codex's MCP env table.
+    for(const key of ['AGENTMEM_DATA_DIR','AGENTMEM_MEMORY_ROOT'])if(typeof process.env[key]==='string')this.env[key]=process.env[key]!;
   }
   async modelMcpServerConfig(projectId:string,workspaceRoot:string){
-    if(!projectId||!workspaceRoot||!this.command)throw new Error('A verified AgentMem project is required before exposing project knowledge to a model.');
-    const repositories=await this.call('repository_list',{project_id:projectId});const rows=Array.isArray(repositories?.repositories)?repositories.repositories:[];
-    const rootKey=(value:string)=>path.resolve(value).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase();
-    const repository=rows.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&rootKey(row.root)===rootKey(workspaceRoot));
-    if(!repository)throw new Error('The selected AgentMem project has no repository index registered for this exact workspace. Register or select the matching repository index before starting project work.');
+    if(!projectId||!workspaceRoot||!this.command)throw new Error('Choose an AgentMem project ID and project root before exposing project knowledge to a model.');
+    const setupMode=await this.setupMode(projectId,workspaceRoot);
+    let repository:any;
+    if(setupMode!=='register'){
+      const repositories=await this.call('repository_list',{project_id:projectId});const rows=Array.isArray(repositories?.repositories)?repositories.repositories:[];
+      repository=rows.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&rootKey(row.root)===rootKey(workspaceRoot));
+    }
+    if(setupMode==='ready'&&!repository)throw new Error('The selected AgentMem project has no repository index registered for this exact workspace.');
     const modulePath=fileURLToPath(import.meta.url),launch=resolveMcpHelperLaunch({modulePath,helperFile:modulePath.endsWith('.ts')?'agentmem-mcp-gateway.ts':'agentmem-mcp-gateway.js'});
-    return {command:launch.command,args:launch.args,cwd:launch.cwd,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes'],env:{PSEUDOHARNESS_AGENTMEM_PROJECT_ID:projectId,PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:repository.repository_id,PSEUDOHARNESS_AGENTMEM_COMMAND:this.command,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify(this.args),PSEUDOHARNESS_AGENTMEM_DATA_DIR:this.env.AGENTMEM_DATA_DIR||''}};
+    const setupTools=setupMode==='register'?['projects','repository_register']:setupMode==='repository'?['repository_register']:[];
+    return {command:launch.command,args:launch.args,cwd:launch.cwd,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes',...setupTools],env:{PSEUDOHARNESS_AGENTMEM_PROJECT_ID:projectId,PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:repository?.repository_id||'',PSEUDOHARNESS_AGENTMEM_SETUP_MODE:setupMode,PSEUDOHARNESS_AGENTMEM_COMMAND:this.command,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify(this.args),PSEUDOHARNESS_AGENTMEM_CONFIG_ENV:JSON.stringify(this.env)}};
+  }
+  async setupMode(projectId:string,expectedRoot:string):Promise<AgentMemSetupMode>{
+    if(!projectId||!expectedRoot)throw new Error('Choose an AgentMem project ID and project root.');
+    const projects=await this.projectRows();const idMatch=projects.find(project=>project.id===projectId);const rootMatch=projects.find(project=>typeof project.sourceRoot==='string'&&rootKey(project.sourceRoot)===rootKey(expectedRoot));
+    if(idMatch&&(!idMatch.sourceRoot||rootKey(idMatch.sourceRoot)!==rootKey(expectedRoot)))throw new Error('AgentMem project root does not match the selected project root.');
+    if(rootMatch&&rootMatch.id!==projectId)throw new Error(`This root is already registered as AgentMem project "${rootMatch.id}". Select that ID; Pseudoharness will not rebind it.`);
+    if(!idMatch)return 'register';
+    const result:any=await this.call('repository_list',{project_id:projectId});const repositories=Array.isArray(result?.repositories)?result.repositories:[];
+    return repositories.some((row:any)=>typeof row?.root==='string'&&rootKey(row.root)===rootKey(expectedRoot))?'ready':'repository';
+  }
+  async prepareProject(projectId:string,expectedRoot:string){
+    const mode=await this.setupMode(projectId,expectedRoot);
+    if(mode==='ready'){await this.connect(projectId,expectedRoot);return;}
+    this.status={connected:false,projectVerified:false,detail:mode==='register'?`Setup pending · ${projectId} will be registered for this folder by the project agent`:`Setup pending · repository index required for ${projectId}`};
   }
   async connect(projectId:string,expectedRoot:string) {
     try {
@@ -70,7 +109,7 @@ export class AgentMem {
       if(!project) throw new Error(`AgentMem project "${projectId}" is not registered.`);
       const root=project.sourceRoot;
       if(!root) throw new Error('AgentMem did not return a registered source root, so project identity cannot be verified.');
-      if(path.resolve(root).toLowerCase()!==path.resolve(expectedRoot).toLowerCase()) throw new Error('AgentMem project root does not match the selected project root.');
+      if(rootKey(root)!==rootKey(expectedRoot)) throw new Error('AgentMem project root does not match the selected project root.');
       this.status={connected:true,projectVerified:true,detail:`Connected · ${projectId}`}; return project;
     } catch(e) {this.status={connected:!!this.client,projectVerified:false,detail:safeError(e)};throw e;}
   }
@@ -83,7 +122,7 @@ export class AgentMem {
   private async openConnection(){
     await this.configure();
     const client=new Client({name:'pseudoharness',version:'0.1.0'});
-    const transport=new StdioClientTransport({command:this.command!,args:this.args,env:{...process.env,...this.env} as Record<string,string>,stderr:'ignore'});
+    const transport=new StdioClientTransport({command:this.command!,args:this.args,env:{...this.env,...process.env} as Record<string,string>,stderr:'ignore'});
     this.client=client;this.transport=transport;
     transport.onclose=()=>this.invalidateConnection(client,transport);
     transport.onerror=()=>this.invalidateConnection(client,transport);
@@ -104,9 +143,7 @@ export class AgentMem {
     return false;
   }
   async listProjects():Promise<AgentMemProject[]> {
-    const result:any=await this.call('projects',{action:'list'});
-    const rows=Array.isArray(result)?result:result?.projects||result?.items||result?.data?.projects;
-    if(!Array.isArray(rows))throw new Error('AgentMem project list did not contain a projects array.');
+    const rows=await this.projectRows();
     return rows.flatMap((row:any)=>{
       if(!row||typeof row.id!=='string'||!row.id.trim())return [];
       const sourceRoot=row.source_root||row.root||row.cwd;
@@ -114,6 +151,10 @@ export class AgentMem {
       if(typeof sourceRoot!=='string'||!sourceRoot.trim()||typeof memoryRoot!=='string'||!memoryRoot.trim()||path.basename(path.dirname(memoryRoot)).toLowerCase()!=='projects')return [];
       return [{id:row.id,name:typeof row.name==='string'&&row.name.trim()?row.name:row.id,...(typeof row.description==='string'&&row.description?{description:row.description}:{}),sourceRoot,memoryDirectory:path.basename(memoryRoot)}];
     }).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})||a.id.localeCompare(b.id));
+  }
+  private async projectRows():Promise<any[]>{
+    const result:any=await this.call('projects',{action:'list'});const rows=Array.isArray(result)?result:result?.projects||result?.items||result?.data?.projects;
+    if(!Array.isArray(rows))throw new Error('AgentMem project list did not contain a projects array.');return rows.map((row:any)=>row&&typeof row==='object'?{...row,sourceRoot:row.source_root||row.root||row.cwd,memoryRoot:row.memory_root||row.memoryRoot}:row);
   }
   private async call(name:string,args:Record<string,unknown>) {
     for(let attempt=0;attempt<2;attempt++){
