@@ -827,10 +827,11 @@ export async function cancelTask(taskId:string){const task=getTask(taskId);if(!t
 export async function saveSettings(input:any){
   const {settingsSchema}=await import('./contracts.js');const {resolveProjectDirectory}=await import('./directories.js');const v=settingsSchema.parse(input);const resolved=await resolveProjectDirectory(v.projectRoot);
   let projectId=v.agentmemProjectId.trim();
-  if(v.agentmemAutoSetup&&!projectId){
+  if(v.agentmemAutoSetup){
     const registered=await agentmem.registeredProjectForRoot(resolved);
     const base=path.basename(resolved).normalize('NFKD').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,24)||'project';
-    projectId=registered?.id||`agentmem-${base}-${createHash('sha256').update(path.resolve(resolved).toLocaleLowerCase()).digest('hex').slice(0,16)}`;
+    if(registered)projectId=registered.id;
+    else if(!projectId)projectId=`agentmem-${base}-${createHash('sha256').update(path.resolve(resolved).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase()).digest('hex').slice(0,16)}`;
   }
   if(projectId)await agentmem.prepareProject(projectId,resolved);else{agentmem.close();agentmem.status={connected:false,projectVerified:false,detail:'Disabled · no AgentMem project selected'};}
   await mutate(s=>{s.settings={...v,projectRoot:resolved,agentmemProjectId:projectId};});await refreshModels();return runtimeStatus();
