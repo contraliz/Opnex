@@ -28,4 +28,6 @@ mac:
         - arm64
 nsis:
   oneClick: false
+  perMachine: true
+  deleteAppDataOnUninstall: false
   allowToChangeInstallationDirectory: true
