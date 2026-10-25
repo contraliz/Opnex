@@ -1,5 +1,5 @@
 import { createRef, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertCircle, BookOpen, Check, ChevronDown, Command, Copy, Database, FileText, Folder, GitBranch, Globe, Maximize2, MessageSquarePlus, Minus, PanelLeft, PanelRight, Plus, Search, Settings2, ShieldCheck, Square, Terminal, X } from 'lucide-react';
+import { Activity, AlertCircle, BookOpen, Check, ChevronDown, ChevronRight, Command, Copy, Database, FileText, Folder, FolderPlus, GitBranch, Globe, Keyboard, Maximize2, MessageSquarePlus, Minus, PanelLeft, PanelRight, Pin, Plus, Search, Settings2, ShieldCheck, Square, Terminal, X } from 'lucide-react';
 import { api, bootstrap } from './api';
 import { Markdown } from './Markdown';
 import Composer from './Composer';
@@ -12,7 +12,7 @@ import { EmbeddedWorkspace } from './EmbeddedWorkspace';
 import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitPane, type SessionPane } from './paneGroups';
 import { formatBrowserAnnotation } from './browser-annotation';
 import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
-import type { AppState, Assignment, BrowserAnnotation, LiveActivity, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
+import type { AppState, Assignment, BrowserAnnotation, LiveActivity, Project, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
 const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
 
 const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
@@ -57,6 +57,19 @@ export default function App() {
   const [sessionDialog, setSessionDialog] = useState<{ kind: 'rename' | 'delete'; taskId: string } | null>(null);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [sessionDialogMounted, setSessionDialogMounted] = useState(false);
+  const [projectEditor, setProjectEditor] = useState<Project | 'new' | null>(null);
+  const [projectName, setProjectName] = useState('');
+  const [projectRootDraft, setProjectRootDraft] = useState('');
+  const [projectAgentMemId, setProjectAgentMemId] = useState('');
+  const [projectAgentMemEnabled, setProjectAgentMemEnabled] = useState(false);
+  const [projectAgentMemAuto, setProjectAgentMemAuto] = useState(false);
+  const [projectPinned, setProjectPinned] = useState(false);
+  const [projectSaving, setProjectSaving] = useState(false);
+  const [projectError, setProjectError] = useState('');
+  const [showAllProjects, setShowAllProjects] = useState<Record<string, boolean>>({});
+  const [projectMoveError, setProjectMoveError] = useState('');
+  const [projectDropTarget, setProjectDropTarget] = useState<string|null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(296);
   const [sidebarResizing, setSidebarResizing] = useState(false);
@@ -76,11 +89,18 @@ export default function App() {
   const handledWorkspaceCommand = useRef<Set<string>>(new Set());
   const resizeRef = useRef<any>(null);
   const tabDropTargetRef = useRef<string | null>(null);
+  const projectExpandedRef = useRef<string[]>([]);
+  const projectExpansionQueue = useRef(Promise.resolve());
+  const projectSelectorRef = useRef<HTMLSelectElement>(null);
+  const tabDragSuppressUntil = useRef(0);
   const closeTimers = useRef<Record<string, number>>({});
   const settingsQueue = useRef(Promise.resolve());
+  const contextSelectionQueue = useRef(Promise.resolve());
   const settingsDraft = useRef<Settings | null>(null);
   const rootPane = panes[0] || { id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 };
   const models = useMemo(() => runtime?.codex.models || [], [runtime]);
+  const selectedProject = state?.projects.find(project => project.id === state.selectedProjectId) || null;
+  useEffect(()=>{projectExpandedRef.current=state?.expandedProjectIds||[];},[state?.expandedProjectIds]);
 
   const taskForTab = (id: string): Task | null => state?.tasks.find(task => task.id === id) || null;
   const setTabError = (id: string, message: string) => setTabErrors(current => ({ ...current, [id]: message }));
@@ -103,10 +123,25 @@ export default function App() {
       setError(String(cause));
     }
   };
+  const queueContextSelection=(url:string,body:unknown)=>{const operation=contextSelectionQueue.current.then(()=>api(url,body));contextSelectionQueue.current=operation.then(()=>undefined,()=>undefined);return operation;};
+  const selectSessionContext=(id:string)=>{const task=state?.tasks.find(row=>row.id===id);const projectId=task?.projectId||null;setState(current=>current?{...current,selectedProjectId:projectId,expandedProjectIds:projectId?[...new Set([...(current.expandedProjectIds||[]),projectId])]:[...new Set([...(current.expandedProjectIds||[]),'unclassified'])]}:current);return queueContextSelection('/api/tasks/'+id+'/select',{});};
   const openSettings = () => {
     setSettingsMounted(true);
     setSettingsOpen(true);
   };
+  const openProjectEditor = (project:Project|'new') => {
+    setProjectEditor(project);setProjectName(project==='new'?'':project.name);setProjectRootDraft(project==='new'?(selectedProject?.projectRoot||state?.settings.projectRoot||''):project.projectRoot);setProjectAgentMemId(project==='new'?'':project.agentmemProjectId);setProjectAgentMemEnabled(project==='new'?false:project.agentmemEnabled);setProjectAgentMemAuto(project==='new'?false:project.agentmemAutoSetup);setProjectPinned(project==='new'?false:project.pinned);setProjectError('');
+  };
+  const saveProject = async(event:React.FormEvent) => {
+    event.preventDefault();if(!projectEditor||projectSaving)return;setProjectSaving(true);setProjectError('');
+    const id=projectEditor==='new'?crypto.randomUUID():projectEditor.id;
+    try{await api('/api/projects',{id,name:projectName,projectRoot:projectRootDraft,agentmemProjectId:projectAgentMemId,agentmemEnabled:projectAgentMemEnabled,agentmemAutoSetup:projectAgentMemAuto,pinned:projectPinned});if(projectEditor==='new')await queueContextSelection('/api/projects/select',{projectId:id});await refresh();setProjectEditor(null);}catch(cause){setProjectError(String(cause));}finally{setProjectSaving(false);}
+  };
+  const selectProject = async(id:string|null) => {setState(current=>current?{...current,selectedProjectId:id}:current);try{await queueContextSelection('/api/projects/select',{projectId:id});}catch(cause){setError(String(cause));await refresh();}};
+  const toggleProjectExpanded = (id:string) => {const current=projectExpandedRef.current;const expanded=!current.includes(id);const next=expanded?[...current,id]:current.filter(value=>value!==id);projectExpandedRef.current=next;setState(value=>value?{...value,expandedProjectIds:next}:value);projectExpansionQueue.current=projectExpansionQueue.current.then(()=>api(`/api/projects/${id}/expanded`,{expanded})).then(()=>undefined).catch(cause=>setError(String(cause)));};
+  const moveSessionToProject = async(taskId:string,projectId:string|null)=>{try{await api('/api/tasks/'+taskId+'/project',{projectId});setProjectMoveError('');await refresh();}catch(cause){setProjectMoveError(String(cause));}};
+  const dragSession = (event:React.DragEvent<HTMLDivElement>,task:Task)=>{event.dataTransfer.setData('application/x-pseudoharness-session-project',task.id);event.dataTransfer.effectAllowed='move';};
+  const dropSessionInto = (event:React.DragEvent<HTMLElement>,projectId:string|null)=>{const id=event.dataTransfer.getData('application/x-pseudoharness-session-project');if(!id)return;event.preventDefault();event.stopPropagation();setProjectDropTarget(null);void moveSessionToProject(id,projectId);};
   const closeSettings = () => setSettingsOpen(false);
   const openSessionDialog = useCallback((kind: 'rename' | 'delete', taskId: string) => {
     setSessionDialog({ kind, taskId });
@@ -125,7 +160,7 @@ export default function App() {
     setPaneActive(target.id, id);
     setFocusedPaneId(target.id);
     if (!id.startsWith('new:')) {
-      void api('/api/tasks/' + id + '/select', {}).then(() => refresh()).catch(cause => setTabError(id, String(cause)));
+      void selectSessionContext(id).catch(cause => setTabError(id, String(cause)));
     }
   };
   const openNewTabInPane = (requestedPaneId: string) => {
@@ -319,13 +354,13 @@ export default function App() {
         const index = group.tabs.indexOf(id);
         const fallback = group.tabs[index > 0 ? index - 1 : 1];
         if (fallback && workspaceTabKind(fallback) === 'session' && !fallback.startsWith('new:')) {
-          void api('/api/tasks/' + fallback + '/select', {}).then(() => refresh()).catch(cause => setTabError(fallback, String(cause)));
+          void selectSessionContext(fallback).catch(cause => setTabError(fallback, String(cause)));
         } else if (!fallback && panes.length > 1) {
           const groupIndex = panes.findIndex(pane => pane.id === group.id);
           const neighbor = panes[groupIndex === 0 ? 1 : Math.max(0, groupIndex - 1)];
           const neighborTab = neighbor?.activeTab;
           if (neighborTab && workspaceTabKind(neighborTab) === 'session' && !neighborTab.startsWith('new:')) {
-            void api('/api/tasks/' + neighborTab + '/select', {}).then(() => refresh()).catch(cause => setTabError(neighborTab, String(cause)));
+            void selectSessionContext(neighborTab).catch(cause => setTabError(neighborTab, String(cause)));
           }
         }
       }
@@ -369,7 +404,7 @@ export default function App() {
       if (task?.phase === 'escalated') await api('/api/tasks/' + task.id + '/escalation', { message, attachments: files });
       else if (task) await api('/api/tasks/' + task.id + '/messages', { message, attachments: files });
       else {
-        const created = await api('/api/tasks', { message, attachments: files });
+        const created = await api('/api/tasks', { message, attachments: files, projectId:state?.selectedProjectId??null });
         if (created?.id) {
           setPanes(current => current.map(pane => pane.tabs.includes(tab)
             ? { ...pane, tabs: pane.tabs.map(item => item === tab ? created.id : item), activeTab: pane.activeTab === tab ? created.id : pane.activeTab }
@@ -478,7 +513,7 @@ export default function App() {
         const id = value.state.activeTaskId;
         setPanes([{ id: 'pane:root', tabs: [id], activeTab: id, weight: 1 }]);
       }
-      if (!value.state.settings.projectRoot) {
+      if (!value.state.settings.projectRoot && !value.state.selectedProjectId) {
         setSettingsMounted(true);
         setSettingsOpen(true);
       }
@@ -565,16 +600,31 @@ export default function App() {
   }, [panes, state?.tasks]);
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
-        event.preventDefault();
-        openNewTab();
-      }
+      if(event.isComposing||event.keyCode===229||event.getModifierState('AltGraph'))return;
+      if(event.key==='Escape'){if(projectEditor){event.preventDefault();setProjectEditor(null);return;}if(shortcutsOpen){event.preventDefault();setShortcutsOpen(false);return;}if(settingsOpen){event.preventDefault();closeSettings();return;}return;}
+      if(projectEditor||shortcutsOpen||settingsOpen||sessionDialogOpen)return;
+      const isMac=window.pseudoharnessDesktop?.platform==='darwin'||navigator.platform.toLocaleLowerCase().includes('mac');const mod=isMac?event.metaKey:event.ctrlKey;if(!mod||isMac&&event.ctrlKey||!isMac&&event.metaKey)return;
+      const key=event.key.toLowerCase();const allowedAlt=event.altKey&&key==='p';if(event.altKey&&!allowedAlt)return;const editing=event.target instanceof HTMLElement&&(event.target.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
+      if(editing)return;
+      if(key==='n'&&!event.shiftKey){event.preventDefault();openNewTab();return;}
+      if(key===','&&!event.shiftKey){event.preventDefault();openSettings();return;}
+      if(key==='b'&&!event.shiftKey){event.preventDefault();setSidebarCollapsed(value=>!value);return;}
+      if(key==='g'&&event.shiftKey){event.preventDefault();const pane=panes.find(item=>item.id===focusedPaneId)||rootPane;openWorkspaceTab('git',pane.id,pane.activeTab);return;}
+      if(key==='l'&&event.shiftKey){event.preventDefault();openSkillsTab();return;}
+      if(key==='p'&&event.altKey){event.preventDefault();projectSelectorRef.current?.focus();return;}
+      if((event.key==='ArrowUp'||event.key==='ArrowDown')&&event.shiftKey){const ordered=[...(state?.tasks||[])].sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0));if(!ordered.length)return;event.preventDefault();const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;const index=ordered.findIndex(task=>task.id===active);const next=(index+(event.key==='ArrowDown'?1:-1)+ordered.length)%ordered.length;selectTask(ordered[next].id);return;}
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
-  }, []);
+  }, [projectEditor,shortcutsOpen,settingsOpen,sessionDialogOpen,panes,focusedPaneId,state?.tasks]);
 
   if (loading) return <div className="boot"><div className="brand-mark">P</div><span>Starting Pseudoharness</span></div>;
+  const matchingTasks=(state?.tasks||[]).filter(task=>!query.trim()||task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0));
+  const renderSessionRows=(tasks:Task[])=>tasks.map(task=><SessionRow key={task.id} task={task} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onMoveStart={dragSession} projects={state?.projects||[]} onMove={moveSessionToProject}/>);
+  const orderedProjects=[...(state?.projects||[])].sort((a,b)=>Number(b.pinned)-Number(a.pinned)||a.name.localeCompare(b.name));
+  const unclassifiedTasks=matchingTasks.filter(task=>!task.projectId||!(state?.projects||[]).some(project=>project.id===task.projectId));
+  const projectSessionSection=(project:Project)=>{const tasks=matchingTasks.filter(task=>task.projectId===project.id);const expanded=(state?.expandedProjectIds||[]).includes(project.id);const shown=showAllProjects[project.id]?tasks:tasks.slice(0,5);return <section className={`project-session-group ${expanded?'expanded':''} ${projectDropTarget===project.id?'is-drop-target':''}`} key={project.id} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))setProjectDropTarget(project.id);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,project.id)}><div className="project-group-heading"><button className="project-expand" aria-label={`${expanded?'Collapse':'Expand'} ${project.name}`} aria-expanded={expanded} onClick={()=>toggleProjectExpanded(project.id)}>{expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>{project.name}</span><small>{tasks.length}</small></button><button className="project-group-pin" aria-label={`${project.pinned?'Unpin':'Pin'} ${project.name}`} title={project.pinned?'Unpin project':'Pin project'} onClick={()=>void api(`/api/projects/${project.id}/pin`,{pinned:!project.pinned}).then(refresh).catch(cause=>setError(String(cause)))}><Pin size={12}/></button><button className="project-group-edit" aria-label={`Configure ${project.name}`} title={`Configure ${project.name}`} onClick={()=>openProjectEditor(project)}><Settings2 size={13}/></button></div>{expanded&&<div className="project-session-rows">{renderSessionRows(shown)}{tasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,[project.id]:!current[project.id]}))}>{showAllProjects[project.id]?'Show recent five':`Show all ${tasks.length} sessions`}</button>}{!tasks.length&&<span className="project-empty">Drop a session here</span>}</div>}</section>;};
+  const unclassifiedExpanded=(state?.expandedProjectIds||[]).includes('unclassified');
 
   const paneComposer = (tab: string, task: Task | null, paneId:string) => {
     const value = drafts[tab] || '';
@@ -608,7 +658,7 @@ export default function App() {
       <button onClick={() => openNewTabInPane(pane.id)}><MessageSquarePlus size={14} />SESSION</button>
       <button onClick={() => openWorkspaceTab('browser', pane.id, tab)}><Globe size={14} />BROWSER</button>
       <button onClick={() => openWorkspaceTab('git', pane.id, tab)}><GitBranch size={14} />GIT</button>
-      <div className="new-tab-context">{rootLabel(task?.userRoot || state?.settings.projectRoot)} <span>·</span> {runtime?.codex.state === 'connected' ? 'Connected' : 'Codex offline'}</div>
+      <div className="new-tab-context"><Folder size={12}/><span>{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span><span>·</span>{selectedProject?selectedProject.agentmemEnabled?'AgentMem enabled':'AgentMem disabled':runtime?.codex.state==='connected'?'Connected':'Codex offline'}</div>
     </div>
   );
   const renderSessionPaneActions = (tab: string, task: Task | null) => {
@@ -629,9 +679,14 @@ export default function App() {
         const title = workspaceTabTitle(tab, task?.title);
         const selected = pane.activeTab === tab;
         const symbol = kind === 'browser' ? <Globe size={13} /> : kind === 'git' ? <GitBranch size={13} /> : kind==='skills'?<BookOpen size={13}/>: index === 0 && !split ? <MessageSquarePlus size={13} /> : null;
+        const activate=()=>{setPaneActive(pane.id,tab);setFocusedPaneId(pane.id);if(kind==='session'&&!tab.startsWith('new:'))void selectSessionContext(tab).catch(cause=>setTabError(tab,String(cause)));};
         return <div className={'document-tab ' + (selected ? 'active ' : '') + (tabDropTarget === tab ? 'tab-drop-target ' : '') + (sessionArrival === tab ? 'session-arrived tab-arrived ' : '') + (closingTabs[tab] ? 'tab-closing' : '')}
           key={tab} data-workspace-tab={tab} data-session-tab={tab} draggable={!closingTabs[tab]}
+          onClick={event=>{if(Date.now()<tabDragSuppressUntil.current||event.target instanceof Element&&event.target.closest('.tab-close'))return;activate();}}
+          onAuxClick={event=>{if(event.button===1){event.preventDefault();closeTab(tab);}}}
           onDragStart={event => {
+            if(event.target instanceof Element&&event.target.closest('.tab-close')){event.preventDefault();return;}
+            tabDragSuppressUntil.current=Date.now()+600;
             clearTabDrop();
             setDraggedTab(tab);
             event.dataTransfer.setData('application/x-pseudoharness-workspace-tab', tab);
@@ -639,6 +694,7 @@ export default function App() {
             event.dataTransfer.effectAllowed = 'move';
           }}
           onDragEnd={() => finishTabDrag(tab)}
+          onPointerCancel={()=>{clearTabDrop();setDraggedTab(null);setDropTarget(null);tabDragSuppressUntil.current=0;}}
           onDragOver={event => {
             if (Array.from(event.dataTransfer.types).some(type => type === 'application/x-pseudoharness-workspace-tab' || type === 'application/x-pseudoharness-session-tab')) {
               event.preventDefault();
@@ -653,14 +709,8 @@ export default function App() {
             event.stopPropagation();
             moveTab(source, tab);
           }}>
-          <button role="tab" aria-label={title} aria-selected={selected} onClick={() => {
-            setPaneActive(pane.id, tab);
-            setFocusedPaneId(pane.id);
-            if (kind === 'session' && !tab.startsWith('new:')) {
-              void api('/api/tasks/' + tab + '/select', {}).then(() => refresh()).catch(cause => setTabError(tab, String(cause)));
-            }
-          }}>{symbol}<span>{title}</span></button>
-          <button className="tab-close" aria-label={'Close ' + title + ' tab'} onClick={() => closeTab(tab)} disabled={!!closingTabs[tab]}><X size={13} /></button>
+          <button role="tab" aria-label={title} aria-selected={selected} onClick={event=>{event.stopPropagation();activate();}}>{symbol}<span>{title}</span></button>
+          <button className="tab-close" aria-label={'Close ' + title + ' tab'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();closeTab(tab);}} disabled={!!closingTabs[tab]}><X size={13} /></button>
         </div>;
       })}
       <button className="new-tab" aria-label={split ? index === 1 ? 'New session in side pane' : 'New session in pane ' + (index + 1) : 'Open new session tab'} onClick={() => openNewTabInPane(pane.id)}><Plus size={15} /></button>
@@ -733,7 +783,7 @@ export default function App() {
       {renderSessionPaneActions(tab, task)}
       {task && <>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task, pane.id)}</div></>}
       {!task && taskView}
-      <HeadsUpPanel task={task} settings={state!.settings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
+      <HeadsUpPanel task={task} settings={task?{...state!.settings,projectRoot:task.userRoot,agentmemProjectId:task.agentmemProjectId||''}:selectedProject?{...state!.settings,projectRoot:selectedProject.projectRoot,agentmemProjectId:selectedProject.agentmemProjectId}:state!.settings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
         onClose={() => setHeadsUpOpen(current => ({ ...current, [tab]: false }))}
         onOpenSettings={openSettings} triggerRef={headsUpTriggerRef(tab)} />
     </div>;
@@ -741,7 +791,7 @@ export default function App() {
 
   return <div className={'app-shell ' + (windowControls ? 'has-custom-chrome ' : '') + (sidebarCollapsed ? 'sidebar-collapsed ' : '') + (sidebarResizing ? 'sidebar-resizing' : '')} style={{ '--sidebar-width': sidebarCollapsed ? '0px' : sidebarWidth + 'px' } as React.CSSProperties}>
     <nav className="activity-rail" aria-label="App navigation">
-      <button className="rail-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} aria-controls="primary-sidebar" onClick={() => setSidebarCollapsed(value => !value)}><PanelLeft size={17} /></button>
+      <button className="rail-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title="Toggle sidebar (Ctrl/Cmd+B)" aria-keyshortcuts="Control+B Meta+B" aria-expanded={!sidebarCollapsed} aria-controls="primary-sidebar" onClick={() => setSidebarCollapsed(value => !value)}><PanelLeft size={17} /></button>
       <button role="tab" aria-label="Sessions" onClick={() => {
         const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
         if (workspaceTabKind(pane.activeTab) !== 'session') activateSessionTab(pane.tabs.find(tab => workspaceTabKind(tab) === 'session') || 'new:0');
@@ -752,25 +802,33 @@ export default function App() {
           const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
           openWorkspaceTab('browser', pane.id, pane.activeTab);
         }}><Globe size={17} /></button>
-      <button role="tab" draggable aria-label="Git" aria-current={panes.some(pane => workspaceTabKind(pane.activeTab) === 'git') ? 'page' : undefined}
+      <button role="tab" draggable aria-label="Git" title="Git (Ctrl/Cmd+Shift+G)" aria-keyshortcuts="Control+Shift+G Meta+Shift+G" aria-current={panes.some(pane => workspaceTabKind(pane.activeTab) === 'git') ? 'page' : undefined}
         onDragStart={event => { event.dataTransfer.setData('application/x-pseudoharness-workspace', 'git'); event.dataTransfer.effectAllowed = 'move'; }}
         onClick={() => {
           const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
           openWorkspaceTab('git', pane.id, pane.activeTab);
         }}><GitBranch size={17} /></button>
-          <button role="tab" aria-label="Skills" aria-current={panes.some(pane=>workspaceTabKind(pane.activeTab)==='skills')?'page':undefined} onClick={()=>openSkillsTab()}><BookOpen size={17}/></button>
+          <button role="tab" aria-label="Skills" title="Skills (Ctrl/Cmd+Shift+L)" aria-keyshortcuts="Control+Shift+L Meta+Shift+L" aria-current={panes.some(pane=>workspaceTabKind(pane.activeTab)==='skills')?'page':undefined} onClick={()=>openSkillsTab()}><BookOpen size={17}/></button>
       <div className="rail-spacer" />
-      <button aria-label="Settings" onClick={openSettings}><Settings2 size={17} /></button>
+      <button aria-label="Settings" title="Settings (Ctrl/Cmd+,)" aria-keyshortcuts="Control+, Meta+," onClick={openSettings}><Settings2 size={17} /></button>
     </nav>
     <aside id="primary-sidebar" aria-label="Session explorer" className="sidebar" aria-hidden={sidebarCollapsed} inert={sidebarCollapsed}>
       <div className="sidebar-tools">
         <span className="sidebar-title">Sessions</span>
-        <button className="icon-btn" aria-label="New session" onClick={openNewTab}><Plus size={16} /></button>
+        <button className="icon-btn" aria-label="New session" title="New session (Ctrl/Cmd+N)" aria-keyshortcuts="Control+N Meta+N" onClick={openNewTab}><Plus size={16} /></button>
+        <button className="icon-btn" aria-label="Create project" title="Create project" onClick={()=>openProjectEditor('new')}><FolderPlus size={15}/></button>
+        <button className="icon-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={()=>setShortcutsOpen(true)}><Keyboard size={15}/></button>
         <button className="icon-btn" aria-label="Search sessions" onClick={() => document.querySelector<HTMLInputElement>('.session-search')?.focus()}><Search size={15} /></button>
       </div>
       <input className="session-search" type="search" aria-label="Search sessions" placeholder="Filter sessions" value={query} onChange={event => setQuery(event.target.value)} />
-      <nav className="task-list" aria-label="Sessions">{(state?.tasks || []).filter(task => !query.trim() || task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(task => <SessionRow key={task.id} task={task} selected={panes.some(pane => pane.activeTab === task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} />)}</nav>
-      <div className="sidebar-bottom"><button className="project-mini" aria-label={rootLabel(state?.settings.projectRoot) + ' project settings'} onClick={openSettings}><Folder size={15} /><span className="project-mini-text">{rootLabel(state?.settings.projectRoot)}</span></button></div>
+      <label className="sidebar-project-picker"><span>Project context</span><select ref={projectSelectorRef} aria-label="Project for new sessions" title="Choose project (Ctrl/Cmd+Alt+P)" aria-keyshortcuts="Control+Alt+P Meta+Alt+P" value={state?.selectedProjectId||''} onChange={event=>void selectProject(event.currentTarget.value||null)}><option value="">Unclassified · legacy default</option>{(state?.projects||[]).map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+      <nav className="task-list project-task-list" aria-label="Sessions" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))event.preventDefault();}}>
+        {orderedProjects.filter(project=>project.pinned).map(projectSessionSection)}
+        {orderedProjects.filter(project=>!project.pinned).map(projectSessionSection)}
+        <section className={`project-session-group unclassified-group ${projectDropTarget==='unclassified'?'is-drop-target':''}`} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))setProjectDropTarget('unclassified');}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,null)}><div className="project-group-heading"><button className="project-expand" aria-label={`${unclassifiedExpanded?'Collapse':'Expand'} Unclassified`} aria-expanded={unclassifiedExpanded} onClick={()=>toggleProjectExpanded('unclassified')}>{unclassifiedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>Unclassified</span><small>{unclassifiedTasks.length}</small></button></div>{unclassifiedExpanded&&<div className="project-session-rows">{renderSessionRows(showAllProjects.unclassified?unclassifiedTasks:unclassifiedTasks.slice(0,5))}{unclassifiedTasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,unclassified:!current.unclassified}))}>{showAllProjects.unclassified?'Show recent five':`Show all ${unclassifiedTasks.length} sessions`}</button>}</div>}</section>
+      </nav>
+      {projectMoveError&&<div className="project-move-error" role="alert">{projectMoveError}<button className="icon-btn" aria-label="Dismiss move error" onClick={()=>setProjectMoveError('')}><X size={13}/></button></div>}
+      <div className="sidebar-bottom"><button className="project-mini" aria-label={selectedProject?.name||rootLabel(state?.settings.projectRoot)+' project settings'} onClick={()=>selectedProject?openProjectEditor(selectedProject):openSettings}><Folder size={15} /><span className="project-mini-text">{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span></button></div>
     </aside>
     <div className="sidebar-resizer" role="separator" aria-label="Resize session explorer" aria-orientation="vertical" aria-valuemin={112} aria-valuenow={sidebarCollapsed ? 0 : sidebarWidth} tabIndex={0}
       onPointerDown={event => {
@@ -858,9 +916,22 @@ export default function App() {
       </main>
     </div>
     {error && <div className="toast-error" role="alert"><AlertCircle size={15} />{error}<button className="icon-btn" aria-label="Dismiss app error" onClick={() => setError('')}><X size={14} /></button></div>}
-    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={refresh} saved={async settings => {
+    {projectEditor&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!projectSaving&&setProjectEditor(null)}><form className="project-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="project-editor-title" onSubmit={saveProject}>
+      <header><div><h2 id="project-editor-title">{projectEditor==='new'?'Create project':`Configure ${projectEditor.name}`}</h2><p>Project settings apply to new sessions and future passes. Saved pass roots and knowledge base audit snapshots remain unchanged.</p></div><button type="button" className="icon-btn" aria-label="Close project settings" onClick={()=>setProjectEditor(null)} disabled={projectSaving}><X size={16}/></button></header>
+      <label>Project name<input autoFocus value={projectName} maxLength={80} onChange={event=>setProjectName(event.target.value)} required/></label>
+      <label>Working directory<input value={projectRootDraft} maxLength={1024} placeholder="D:\\work\\project" onChange={event=>setProjectRootDraft(event.target.value)} required/><small>Choose an existing folder. The server resolves and validates the path when saving.</small></label>
+      <label className="project-editor-toggle"><input type="checkbox" checked={projectPinned} onChange={event=>setProjectPinned(event.target.checked)}/><span>Pin project above the rest</span></label>
+      <label className="project-editor-toggle"><input type="checkbox" checked={projectAgentMemEnabled} onChange={event=>setProjectAgentMemEnabled(event.target.checked)}/><span>Enable AgentMem for this project</span></label>
+      {projectAgentMemEnabled&&<><label>AgentMem project ID<input value={projectAgentMemId} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" onChange={event=>setProjectAgentMemId(event.target.value)} disabled={projectAgentMemAuto}/><small>Use the exact ID for a registered knowledge base. Automatic setup derives a stable ID for this folder.</small></label><label className="project-editor-toggle"><input type="checkbox" checked={projectAgentMemAuto} onChange={event=>setProjectAgentMemAuto(event.target.checked)}/><span>Set up a knowledge base for this folder automatically</span></label></>}
+      {projectError&&<p className="project-editor-error" role="alert">{projectError}</p>}
+      <footer><button type="button" className="secondary-btn" onClick={()=>setProjectEditor(null)} disabled={projectSaving}>Cancel</button><button className="primary-btn" disabled={projectSaving||!projectName.trim()||!projectRootDraft.trim()}>{projectSaving?'Saving…':'Save project'}</button></footer>
+    </form></div>}
+    {shortcutsOpen&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setShortcutsOpen(false)}><section className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"><header><div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p>Use Ctrl on Windows/Linux or Command on macOS.</p></div><button type="button" className="icon-btn" aria-label="Close shortcuts" onClick={()=>setShortcutsOpen(false)}><X size={16}/></button></header><dl><dt>New session</dt><dd>Ctrl/⌘ + N</dd><dt>Previous / next session</dt><dd>Ctrl/⌘ + Shift + ↑ / ↓</dd><dt>Choose project</dt><dd>Ctrl/⌘ + Alt + P</dd><dt>Settings</dt><dd>Ctrl/⌘ + ,</dd><dt>Git</dt><dd>Ctrl/⌘ + Shift + G</dd><dt>Skills</dt><dd>Ctrl/⌘ + Shift + L</dd><dt>Toggle sidebar</dt><dd>Ctrl/⌘ + B</dd><dt>Dismiss dialog</dt><dd>Escape</dd></dl></section></div>}
+    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={selectedProject?{...state.settings,projectRoot:selectedProject.projectRoot,agentmemProjectId:selectedProject.agentmemProjectId,agentmemAutoSetup:selectedProject.agentmemAutoSetup}:state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={refresh} saved={async settings => {
       try {
-        await api('/api/settings', settings);
+        const project=selectedProject;
+        await api('/api/settings',project?{...settings,projectRoot:state.settings.projectRoot,agentmemProjectId:state.settings.agentmemProjectId,agentmemAutoSetup:state.settings.agentmemAutoSetup}:settings);
+        if(project)await api('/api/projects',{id:project.id,name:project.name,projectRoot:settings.projectRoot,agentmemEnabled:!!settings.agentmemProjectId||!!settings.agentmemAutoSetup,agentmemProjectId:settings.agentmemProjectId,agentmemAutoSetup:!!settings.agentmemAutoSetup,pinned:project.pinned});
         await refresh();
         return true;
       } catch (cause) {

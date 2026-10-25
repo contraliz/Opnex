@@ -791,7 +791,7 @@ async function removePendingSteeringMessage(taskId:string,messageId:string){awai
 async function startComposerFollowupPass(taskId:string,message:string,attachments:ReturnType<typeof validateAttachments>,settings:ReturnType<typeof getState>['settings'],selectedSkills:SavedSkillSnapshot[],existingMessageId?:string){
   const t=getTask(taskId);if(!t)throw new Error('Task not found.');
   const priorWasActive=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(t.phase);
-  await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId);if(!x)throw new Error('Task not found.');x.userMessages.push(message);const m=existingMessageId?x.messages.find(row=>row.id===existingMessageId):addMessage(x,'user',message,attachments,undefined);if(!m)throw new Error('The submitted composer message was not found.');m.passId=undefined;delete m.submissionKind;delete m.deliveryStatus;const previous=currentPass(x);if(previous&&priorWasActive){previous.phase='needs_attention';previous.activeRole=undefined;previous.activeTurnId=undefined;previous.error='A new composer message started a separate pass after the previous turn stopped accepting input. The earlier pass is preserved for inspection.';}beginPass(x,message,m.id,settings.approvalPolicy,attachments,selectedSkills);s.activeTaskId=x.id;});
+  await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId);if(!x)throw new Error('Task not found.');const project=x.projectId?s.projects.find(row=>row.id===x.projectId):undefined;if(project){x.userRoot=project.projectRoot;x.agentmemProjectId=project.agentmemEnabled?project.agentmemProjectId:'';}x.userMessages.push(message);const m=existingMessageId?x.messages.find(row=>row.id===existingMessageId):addMessage(x,'user',message,attachments,undefined);if(!m)throw new Error('The submitted composer message was not found.');m.passId=undefined;delete m.submissionKind;delete m.deliveryStatus;const previous=currentPass(x);if(previous&&priorWasActive){previous.phase='needs_attention';previous.activeRole=undefined;previous.activeTurnId=undefined;previous.error='A new composer message started a separate pass after the previous turn stopped accepting input. The earlier pass is preserved for inspection.';}beginPass(x,message,m.id,settings.approvalPolicy,attachments,selectedSkills);s.activeTaskId=x.id;});
   const row=getTask(taskId)!;const passId=currentPass(row)?.id;
   await startRoutingSafely(()=>beginRouting(row),async e=>{await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId);if(!x||x.phase==='cancelled'||x.currentPassId!==passId)return;x.phase='needs_attention';x.error=`Routing could not start: ${safeError(e)}`;addMessage(x,'system',x.error);});});
   return getTask(taskId)!;
@@ -802,14 +802,14 @@ async function submitExistingTaskMessage(taskId:string,message:string,attachment
   if(target){const messageId=randomUUID();const steered=await steerCurrentTurn(taskId,target,message,attachments,messageId,selectedSkills);if(steered)return steered;return startComposerFollowupPass(taskId,message,attachments,settings,selectedSkills,messageId);}
   return startComposerFollowupPass(taskId,message,attachments,settings,selectedSkills);
 }
-export async function submitTask(message:string,existingTaskId?:string,rawAttachments:unknown=[],_legacySkillIds:string[]=[]){
+export async function submitTask(message:string,existingTaskId?:string,rawAttachments:unknown=[],_legacySkillIds:string[]=[],projectId?:string|null){
   const attachments=validateAttachments(rawAttachments);if(!message.trim()&&!attachments.length)throw new Error('Add a message or attach at least one supported file.');
-  const state=getState(); if(!state.settings.projectRoot)throw new Error('Set a project root in Settings before starting a task.');if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
+  const state=getState();
+  if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
   if(!shouldWakeOrchestrator('explicit_user_input'))throw new Error('Orchestrator wake policy rejected explicit input.');
   const selectedSkills=await snapshotSelectedSkills(parseExplicitSkillCommands(message));
   if(existingTaskId)return serializeComposerSubmission(existingTaskId,()=>submitExistingTaskMessage(existingTaskId,message,attachments,state.settings,selectedSkills));
-  const created=await (await import('./state.js')).createTask(message,state.settings.projectRoot,state.settings.agentmemProjectId,state.settings.approvalPolicy,attachments);
-  await mutate(s=>{const pass=s.tasks.find(task=>task.id===created.id)?.passes?.find(row=>row.id===created.currentPassId);if(pass)pass.selectedSkills=selectedSkills;});
+  const created=await (await import('./state.js')).createTaskForProject(message,projectId,attachments,selectedSkills);
   const createdPassId=currentPass(getTask(created.id)!)?.id;
   await startRoutingSafely(()=>beginRouting(getTask(created.id)!),async e=>{await mutate(s=>{const x=s.tasks.find(a=>a.id===created.id);if(!x||x.phase==='cancelled'||x.currentPassId!==createdPassId)return;x.phase='needs_attention';x.error=`Routing could not start: ${safeError(e)}`;addMessage(x,'system',x.error);});});
   return getTask(created.id)!;
