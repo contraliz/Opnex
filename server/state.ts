@@ -36,12 +36,13 @@ export type SavedSkillSnapshot={id:string;revision:string;name:string;descriptio
 export type SkillSaveRecord={id:string;revision:string;name:string;description:string;source:string;role:string;action:'create'|'update';savedAt:string};
 export type TaskPass = { id:string; index:number; createdAt:string; userInput:string; userInputs:string[]; userMessageIds:string[]; attachments?:TaskAttachment[]; selectedSkills?:SavedSkillSnapshot[]; loadedSkills?:SavedSkillSnapshot[]; savedSkills?:SkillSaveRecord[]; phase:TaskPhase; agentmemAudit?:AgentMemAudit; receiptProvenance?:ReceiptProvenance; agentReceipts?:AgentReceiptRecord[]; turnSourceChanges?:TurnSourceChangeRecord[]; approvalPolicy?:ApprovalPolicy; agentContextVersion?:number; legacyUnassociated?:boolean; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; publicAnswer?:string; assignment?:Assignment; receipt?:Receipt; reviewNote?:string; resolution?:'direct'|'simple'|'delegated'; routingNote?:string; error?:string; escalation?:unknown; workerStage?:WorkerStage; workerContextStatus?:WorkerContextStatus; workerContextSummary?:string; reasoningSummaries?:ReasoningSummary[]; reasoningTurns?:ReasoningTurn[]; liveActivity?:LiveActivity[]; usage?:PassUsage; gitDiff?:PassGitDiff; correctionCount:number; routerThreadId?:string; directThreadId?:string; simpleThreadId?:string; orchestratorThreadId?:string; workerThreadId?:string; activeTurnId?:string; activeRole?:WorkflowRole; processedTurns:string[]; agentmemTaskId?:string; agentmemLease?:string; agentmemRecordStatus?:string; agentmemRecordError?:string; agentmemReceiptId?:string }
 export type GitHubTaskLink={repository:string;branch:string;baseBranch?:string;pullRequestUrl?:string;updatedAt:string};
-export type Task = { githubLink?:GitHubTaskLink; workspaceCommand?:{id:string;mode:'browser'|'github';placement:'side'|'full';url?:string;createdAt:string}; id: string; title: string; phase: TaskPhase; createdAt: string; updatedAt: string; userRoot: string; agentmemProjectId: string; userMessages: string[]; messages: Message[]; passes?:TaskPass[]; currentPassId?:string; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; assignment?: Assignment; receipt?: Receipt; reviewNote?: string; resolution?:'direct'|'simple'|'delegated'; allowDirectResponse?:boolean;routingNote?:string;workerStage?:WorkerStage;workerContextStatus?:WorkerContextStatus;workerContextSummary?:string;reasoningSummaries?:ReasoningSummary[];reasoningTurns?:ReasoningTurn[];liveActivity?:LiveActivity[];activeModelId?:string;activeEffort?:string;correctionCount:number;routerThreadId?:string;directThreadId?:string;simpleThreadId?:string;orchestratorThreadId?:string;workerThreadId?:string;activeTurnId?:string;activeRole?:WorkflowRole;processedTurns:string[];error?:string;escalation?:unknown;approvalRequests?:ApprovalRequest[];agentmemTaskId?:string;agentmemLease?:string;agentmemRecordStatus?:string;agentmemRecordError?:string;agentmemReceiptId?:string;pendingRevision?:boolean };
+export type Task = { projectId?:string; lastInteractedAt?:string; githubLink?:GitHubTaskLink; workspaceCommand?:{id:string;mode:'browser'|'github';placement:'side'|'full';url?:string;createdAt:string}; id: string; title: string; phase: TaskPhase; createdAt: string; updatedAt: string; userRoot: string; agentmemProjectId: string; userMessages: string[]; messages: Message[]; passes?:TaskPass[]; currentPassId?:string; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; assignment?: Assignment; receipt?: Receipt; reviewNote?: string; resolution?:'direct'|'simple'|'delegated'; allowDirectResponse?:boolean;routingNote?:string;workerStage?:WorkerStage;workerContextStatus?:WorkerContextStatus;workerContextSummary?:string;reasoningSummaries?:ReasoningSummary[];reasoningTurns?:ReasoningTurn[];liveActivity?:LiveActivity[];activeModelId?:string;activeEffort?:string;correctionCount:number;routerThreadId?:string;directThreadId?:string;simpleThreadId?:string;orchestratorThreadId?:string;workerThreadId?:string;activeTurnId?:string;activeRole?:WorkflowRole;processedTurns:string[];error?:string;escalation?:unknown;approvalRequests?:ApprovalRequest[];agentmemTaskId?:string;agentmemLease?:string;agentmemRecordStatus?:string;agentmemRecordError?:string;agentmemReceiptId?:string;pendingRevision?:boolean };
+export type Project = { id:string; name:string; projectRoot:string; agentmemProjectId:string; agentmemEnabled:boolean; agentmemAutoSetup:boolean; pinned:boolean; createdAt:string; updatedAt:string };
 export type Settings = { projectRoot: string; agentmemProjectId: string; agentmemAutoSetup?:boolean; orchestratorModel: string; orchestratorEffort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'; approvalPolicy: ApprovalPolicy };
-export type State = { version: 2; settings: Settings; tasks: Task[]; activeTaskId: string|null; };
+export type State = { version: 3; settings: Settings; tasks: Task[]; activeTaskId: string|null; projects:Project[]; selectedProjectId:string|null; expandedProjectIds:string[] };
 const dataDir = stateDirectory();
 const statePath = path.join(dataDir, 'state.json');
-const defaults: State = { version: 2, settings: { projectRoot: '', agentmemProjectId: '', agentmemAutoSetup:false, orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request' }, tasks: [], activeTaskId: null };
+const defaults: State = { version: 3, settings: { projectRoot: '', agentmemProjectId: '', agentmemAutoSetup:false, orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request' }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:['unclassified'] };
 let current = structuredClone(defaults);
 let loaded = false;
 let stateLoading:Promise<State>|undefined;
@@ -133,13 +134,18 @@ function hasSupportedTaskShape(task:unknown,legacy:boolean){
   if(task.activeRole!==undefined&&!validRole(task.activeRole))return false;
   if(task.workerStage!==undefined&&!['context_plan','context_compose','execute'].includes(task.workerStage)||task.workerContextStatus!==undefined&&(!isStoredRecord(task.workerContextStatus)||!['retrieved','disabled','unavailable'].includes(task.workerContextStatus.status)||!isString(task.workerContextStatus.detail))||task.resolution!==undefined&&!['direct','simple','delegated'].includes(task.resolution)||task.allowDirectResponse!==undefined&&typeof task.allowDirectResponse!=='boolean'||task.pendingRevision!==undefined&&typeof task.pendingRevision!=='boolean')return false;
   if(task.passes?.length&&task.currentPassId!==undefined&&!task.passes.some((pass:any)=>pass.id===task.currentPassId))return false;
+  if(task.projectId!==undefined&&!isUuid(task.projectId))return false;
+  if(task.lastInteractedAt!==undefined&&!isDate(task.lastInteractedAt))return false;
   return ['currentPassId','activeTurnId','routerThreadId','directThreadId','simpleThreadId','orchestratorThreadId','workerThreadId','agentmemTaskId','agentmemLease','agentmemRecordStatus','agentmemRecordError','agentmemReceiptId','activeModelId','activeEffort','error','workerContextSummary','routingNote','reviewNote'].every(field=>isOptionalString(task,field));
 }
+const isUuid=(value:unknown)=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function isProject(value:unknown){return isStoredRecord(value)&&isUuid(value.id)&&isString(value.name)&&value.name.trim().length>0&&value.name.length<=80&&isString(value.projectRoot)&&value.projectRoot.length<=1024&&isString(value.agentmemProjectId)&&/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(value.agentmemProjectId)&&typeof value.agentmemEnabled==='boolean'&&typeof value.agentmemAutoSetup==='boolean'&&(!value.agentmemEnabled&&!value.agentmemProjectId||value.agentmemEnabled&&(!!value.agentmemProjectId||value.agentmemAutoSetup))&&typeof value.pinned==='boolean'&&isDate(value.createdAt)&&isDate(value.updatedAt);}
 function safeWorkspaceUrl(value:unknown){try{return normalizeAgentWorkspaceUrl(value)===value;}catch{return false;}}
 function hasSupportedStoredShape(value:any){
-  if(!isStoredRecord(value)||![1,2].includes(value.version)||!Array.isArray(value.tasks))return false;
+  if(!isStoredRecord(value)||![1,2,3].includes(value.version)||!Array.isArray(value.tasks))return false;
   if(!hasSupportedSettingsShape(value.settings))return false;
   if(value.activeTaskId!==undefined&&value.activeTaskId!==null&&typeof value.activeTaskId!=='string')return false;
+  if(value.version===3&&(!Array.isArray(value.projects)||!value.projects.every(isProject)||new Set(value.projects.map((project:any)=>project.id)).size!==value.projects.length||value.selectedProjectId!==null&&!isUuid(value.selectedProjectId)||!Array.isArray(value.expandedProjectIds)||!value.expandedProjectIds.every((id:any)=>id==='unclassified'||isUuid(id))||value.selectedProjectId&&!value.projects.some((project:any)=>project.id===value.selectedProjectId)||value.tasks.some((task:any)=>task.projectId&&!value.projects.some((project:any)=>project.id===task.projectId))))return false;
   return value.tasks.every((task:any)=>hasSupportedTaskShape(task,value.version===1));
 }
 
@@ -173,7 +179,7 @@ async function loadStateOnce(): Promise<State> {
     // permits only explicit migration defaults; consumers receive a complete
     // current-version state after upgrade.
     if(!hasSupportedStoredShape(current))throw new Error('The migrated state does not satisfy the current state schema.');
-    if(containedRawReasoning){const tmp=`${statePath}.${randomUUID()}.tmp`;await writeFile(tmp,JSON.stringify(current,null,2),{mode:0o600});await rename(tmp,statePath);}
+    if(containedRawReasoning||value.version!==3){const tmp=`${statePath}.${randomUUID()}.tmp`;await writeFile(tmp,JSON.stringify(current,null,2),{mode:0o600});await rename(tmp,statePath);}
   } catch(error) {
     current=structuredClone(defaults);
     throw new Error(`Pseudoharness local state at ${statePath} could not be migrated safely. Preserve or repair this file before restarting; it will not be replaced automatically.`,{cause:error});
@@ -182,6 +188,13 @@ async function loadStateOnce(): Promise<State> {
   return structuredClone(current);
 }
 export function upgradeStoredState(value:any):State{
+  let migratedProjects:Project[]=Array.isArray(value.projects)?value.projects.filter(isProject).map((row:any)=>({...row})):[];
+  let selectedProjectId: string|null=typeof value.selectedProjectId==='string'?value.selectedProjectId:null;
+  if(value.version!==3&&value.settings?.projectRoot){
+    const now=new Date().toISOString();const id=randomUUID();
+    migratedProjects=[{id,name:path.basename(value.settings.projectRoot.replace(/[\\/]+$/,''))||'Project',projectRoot:value.settings.projectRoot,agentmemProjectId:value.settings.agentmemProjectId||'',agentmemEnabled:!!value.settings.agentmemProjectId||!!value.settings.agentmemAutoSetup,agentmemAutoSetup:!!value.settings.agentmemAutoSetup,pinned:false,createdAt:now,updatedAt:now}];selectedProjectId=id;
+  }
+  if(selectedProjectId&&!migratedProjects.some(row=>row.id===selectedProjectId))selectedProjectId=null;
   const tasks=(value.tasks||[]).map((t:any)=>{
     const task={...t,agentmemProjectId:typeof t.agentmemProjectId==='string'?t.agentmemProjectId:(value.settings?.agentmemProjectId||defaults.settings.agentmemProjectId)} as Task;
     if(value.version===1){
@@ -193,6 +206,7 @@ export function upgradeStoredState(value:any):State{
       task.processedTurns=Array.isArray(t.processedTurns)?t.processedTurns:[];
       for(const message of task.messages)if(!message.createdAt)message.createdAt=task.createdAt;
     }
+    if(!isDate(task.lastInteractedAt)){const lastUserTime=(task.messages||[]).reduce((latest:number,message:any)=>message.role==='user'&&isDate(message.createdAt)?Math.max(latest,Date.parse(message.createdAt)):latest,Date.parse(task.createdAt));task.lastInteractedAt=new Date(lastUserTime).toISOString();}
     if(!Array.isArray(task.passes)||task.passes.length===0){
       task.passes=[{id:randomUUID(),index:1,createdAt:task.createdAt,userInput:task.userMessages?.[0]||task.title,userInputs:[...(task.userMessages||[])],userMessageIds:[],phase:task.phase,approvalPolicy:savedApprovalPolicy(value.settings?.approvalPolicy),legacyUnassociated:true,assignment:task.assignment,receipt:task.receipt,reviewNote:task.reviewNote,resolution:task.resolution,routingNote:task.routingNote,error:task.error,escalation:task.escalation,reasoningSummaries:task.reasoningSummaries,reasoningTurns:task.reasoningTurns,liveActivity:task.liveActivity,correctionCount:task.correctionCount||0,orchestratorThreadId:task.orchestratorThreadId,workerThreadId:task.workerThreadId,processedTurns:[...(task.processedTurns||[])],agentmemTaskId:task.agentmemTaskId,agentmemLease:task.agentmemLease,agentmemRecordStatus:task.agentmemRecordStatus,agentmemRecordError:task.agentmemRecordError,agentmemReceiptId:task.agentmemReceiptId}];
       task.currentPassId=undefined;
@@ -212,10 +226,29 @@ export function upgradeStoredState(value:any):State{
     syncCurrentPass(task);
     return task;
   });
-  return {...defaults,...value,version:2,settings:{...defaults.settings,...value.settings,approvalPolicy:savedApprovalPolicy(value.settings?.approvalPolicy)},tasks};
+  return {...defaults,...value,version:3,settings:{...defaults.settings,...value.settings,approvalPolicy:savedApprovalPolicy(value.settings?.approvalPolicy)},tasks,projects:migratedProjects,selectedProjectId,expandedProjectIds:Array.isArray(value.expandedProjectIds)?value.expandedProjectIds.filter((id:string)=>id==='unclassified'||migratedProjects.some(row=>row.id===id)):[...migratedProjects.map(row=>row.id),'unclassified']};
 }
 export function getState() { return structuredClone(current); }
 export function getTask(id: string) { return current.tasks.find(t => t.id === id); }
+export function selectProjectInState(state:State,id:string|null){if(id!==null&&!state.projects.some(project=>project.id===id))throw new Error('Project not found.');state.selectedProjectId=id;return id===null?null:state.projects.find(project=>project.id===id)!;}
+export function saveProjectInState(state:State,input:Omit<Project,'createdAt'|'updatedAt'> & Partial<Pick<Project,'createdAt'|'updatedAt'>>){
+  if(!input.id||input.id.length>128||!input.name.trim()||input.name.trim().length>80||input.projectRoot.length>1024||!/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(input.agentmemProjectId))throw new Error('Enter a valid project name, root, and AgentMem ID.');
+  const existing=state.projects.find(project=>project.id===input.id);const now=new Date().toISOString();
+  const project:Project={id:input.id,name:input.name.trim(),projectRoot:input.projectRoot,agentmemProjectId:input.agentmemEnabled?input.agentmemProjectId:'',agentmemEnabled:input.agentmemEnabled,agentmemAutoSetup:input.agentmemEnabled&&input.agentmemAutoSetup,pinned:!!input.pinned,createdAt:existing?.createdAt||input.createdAt||now,updatedAt:now};
+  if(existing)state.projects=state.projects.map(row=>row.id===project.id?project:row);else state.projects.push(project);
+  return project;
+}
+export function moveTaskProjectInState(state:State,taskId:string,projectId:string|null){
+  const task=state.tasks.find(row=>row.id===taskId);if(!task)throw new Error('Session not found.');
+  if(projectId!==null&&!state.projects.some(project=>project.id===projectId))throw new Error('Project not found.');
+  const waitingForAgentmem=[task,...(task.passes||[])].some(row=>row.agentmemRecordStatus==='saving'||row.agentmemRecordStatus==='in_progress'||!!row.agentmemLease);
+  const blocked=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing','escalated','paused_after_restart'].includes(task.phase)||!!task.activeTurnId||!!task.activeRole||!!task.approvalRequests?.length||waitingForAgentmem;
+  if(blocked)throw new Error(waitingForAgentmem?'Wait for AgentMem receipt completion before moving this session.':'Stop or finish this session, resolve approvals, or explicitly resume it before moving projects. Its current execution keeps the original project context.');
+  task.projectId=projectId||undefined;
+  if(projectId){const project=state.projects.find(row=>row.id===projectId)!;task.userRoot=project.projectRoot;task.agentmemProjectId=project.agentmemEnabled?project.agentmemProjectId:'';}else{task.userRoot=state.settings.projectRoot||task.userRoot;task.agentmemProjectId=state.settings.agentmemProjectId;}
+  task.lastInteractedAt=new Date().toISOString();return task;
+}
+export function noteTaskInteractionInState(state:State,taskId:string){const task=state.tasks.find(row=>row.id===taskId);if(task)task.lastInteractedAt=new Date().toISOString();}
 export function taskDeletionBlockReason(task:Task){
   if(['intake','routing','direct_running','simple_running','planning','worker_running','reviewing','escalated'].includes(task.phase)||task.activeTurnId||task.activeRole)return 'Stop or finish the active turn before deleting this session.';
   const records=[task,...(task.passes||[])];
@@ -224,7 +257,7 @@ export function taskDeletionBlockReason(task:Task){
 }
 export function renameTaskInState(state:State,id:string,title:string){
   const task=state.tasks.find(x=>x.id===id);if(!task)throw new Error('Session not found.');
-  task.title=title;task.updatedAt=new Date().toISOString();return task;
+  task.title=title;task.updatedAt=new Date().toISOString();task.lastInteractedAt=task.updatedAt;return task;
 }
 export function deleteTaskInState(state:State,id:string){
   const task=state.tasks.find(x=>x.id===id);if(!task)throw new Error('Session not found.');
@@ -237,7 +270,7 @@ export async function mutate(fn: (state: State) => void) {
   const operation=writeQueue.then(async()=>{
     const rollback=structuredClone(current);
     try {
-      fn(current); current.version=2; current.tasks.forEach(syncCurrentPass); current.tasks.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
+      fn(current); current.version=3; current.tasks.forEach(syncCurrentPass); current.tasks.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
       await mkdir(dataDir,{recursive:true});
       const tmp=`${statePath}.${randomUUID()}.tmp`;
       try { await writeFile(tmp,JSON.stringify(current,null,2),{mode:0o600}); await rename(tmp,statePath); }
@@ -256,11 +289,26 @@ export async function mutate(fn: (state: State) => void) {
   writeQueue=operation.then(()=>undefined,()=>undefined);
   return operation;
 }
-export async function createTask(message: string, root: string, agentmemProjectId: string, approvalPolicy:ApprovalPolicy='on-request',attachments:TaskAttachment[]=[] ) {
+export async function createTask(message: string, root: string, agentmemProjectId: string, approvalPolicy:ApprovalPolicy='on-request',attachments:TaskAttachment[]=[],projectId?:string ) {
   const now = new Date().toISOString(); const id = randomUUID();
-  const task: Task = { id, title: message.slice(0, 72)||attachments[0]?.name||'Image task', phase: 'intake', createdAt: now, updatedAt: now, userRoot: root, agentmemProjectId, userMessages: [message], correctionCount: 0, processedTurns: [], messages: [{id:randomUUID(),role:'user',text:message,createdAt:now,attachments}] };
+  const task: Task = { id, ...(projectId?{projectId}:{}),lastInteractedAt:now,title: message.slice(0, 72)||attachments[0]?.name||'Image task', phase: 'intake', createdAt: now, updatedAt: now, userRoot: root, agentmemProjectId, userMessages: [message], correctionCount: 0, processedTurns: [], messages: [{id:randomUUID(),role:'user',text:message,createdAt:now,attachments}] };
   beginPass(task,message,task.messages[0].id,approvalPolicy,attachments);
   await mutate(s => { s.tasks.unshift(task); s.activeTaskId=id; }); return task;
+}
+export async function createTaskForProject(message:string,projectId:string|null|undefined,attachments:TaskAttachment[]=[],selectedSkills:SavedSkillSnapshot[]=[]){
+  const id=randomUUID();
+  await mutate(state=>{
+    const selectedId=projectId===undefined?state.selectedProjectId:projectId;
+    const project=selectedId?state.projects.find(row=>row.id===selectedId):undefined;
+    if(selectedId&&!project)throw new Error('The selected project no longer exists. Select a project again before starting a session.');
+    const root=project?.projectRoot||state.settings.projectRoot;
+    if(!root)throw new Error('Choose or create a project before starting a task.');
+    const agentmemProjectId=project?(project.agentmemEnabled?project.agentmemProjectId:''):state.settings.agentmemProjectId;
+    const approvalPolicy=state.settings.approvalPolicy;const now=new Date().toISOString();const firstMessage={id:randomUUID(),role:'user' as const,text:message,createdAt:now,...(attachments.length?{attachments:structuredClone(attachments)}:{})};
+    const created:Task={id,title:message.slice(0,72)||attachments[0]?.name||'Image task',phase:'intake',createdAt:now,updatedAt:now,lastInteractedAt:now,...(project?{projectId:project.id}:{}),userRoot:root,agentmemProjectId,userMessages:[message],correctionCount:0,processedTurns:[],messages:[firstMessage]};
+    beginPass(created,message,firstMessage.id,approvalPolicy,attachments,selectedSkills);state.tasks.unshift(created);state.activeTaskId=id;
+  });
+  return getTask(id)!;
 }
 export function beginPass(task:Task,message:string,userMessageId?:string,approvalPolicy:ApprovalPolicy='on-request',attachments:TaskAttachment[]=[],selectedSkills:SavedSkillSnapshot[]=[]){
   const now=new Date().toISOString();const pass:TaskPass={id:randomUUID(),index:(task.passes?.reduce((n,p)=>Math.max(n,p.index),0)||0)+1,createdAt:now,userInput:message,userInputs:[message],userMessageIds:userMessageId?[userMessageId]:[],attachments,selectedSkills:structuredClone(selectedSkills),loadedSkills:[],phase:'intake',agentmemAudit:{recorded:true,coverage:'full_pass',selectedProjectId:task.agentmemProjectId||null,workspaceRoot:task.userRoot,identityStatus:task.agentmemProjectId?'unverified':'disabled',modelMcpStatus:'unknown',contexts:[],calls:[]},approvalPolicy,agentContextVersion:1,correctionCount:0,processedTurns:[]};
@@ -277,4 +325,4 @@ export function syncCurrentPass(task:Task){
   const p=currentPass(task);if(!p)return;
   Object.assign(p,{phase:task.phase,routeDecision:task.routeDecision,executionEscalation:task.executionEscalation,assignment:task.assignment,receipt:task.receipt,reviewNote:task.reviewNote,resolution:task.resolution,routingNote:task.routingNote,error:task.error,escalation:task.escalation,workerStage:task.workerStage,workerContextStatus:task.workerContextStatus,workerContextSummary:task.workerContextSummary,reasoningSummaries:structuredClone(task.reasoningSummaries||[]),reasoningTurns:structuredClone(task.reasoningTurns||[]),liveActivity:structuredClone(task.liveActivity||[]),correctionCount:task.correctionCount,routerThreadId:task.routerThreadId,directThreadId:task.directThreadId,simpleThreadId:task.simpleThreadId,orchestratorThreadId:task.orchestratorThreadId,workerThreadId:task.workerThreadId,activeTurnId:task.activeTurnId,activeRole:task.activeRole,processedTurns:[...task.processedTurns],agentmemTaskId:task.agentmemTaskId,agentmemLease:task.agentmemLease,agentmemRecordStatus:task.agentmemRecordStatus,agentmemRecordError:task.agentmemRecordError,agentmemReceiptId:task.agentmemReceiptId});
 }
-export function addMessage(task: Task, role: Message['role'], text: string, attachments?:TaskAttachment[],passId=task.currentPassId,id:string=randomUUID(),submissionKind?:Message['submissionKind'],deliveryStatus?:Message['deliveryStatus']) { const message:Message={id,role,text,createdAt:new Date().toISOString(),...(passId?{passId}:{}),...(attachments?.length?{attachments:structuredClone(attachments)}:{}),...(submissionKind?{submissionKind}:{}),...(deliveryStatus?{deliveryStatus}:{})};task.messages.push(message);task.updatedAt = new Date().toISOString();return message; }
+export function addMessage(task: Task, role: Message['role'], text: string, attachments?:TaskAttachment[],passId=task.currentPassId,id:string=randomUUID(),submissionKind?:Message['submissionKind'],deliveryStatus?:Message['deliveryStatus']) { const message:Message={id,role,text,createdAt:new Date().toISOString(),...(passId?{passId}:{}),...(attachments?.length?{attachments:structuredClone(attachments)}:{}),...(submissionKind?{submissionKind}:{}),...(deliveryStatus?{deliveryStatus}:{})};task.messages.push(message);task.updatedAt = message.createdAt;if(role==='user')task.lastInteractedAt=message.createdAt;return message; }
