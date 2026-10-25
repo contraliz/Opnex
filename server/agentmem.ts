@@ -152,6 +152,14 @@ export class AgentMem {
       return [{id:row.id,name:typeof row.name==='string'&&row.name.trim()?row.name:row.id,...(typeof row.description==='string'&&row.description?{description:row.description}:{}),sourceRoot,memoryDirectory:path.basename(memoryRoot)}];
     }).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})||a.id.localeCompare(b.id));
   }
+  async registeredProjectForRoot(expectedRoot:string):Promise<AgentMemProject|undefined>{
+    const key=rootKey(expectedRoot);return (await this.listProjects()).find(project=>rootKey(project.sourceRoot)===key);
+  }
+  async repositoryForRoot(projectId:string,expectedRoot:string):Promise<{repository_id:string;root:string}|undefined>{
+    const result:any=await this.call('repository_list',{project_id:projectId});const rows=Array.isArray(result?.repositories)?result.repositories:[];
+    const match=rows.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&rootKey(row.root)===rootKey(expectedRoot));
+    return match?{repository_id:match.repository_id,root:match.root}:undefined;
+  }
   private async projectRows():Promise<any[]>{
     const result:any=await this.call('projects',{action:'list'});const rows=Array.isArray(result)?result:result?.projects||result?.items||result?.data?.projects;
     if(!Array.isArray(rows))throw new Error('AgentMem project list did not contain a projects array.');return rows.map((row:any)=>row&&typeof row==='object'?{...row,sourceRoot:row.source_root||row.root||row.cwd,memoryRoot:row.memory_root||row.memoryRoot}:row);
