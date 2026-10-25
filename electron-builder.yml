@@ -1,5 +1,6 @@
 appId: org.pseudoharness.desktop
 productName: Pseudoharness
+copyright: Copyright (c) 2026 Ethan Qin
 directories:
   output: desktop-release
 files:

@@ -52,10 +52,22 @@ jobs:
       - run: npm run package
       - run: npm run desktop:smoke
       - run: npm run desktop:package
+      - name: Check out immutable 1.1.1 per-user installer source
+        if: runner.os == 'Windows'
+        uses: actions/checkout@v4
+        with:
+          ref: v1.1.1
+          path: legacy-v111
+      - name: Build original 1.1.1 per-user installer for migration smoke
+        if: runner.os == 'Windows'
+        run: npm ci && npm run desktop:package
+        working-directory: legacy-v111
       - name: Verify Windows elevation and per-user upgrade
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/windows-installer-upgrade-smoke.ps1
+        env:
+          PSEUDOHARNESS_LEGACY_SETUP: ${{ github.workspace }}/legacy-v111/desktop-release/Pseudoharness Setup 1.1.1.exe
       - name: Upload desktop packages
         uses: actions/upload-artifact@v4
         with:
