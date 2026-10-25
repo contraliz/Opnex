@@ -5,7 +5,7 @@ import { NODE_RUNTIME_SHA256,NODE_RUNTIME_VERSION } from '../scripts/prepare-mcp
 
 describe('packaged MCP helper runtime',()=>{
   it('keeps development on the local Node runtime and resolves source helpers',()=>{
-    const launch=resolveMcpHelperLaunch({modulePath:'D:\\repo\\server\\agentmem.ts',helperFile:'agentmem-mcp-gateway.ts',tsxLoader:'D:\\repo\\node_modules\\tsx\\dist\\loader.mjs'});
+    const launch=resolveMcpHelperLaunch({modulePath:'D:\\repo\\server\\agentmem.ts',helperFile:'agentmem-mcp-gateway.ts',platform:'win32',arch:'x64',tsxLoader:'D:\\repo\\node_modules\\tsx\\dist\\loader.mjs'});
     expect(launch.command).toBe(process.execPath);expect(launch.packaged).toBe(false);expect(launch.args).toEqual(['--import','D:\\repo\\node_modules\\tsx\\dist\\loader.mjs','D:\\repo\\server\\agentmem-mcp-gateway.ts']);expect(launch.cwd).toBe('D:\\repo');
   });
   it('uses a bundled architecture-specific runtime and unpacked helper modules when packaged',()=>{
