@@ -162,9 +162,22 @@ async function withAgentMemPassScope<T>(task:Task,role:'direct'|'simple'|'orches
     return run();
   });
 }
+function agentMemBootstrapPending(pass:TaskPass){return !!pass.agentmemAudit?.contexts.some(context=>context.status==='pending'&&/no KB is registered yet/i.test(context.resultSummary||''));}
+function requireAuditedAgentMemBootstrap(task:Task,pass:TaskPass,role:'simple'|'orchestrator',threadId:string,turnId:string){
+  const methods=new Set((pass.agentmemAudit?.calls||[]).filter(call=>call.source==='model'&&call.role===role&&call.threadId===threadId&&call.turnId===turnId&&call.status==='completed').map(call=>call.method));
+  const missing=['projects','repository_register','index_project','attach_project','repository_search'].filter(method=>!methods.has(method));
+  if(missing.length)throw new Error(`AgentMem setup for this folder is not complete. The execution agent must make audited model calls for: ${missing.join(', ')}. No app-side registration or task-ledger bootstrap was performed.`);
+}
+async function verifyAgentMemRepositoryAfterSetup(task:Task,passId:string,role:'simple'|'orchestrator'){
+  await withAgentMemPassScope(task,role,'verify_model_issued_agentmem_setup',async()=>{
+    const repo=await agentmem.repositoryForRoot(task.agentmemProjectId,task.userRoot);
+    if(!repo)throw new Error('AgentMem did not return a repository index for the exact selected folder after setup.');
+    await mutate(state=>{const audit=state.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(!audit)return;audit.identityStatus='verified';audit.verifiedProjectId=task.agentmemProjectId;audit.verifiedRoot=task.userRoot;audit.verifiedRepositoryId=repo.repository_id;for(const call of audit.calls)if(call.source==='model'&&call.service==='repository_index'&&!call.repositoryId)call.repositoryId=repo.repository_id;});
+  },passId);
+}
 async function agentMemModelConfig(task:Task,role:'direct'|'simple'|'orchestrator'|'worker',passId:string){
   if(!isAgentMemEnabled(task.agentmemProjectId))return undefined;
-  try{const config=await withAgentMemPassScope(task,role,'model_agentmem_mcp_identity',async()=>{const current=await agentmem.modelMcpServerConfig(task.agentmemProjectId,task.userRoot);if(current.env.PSEUDOHARNESS_AGENTMEM_SETUP_MODE!=='register')await agentmem.connect(task.agentmemProjectId,task.userRoot);return current;},passId);const repositoryId=config.env.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID;await mutate(state=>{const audit=state.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit&&typeof repositoryId==='string'&&repositoryId)audit.verifiedRepositoryId=repositoryId;});return config;}
+  try{const mode=await agentmem.setupMode(task.agentmemProjectId,task.userRoot);if(role==='direct'&&mode!=='ready')return undefined;const run=()=>agentmem.modelMcpServerConfig(task.agentmemProjectId,task.userRoot);const pass=task.passes?.find(row=>row.id===passId);const config=mode==='register'&&pass?await agentmem.withAuditScope({taskId:task.id,passId,role,purpose:'model_agentmem_mcp_identity',projectId:task.agentmemProjectId,workspaceRoot:task.userRoot,contextId:randomUUID()},run):await withAgentMemPassScope(task,role,'model_agentmem_mcp_identity',run,passId);if(!config)return undefined;const repositoryId=config.env.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID;await mutate(state=>{const audit=state.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit&&typeof repositoryId==='string'&&repositoryId)audit.verifiedRepositoryId=repositoryId;});return config;}
   catch(error){
     const message=safeError(error),identityMismatch=/root does not match|not registered|cannot be verified/i.test(message);
     await mutate(state=>{const audit=state.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit)audit.identityStatus=identityMismatch?'mismatch':'unavailable';});
@@ -172,9 +185,9 @@ async function agentMemModelConfig(task:Task,role:'direct'|'simple'|'orchestrato
     throw new Error(`The selected AgentMem service could not be verified before model access was configured. ${message}`);
   }
 }
-async function recordAgentMemMcpAvailability(taskId:string,passId:string,role:WorkflowRole,threadId:string){
+async function recordAgentMemMcpAvailability(taskId:string,passId:string,role:WorkflowRole,threadId:string,configured=true){
   let status:'available'|'unavailable'|'disabled'='unavailable';
-  const task=getTask(taskId);if(!task?.agentmemProjectId)status='disabled';
+  const task=getTask(taskId);if(!task?.agentmemProjectId||!configured)status='disabled';
   else try{const rows=await agentCodex.mcpServerStatus(threadId);const server=rows.find((row:any)=>String(row?.name||row?.serverName||'').toLowerCase()==='agentmem');const catalog=server?.tools;const names=Array.isArray(catalog)?catalog.map((tool:any)=>String(tool?.name||'')):Object.keys(catalog||{});status=['knowledge','repository_search','repository_resync'].every(name=>names.includes(name))?'available':'unavailable';}catch{}
   await mutate(state=>{const audit=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit&&audit.modelMcpStatus!=='observed')audit.modelMcpStatus=status;});
   if(status==='unavailable')throw new Error("The selected project's AgentMem knowledge and repository-index read/write tools are not available in this execution thread. Refresh the Codex MCP catalog or choose a verified project with both registered services; no work was reported complete.");
@@ -242,7 +255,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   attachedThreads.add(threadId);
   if(role!=='router')await verifySkillMcpAvailability(threadId);
   if(role==='router')await mutate(s=>{const audit=s.tasks.find(x=>x.id===task.id)?.passes?.find(x=>x.id===pass.id)?.agentmemAudit;if(audit&&audit.modelMcpStatus!=='observed')audit.modelMcpStatus='disabled';});
-  else await recordAgentMemMcpAvailability(task.id,pass.id,role,threadId);
+  else await recordAgentMemMcpAvailability(task.id,pass.id,role,threadId,!!mcpConfig);
   task.phase=stageConfig[role].phase;task.activeRole=role;task.activeModelId=modelId;task.activeEffort=effort;task.activeTurnId=undefined;task.error=undefined;task.allowDirectResponse=false;
   await mutate(s=>{const live=s.tasks.find(x=>x.id===task.id);if(!live||live.phase==='cancelled'||live.currentPassId!==pass.id)return;Object.assign(live,task);});
   if(!getTask(task.id)||getTask(task.id)!.phase==='cancelled'||getTask(task.id)!.currentPassId!==pass.id)return;
@@ -252,7 +265,9 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const needsProjectContext=(role==='simple'||role==='direct')&&isAgentMemEnabled(task.agentmemProjectId);
   const retrievedContext=needsProjectContext?await taskContext(task,contextQuery,role,'query_context_before_answer') as any:undefined;
   const promptContext=(role==='direct'||role==='simple')&&retrievedContext?directContextForPrompt(retrievedContext,contextQuery):'';
-  const prompt=stagePrompt(task,role,promptContext);
+  const setupPending=!!task.agentmemProjectId&&await agentmem.setupMode(task.agentmemProjectId,task.userRoot)==='register';
+  const bootstrapInstruction=role==='simple'&&setupPending?`\n\nAGENTMEM KB SETUP: The current folder has AgentMem enabled but no registered KB. Use the model-visible projects tool with action=register, then repository_register, index_project, attach_project, and repository_search for this exact folder. The app supplies and enforces the project ID and root; never provide alternate identity fields or select another project. Registration creates empty scaffolding, so index safe project files and inspect cited evidence before treating anything as established knowledge. Create focused curated knowledge only for verified facts established by this task; cite source evidence and record gaps honestly. These are explicit model-issued audited tool calls. If registration conflicts or fails, stop with the exact actionable error; do not overwrite, rebind, or report setup as complete.`:'';
+  const prompt=stagePrompt(task,role,promptContext)+bootstrapInstruction;
   if(!getTask(task.id)||getTask(task.id)!.phase==='cancelled'||getTask(task.id)!.currentPassId!==pass.id)return;
   const selected=role==='router'?'':pass.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (explicitly authorized for this pass; immutable snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';
   const finalPrompt=`${continuation?`${prompt}\n\nThis is an update to the same active task. Preserve relevant context and completed actions from this thread. Re-check current state and continue only what remains; do not replay completed side effects.`:prompt}${selected}`;
@@ -314,7 +329,7 @@ async function beginAssignment(task:Task,context:any,userInput:string){
   const decision=currentPass(task)?.routeDecision;
   const setupMode=isAgentMemEnabled(task.agentmemProjectId)?await agentmem.setupMode(task.agentmemProjectId,task.userRoot):'ready';
   const setupInstruction=setupMode==='register'
-    ? `\n\nAGENTMEM PROJECT SETUP REQUIRED: The user configured project ID "${task.agentmemProjectId}" for this exact root "${task.userRoot}", but no KB is registered yet. Call the model-visible AgentMem projects tool with action=register. Pseudoharness pins the ID and root; do not provide alternate identity fields. Then call repository_register and index_project for this root, and use attach_project or retrieve_evidence to inspect the new KB. Registration creates empty scaffolding only; distinguish indexed source evidence from verified curated knowledge. If an operation fails, report it and retry only after checking current registration/index state. Never select, overwrite, or rebind another project.`
+    ? `\n\nAGENTMEM PROJECT SETUP REQUIRED: AgentMem is enabled for this exact root "${task.userRoot}", but no KB is registered yet. Call the model-visible AgentMem projects tool with action=register. Pseudoharness supplies and pins the ID and root; do not provide alternate identity fields. Then call repository_register, index_project, attach_project, and repository_search for this root. Registration creates empty scaffolding only; distinguish indexed source evidence from verified curated knowledge. Create focused curated entries only for verified facts established by this task, with citations and honest gaps. These model-issued calls are audited. If an operation fails, report the exact error and retry only after checking current registration/index state. Never select, overwrite, or rebind another project.`
     : setupMode==='repository'
       ? `\n\nAGENTMEM REPOSITORY SETUP REQUIRED: The selected KB exists for this exact root, but its repository index does not. Call the model-visible repository_register and index_project tools; Pseudoharness pins the project ID and root. Then inspect the resulting index with repository_status or repository_search. Do not change or re-register the KB.`
       : '';
@@ -469,6 +484,11 @@ async function completeSimpleExecution(task:Task,value:unknown,threadId:string,t
   }
   const receipt=receiptSchema.parse(outcome.receipt);
   const pass=currentPass(task);
+  if(pass&&agentMemBootstrapPending(pass)){
+    requireAuditedAgentMemBootstrap(task,pass,'simple',threadId,turnId);
+    if(await agentmem.setupMode(task.agentmemProjectId,task.userRoot)!=='ready')throw new Error('AgentMem setup is incomplete for this folder. Finish the model-issued registration, repository indexing, and attachment before reporting the task complete.');
+    await verifyAgentMemRepositoryAfterSetup(task,pass.id,'simple');
+  }
   if(isAgentMemEnabled(task.agentmemProjectId)&&pass){
     const gaps=agentMemArtifactUsageGaps(pass.agentmemAudit,pass,'simple',threadId,turnId,receipt);
     if(gaps.length){const error=`The simple implementation receipt is not complete because required project-service evidence is missing: ${gaps.join(' ')}`;await mutate(s=>{const x=s.tasks.find(a=>a.id===task.id);const p=x?.passes?.find(row=>row.id===pass.id);if(!x||!p||x.phase==='cancelled')return;p.receipt=receipt;recordAgentReceipt(p,'simple',threadId,turnId,receipt);x.phase='needs_attention';x.activeRole=undefined;x.activeTurnId=undefined;x.error=error;addMessage(x,'system',error);});return;}
@@ -479,8 +499,10 @@ async function completeSimpleExecution(task:Task,value:unknown,threadId:string,t
   }
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled')return;const p=currentPass(t);if(p)recordAgentReceipt(p,'simple',threadId,turnId,receipt);t.phase='accepted';t.resolution='simple';t.receipt=receipt;t.activeRole=undefined;t.activeTurnId=undefined;t.reviewNote='GPT-6 Luna completed and verified this simple implementation at xhigh effort. No Sol review occurred.';addMessage(t,'simple',receipt.result);});
 }
-async function completeDelegatedAssignment(task:Task,assignment:Assignment){
+async function completeDelegatedAssignment(task:Task,assignment:Assignment,threadId:string,turnId:string){
   const roots=assignmentWriteRoots(assignment,task.userRoot);
+  const pass=currentPass(task);if(pass&&agentMemBootstrapPending(pass)){requireAuditedAgentMemBootstrap(task,pass,'orchestrator',threadId,turnId);await verifyAgentMemRepositoryAfterSetup(task,pass.id,'orchestrator');}
+  if(isAgentMemEnabled(task.agentmemProjectId)&&await agentmem.setupMode(task.agentmemProjectId,task.userRoot)!=='ready')throw new Error('AgentMem KB setup is incomplete for this exact project folder. Complete the model-visible projects registration, repository registration, indexing, and attachment steps before delegated work can start. No task ledger or alternate project was created.');
   const work=isAgentMemEnabled(task.agentmemProjectId)?(task.agentmemTaskId&&task.agentmemLease?{taskId:task.agentmemTaskId,lease:task.agentmemLease}:await withAgentMemPassScope(task,'orchestrator','assignment_work_lease',()=>agentmem.createWork(task.agentmemProjectId,titleFor(task),assignment.outcome,roots.map(x=>path.relative(task.userRoot,x)||'.'),assignment.acceptance))):undefined;
   await mutate(s=>{const x=s.tasks.find(a=>a.id===task.id)!;x.assignment=assignment;x.resolution='delegated';x.allowDirectResponse=false;if(work){x.agentmemTaskId=work.taskId;x.agentmemLease=work.lease;}addMessage(x,'orchestrator','Prepared a complete assignment.');});
   await startWorker(getTask(task.id)!,assignment);
@@ -541,7 +563,7 @@ async function onTurnCompleted(params:any){
       if(live.phase==='planning') {
         await dispatchIntakeOutcome(parsed,live.allowDirectResponse===true,{
           direct:outcome=>completeDirectAnswer(live,outcome.answer,outcome.policy_basis),
-          delegate:assignment=>completeDelegatedAssignment(live,assignment),
+          delegate:assignment=>completeDelegatedAssignment(live,assignment,params.threadId,params.turn.id),
         });
       }
       else if(live.phase==='reviewing') {const review=reviewSchema.parse(parsed);await applyReview(live,review);}
@@ -804,7 +826,13 @@ export async function submitEscalationDecision(taskId:string,message:string,rawA
 export async function cancelTask(taskId:string){const task=getTask(taskId);if(!task)throw new Error('Task not found.');const role=task.activeRole,turn=task.activeTurnId,thread=role?roleThreadId(task,role):undefined;const passId=currentPass(task)?.id;const allowanceStart=thread?allowanceBaselines.get(thread)||null:null;if(thread)allowanceBaselines.delete(thread);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;const pass=x.passes?.find(row=>row.id===passId);for(const call of pass?.agentmemAudit?.calls||[])if(call.source==='model'&&call.status==='running'&&call.threadId===thread&&call.turnId===turn){call.status='interrupted';call.updatedAt=new Date().toISOString();}x.phase='cancelled';x.activeRole=undefined;x.activeTurnId=undefined;x.error=undefined;addMessage(x,'system','Task cancelled. Late Codex events will be ignored.');});if(role&&turn&&thread)try{await appServerForRole(role).interrupt(thread,turn);}catch{}if(role&&thread&&passId){const allowanceEnd=await readAllowanceSnapshot();await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass){markThreadTokenUsageUnavailable(pass,role,thread);applyAllowanceDelta(pass,role,thread,allowanceStart,allowanceEnd);}});void refreshThreadUsage(taskId,passId,role,thread);}if(task.agentmemTaskId&&task.agentmemLease)try{const auditRole=role==='worker'||role==='direct'||role==='simple'?role:'orchestrator';await withAgentMemPassScope(task,auditRole,'release_lease_after_cancellation',()=>agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId!,task.agentmemLease!));await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus='released';x.agentmemRecordError=undefined;x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(e)}`;});}return getTask(taskId)!;}
 export async function saveSettings(input:any){
   const {settingsSchema}=await import('./contracts.js');const {resolveProjectDirectory}=await import('./directories.js');const v=settingsSchema.parse(input);const resolved=await resolveProjectDirectory(v.projectRoot);
-  const projectId=v.agentmemProjectId.trim();if(projectId)await agentmem.prepareProject(projectId,resolved);else{agentmem.close();agentmem.status={connected:false,projectVerified:false,detail:'Disabled · no AgentMem project selected'};}
+  let projectId=v.agentmemProjectId.trim();
+  if(v.agentmemAutoSetup&&!projectId){
+    const registered=await agentmem.registeredProjectForRoot(resolved);
+    const base=path.basename(resolved).normalize('NFKD').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,24)||'project';
+    projectId=registered?.id||`agentmem-${base}-${createHash('sha256').update(path.resolve(resolved).toLocaleLowerCase()).digest('hex').slice(0,16)}`;
+  }
+  if(projectId)await agentmem.prepareProject(projectId,resolved);else{agentmem.close();agentmem.status={connected:false,projectVerified:false,detail:'Disabled · no AgentMem project selected'};}
   await mutate(s=>{s.settings={...v,projectRoot:resolved,agentmemProjectId:projectId};});await refreshModels();return runtimeStatus();
 }
 export function getRuntimeStatus(){return runtimeStatus();}
