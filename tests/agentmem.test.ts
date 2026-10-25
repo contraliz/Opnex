@@ -9,17 +9,43 @@ const receipt:Receipt={status:'complete',result:'The adapter completion task is 
 const context={task:{acceptance:['Adapter submits completion schema','AgentMem releases completed task']},requirements:{requirements_revision:7,requirements_complete:true,applicable_requirements:[{id:'REQ-0001',revision:7}]}};
 
 describe('AgentMem receipt boundary',()=>{
-  it('exposes model MCP only after pairing the selected project with its registered repository index',async()=>{
+  it('pins model MCP to the selected root and exposes safe repository retry for a missing index',async()=>{
     const adapter=new AgentMem();(adapter as any).command='node';(adapter as any).args=[];
-    const call=vi.fn().mockResolvedValue({repositories:[{repository_id:'repo-fixture',root:'D:/fixture'}]});(adapter as any).call=call;
+    const project={id:'fixture',root:'D:/fixture',memory_root:'D:/data/projects/fixture'};
+    const call=vi.fn(async(name:string)=>name==='projects'?{projects:[project]}:{repositories:[{repository_id:'repo-fixture',root:'D:/fixture'}]});(adapter as any).call=call;
     const config=await adapter.modelMcpServerConfig('fixture','D:/fixture');
     expect(call).toHaveBeenCalledWith('repository_list',{project_id:'fixture'});
-    expect(config.enabled_tools).toContain('knowledge');expect(config.enabled_tools).toContain('repository_resync');expect(config.enabled_tools).toContain('repository_graph_query');
-    expect(config.env).toMatchObject({PSEUDOHARNESS_AGENTMEM_PROJECT_ID:'fixture',PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:expect.any(String),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:'repo-fixture'});
-    (adapter as any).call=vi.fn().mockResolvedValue({repositories:[{repository_id:'repo-other',root:'D:/other'}]});
-    await expect(adapter.modelMcpServerConfig('fixture','D:/fixture')).rejects.toThrow(/no repository index registered for this exact workspace/i);
+    expect(config.enabled_tools).toContain('knowledge');expect(config.enabled_tools).toContain('repository_resync');expect(config.enabled_tools).toContain('repository_graph_query');expect(config.enabled_tools).not.toContain('projects');
+    expect(config.env).toMatchObject({PSEUDOHARNESS_AGENTMEM_PROJECT_ID:'fixture',PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:expect.any(String),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:'repo-fixture',PSEUDOHARNESS_AGENTMEM_SETUP_MODE:'ready'});
+    (adapter as any).call=vi.fn(async(name:string)=>name==='projects'?{projects:[project]}:{repositories:[{repository_id:'repo-other',root:'D:/other'}]});
+    const retry=await adapter.modelMcpServerConfig('fixture','D:/fixture');expect(retry.env.PSEUDOHARNESS_AGENTMEM_SETUP_MODE).toBe('repository');expect(retry.enabled_tools).toContain('repository_register');expect(retry.enabled_tools).not.toContain('projects');
+    await expect(adapter.modelMcpServerConfig('fixture','D:/different-workspace')).rejects.toThrow(/root does not match/i);
+  });
+  it('offers model-visible registration for a missing project without guessing identity',async()=>{
+    const adapter=new AgentMem();(adapter as any).command='node';(adapter as any).args=[];
+    const call=vi.fn(async(name:string)=>name==='projects'?{projects:[]}:{});(adapter as any).call=call;
+    const config=await adapter.modelMcpServerConfig('new-kb','D:/fixture/new');
+    expect(config.env).toMatchObject({PSEUDOHARNESS_AGENTMEM_PROJECT_ID:'new-kb',PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve('D:/fixture/new'),PSEUDOHARNESS_AGENTMEM_SETUP_MODE:'register',PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:''});
+    expect(config.enabled_tools).toEqual(expect.arrayContaining(['projects','repository_register','index_project','attach_project']));
+    expect(call).toHaveBeenCalledTimes(1);
   });
 
+  it('fails closed when the chosen ID or root conflicts with an existing project',async()=>{
+    const adapter=new AgentMem();(adapter as any).command='node';(adapter as any).args=[];
+    (adapter as any).call=vi.fn(async()=>({projects:[{id:'taken',root:'D:/different',memory_root:'D:/data/projects/taken'}]}));
+    await expect(adapter.modelMcpServerConfig('taken','D:/fixture')).rejects.toThrow(/root does not match/i);
+    (adapter as any).call=vi.fn(async()=>({projects:[{id:'other-id',root:'D:/fixture',memory_root:'D:/data/projects/other-id'}]}));
+    await expect(adapter.prepareProject('new-id','D:/fixture')).rejects.toThrow(/already registered as AgentMem project/i);
+  });
+
+  it('offers repository-only repair after a partial setup and reports registry lookup failures',async()=>{
+    const adapter=new AgentMem();(adapter as any).command='node';(adapter as any).args=[];
+    (adapter as any).call=vi.fn(async(name:string)=>name==='projects'?{projects:[{id:'partial',root:'D:/fixture',memory_root:'D:/data/projects/partial'}]}:{repositories:[]});
+    const config=await adapter.modelMcpServerConfig('partial','D:/fixture');
+    expect(config.env.PSEUDOHARNESS_AGENTMEM_SETUP_MODE).toBe('repository');expect(config.enabled_tools).toContain('repository_register');expect(config.enabled_tools).not.toContain('projects');
+    const failed=new AgentMem();(failed as any).command='node';(failed as any).args=[];(failed as any).call=vi.fn(async()=>({registered:[]}));
+    await expect(failed.prepareProject('partial','D:/fixture')).rejects.toThrow(/project list did not contain/i);
+  });
   it('audits actual app-issued MCP calls with pass context and metadata only',async()=>{
     const adapter=new AgentMem();const events:any[]=[];(adapter as any).client={callTool:vi.fn(async()=>({isError:false,structuredContent:{results:[{id:'EV-4',text:'PRIVATE_KB_CONTENT'}]}}))};(adapter as any).transport={};adapter.setAuditObserver(event=>{events.push(event);});
     await adapter.withAuditScope({taskId:'task-audit',passId:'pass-audit',role:'direct',purpose:'query_context_before_answer',projectId:'demo-project',workspaceRoot:'D:/workspace/demo',contextId:'context-1'},()=> (adapter as any).call('retrieve_evidence',{project_id:'demo-project',query:'PRIVATE_QUERY'}));
