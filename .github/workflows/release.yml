@@ -1,0 +1,77 @@
+name: Build and publish desktop release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_glob: desktop-release/*.exe
+          - os: macos-latest
+            asset_glob: desktop-release/*.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: npm
+      - name: Confirm package version matches tag
+        shell: bash
+        run: |
+          node -e "const p=require('./package.json'); const tag=process.env.GITHUB_REF_NAME; if (tag !== 'v'+p.version) { console.error('Tag '+tag+' does not match package version '+p.version); process.exit(1); }"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run package
+      - run: npm run desktop:smoke
+      - run: npm run desktop:package
+      - name: Upload desktop packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: pseudoharness-${{ matrix.os }}
+          path: ${{ matrix.asset_glob }}
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Publish GitHub release
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Verify release assets
+        run: |
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -ge 3
+          find release-assets -maxdepth 1 -type f -size +0c -print
+          test "$(find release-assets -maxdepth 1 -type f -name '*.exe' | wc -l)" -ge 1
+          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -ge 2
+      - name: Publish release with desktop packages
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Pseudoharness ${{ github.ref_name }}
+          body_path: docs/releases/${{ github.ref_name }}.md
+          draft: false
+          prerelease: false
+          files: release-assets/*
+          fail_on_unmatched_files: true

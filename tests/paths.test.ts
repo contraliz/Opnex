@@ -4,6 +4,7 @@ import { defaultDataDirectory, stateDirectory } from '../server/paths.js';
 describe('portable per-user state locations',()=>{
   it('uses the Windows local application data directory',()=>{
     expect(defaultDataDirectory({platform:'win32',home:'C:\\Users\\demo',env:{LOCALAPPDATA:'C:\\Users\\demo\\AppData\\Local'}})).toBe('C:\\Users\\demo\\AppData\\Local\\Pseudoharness');
+    expect(defaultDataDirectory({platform:'win32',home:'C:\\Users\\alice',env:{LOCALAPPDATA:'C:\\Users\\alice\\AppData\\Local'}})).not.toBe(defaultDataDirectory({platform:'win32',home:'C:\\Users\\bob',env:{LOCALAPPDATA:'C:\\Users\\bob\\AppData\\Local'}}));
   });
   it('uses macOS Application Support',()=>{
     expect(defaultDataDirectory({platform:'darwin',home:'/Users/demo',env:{}})).toBe('/Users/demo/Library/Application Support/Pseudoharness');

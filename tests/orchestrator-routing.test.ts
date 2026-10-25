@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-const fake=vi.hoisted(()=>({instance:null as any,agentInstance:null as any,instances:[] as any[],threadOwners:new Map<string,any>(),calls:[] as any[],threadCount:0,turnCount:0,fastAvailable:true}));
+const fake=vi.hoisted(()=>({instance:null as any,agentInstance:null as any,instances:[] as any[],threadOwners:new Map<string,any>(),threadConfigs:new Map<string,any>(),calls:[] as any[],steerErrors:[] as string[],threadCount:0,turnCount:0,fastAvailable:true,agentMemMode:'ok',agentMemContextCalls:0,authToken:'opaque-test-'+'token',refreshedToken:'opaque-refreshed-'+'token'}));
 vi.mock('../server/codex.js',()=>{
+  class AppServerRequestError extends Error{constructor(readonly method:string,message:string){super(message);}}
   class FakeAppServer{
     ready=false;
     listeners=new Map<string,((...args:any[])=>void)[]>();
@@ -12,18 +14,20 @@ vi.mock('../server/codex.js',()=>{
     on(event:string,listener:(...args:any[])=>void){this.listeners.set(event,[...(this.listeners.get(event)||[]),listener]);return this;}
     emit(event:string,...args:any[]){for(const listener of this.listeners.get(event)||[])listener(...args);return true;}
     async connect(){this.ready=true;this.emit('connected');}
-    async verifyAgentIsolationConfig(){return;}
-    async exportChatGPTAuthTokens(){return {accessToken:'opaque-test-token',chatgptAccountId:'test-account'};}
+    async verifyAgentRuntimeConfig(){return;}
+    async exportChatGPTAuthTokens(){return {accessToken:fake.authToken,chatgptAccountId:'test-account'};}
     async useExternalChatGPTAuth(){return;}
-    async refreshChatGPTAuthTokens(previousAccountId:string|null){fake.calls.push({kind:'refresh-auth',previousAccountId});return {accessToken:'opaque-refreshed-token',chatgptAccountId:'test-account',chatgptPlanType:'plus'};}
-    respondServerRequest(id:string|number,result:unknown){fake.calls.push({kind:'server-response',id,result});}
+    async refreshChatGPTAuthTokens(previousAccountId:string|null){fake.calls.push({kind:'refresh-auth',previousAccountId});return {accessToken:fake.refreshedToken,chatgptAccountId:'test-account',chatgptPlanType:'plus'};}
     async models(){return [
       {id:'gpt-6-luna',supportedReasoningEfforts:['low','high','xhigh'].map(reasoningEffort=>({reasoningEffort})),serviceTiers:fake.fastAvailable?[{id:'priority'}]:[]},
       {id:'gpt-6.1-sol',supportedReasoningEfforts:['low'].map(reasoningEffort=>({reasoningEffort}))},
     ] as any;}
-    async startThread(role:string,root:string,model:string,effort:string,approvalPolicy:string){const threadId=`${role}-${++fake.threadCount}`;fake.threadOwners.set(threadId,this);fake.calls.push({kind:'thread',server:this===fake.agentInstance?'agent':'broker',role,root,model,effort,approvalPolicy,threadId});return threadId;}
-    async resumeThread(threadId:string){return threadId;}
+    async startThread(role:string,root:string,model:string,effort:string,approvalPolicy:string,ownedPolicy?:string,dynamicTools?:unknown,mcpConfig?:unknown,skillsMcpConfig?:unknown){const threadId=`${role}-${++fake.threadCount}`;fake.threadOwners.set(threadId,this);fake.threadConfigs.set(threadId,{mcpConfig,skillsMcpConfig});fake.calls.push({kind:'thread',server:this===fake.agentInstance?'agent':'broker',role,root,model,effort,approvalPolicy,mcpConfig,skillsMcpConfig,threadId});return threadId;}
+    async resumeThread(threadId:string,approvalPolicy?:string,role?:string,root?:string,ownedPolicy?:string,mcpConfig?:unknown,skillsMcpConfig?:unknown){fake.threadConfigs.set(threadId,{mcpConfig,skillsMcpConfig});return threadId;}
+    async mcpServerStatus(threadId:string){const config=fake.threadConfigs.get(threadId) as any;return [{name:'agentmem',tools:config?.mcpConfig?{knowledge:{},decisions:{},retrieve_evidence:{},repository_search:{},repository_resync:{}}:{}},{name:'pseudoharness_skills',tools:config?.skillsMcpConfig?{skills_list:{},skills_search:{},skills_load:{},skills_read_file:{},skills_save:{}}:{}}];}
+    respondServerRequest(id:string|number,result:unknown){fake.calls.push({kind:'server-response',id,result},{kind:'mcp-response',id,result});}
     async startTurn(threadId:string,input:string,role:string,model:string,effort:string,root:string,writeRoots:string[]=[],approvalPolicy:string,schema?:unknown,serviceTierForTurn?:string,images:any[]=[]){const turnId=`turn-${++fake.turnCount}`;fake.calls.push({kind:'turn',threadId,input,role,model,effort,root,writeRoots,approvalPolicy,schema,serviceTierForTurn,images,turnId});return {turn:{id:turnId}};}
+    async steerTurn(threadId:string,expectedTurnId:string,input:string,images:any[]=[],clientUserMessageId:string){fake.calls.push({kind:'steer',threadId,expectedTurnId,input,images,clientUserMessageId});const failure=fake.steerErrors.shift();if(failure)throw new AppServerRequestError('turn/steer',failure);return {turnId:expectedTurnId};}
     async reviewTurn(threadId:string,input:string,model:string,effort:string,approvalPolicy:string,images:any[]=[]){return this.startTurn(threadId,input,'orchestrator',model,effort,'/workspace',[],approvalPolicy,undefined,undefined,images);}
     async accountRateLimits(){return null;}
     threadUsage(){return new Promise<never>(()=>{});}
@@ -31,18 +35,37 @@ vi.mock('../server/codex.js',()=>{
     close(){this.ready=false;}
   }
   const extractAssistantText=(turn:any)=>turn?.items?.filter((item:any)=>['agentMessage','assistantMessage','message'].includes(item.type)).map((item:any)=>item.text??'').join('\n').trim()||'';
-  const approvalResponse=(method:string,requested:unknown,decision:string)=>method==='item/permissions/requestApproval'?{permissions:decision==='accept'&&requested?requested:{},scope:'turn'}:{decision};
-  return {AppServer:FakeAppServer,extractAssistantText,approvalResponse};
+  const approvalResponse=(method:string,requested:unknown,decision:string,content?:Record<string,unknown>)=>method==='item/permissions/requestApproval'?{permissions:decision==='accept'&&requested?requested:{},scope:'turn'}:method==='mcpServer/elicitation/request'?{action:decision,...(decision==='accept'?{content:content||{}}:{})}:{decision};
+  return {AppServer:FakeAppServer,AppServerRequestError,extractAssistantText,approvalResponse,normalCodexSqliteHome:()=>process.env.CODEX_SQLITE_HOME||process.env.CODEX_HOME||'C:/Users/test/.codex'};
+});
+vi.mock('../server/agentmem.js',()=>{
+  class FakeAgentMem{
+    status={connected:false,projectVerified:false,detail:'Disabled'};
+    observer:any;scope:any;callNumber=0;
+    setAuditObserver(observer:any){this.observer=observer;}
+    withAuditScope(scope:any,run:()=>Promise<any>){const previous=this.scope;this.scope=scope;return run().finally(()=>{this.scope=previous;});}
+    async auditCall(method:string,status:'running'|'completed'|'failed',resultSummary?:string,error?:string){if(!this.scope)return;this.scope.callIds??={};const key=`${this.scope.contextId}:${method}`;if(status==='running')this.scope.callIds[key]=`fake-call-${++this.callNumber}`;const now=new Date().toISOString();await this.observer({...this.scope,callId:this.scope.callIds[key]||`fake-call-${++this.callNumber}`,method,status,startedAt:now,updatedAt:now,...(resultSummary?{resultSummary}:{}),...(error?{error}:{})});if(status!=='running')delete this.scope.callIds[key];}
+    async connect(projectId:string,root:string){fake.calls.push({kind:'agentmem-connect',projectId,root});if(fake.agentMemMode==='connect-unavailable')throw new Error('AgentMem test service unavailable');if(fake.agentMemMode==='identity-mismatch')throw new Error('AgentMem project root does not match the selected project root.');this.status={connected:true,projectVerified:true,detail:`Connected · ${projectId}`};return {id:projectId,sourceRoot:root};}
+    async context(projectId:string,query:string){fake.agentMemContextCalls++;fake.calls.push({kind:'agentmem-context',projectId,query});for(const method of ['attach_project','requirements','lessons','retrieve_evidence','decisions']){await this.auditCall(method,'running');if(fake.agentMemMode==='unavailable'||fake.agentMemMode==='context-fails-after-first'&&fake.agentMemContextCalls>1){await this.auditCall(method,'failed',undefined,'AgentMem test service unavailable');throw new Error('AgentMem test service unavailable');}await this.auditCall(method,'completed',method==='decisions'?'decisions=1 · refs=DEC-0001':'Response received');}return {attached:{summary:'Verified project context',sources:['@memory/architecture.md#L2-L4']},requirements:{items:[]},lessons:{items:[]},evidence:{items:[]},decisions:fake.agentMemMode==='empty'?{items:[],query,match_count:0}:{items:[{id:'DEC-0001',title:'Pair selected AgentMem knowledge base with its registered workspace',choice:'A selected knowledge base stays paired with its registered workspace.',source_ref:'Explicit user decision in current Codex task, 2026-10-22'}],query,match_count:1}};}
+    async createWork(projectId:string,title:string,goal:string,paths:string[],criteria:string[]){fake.calls.push({kind:'agentmem-create-work',projectId,title,goal,paths,criteria});await this.auditCall('tasks','running');await this.auditCall('tasks','completed','task=mem-task-1');await this.auditCall('claim_task','running');await this.auditCall('claim_task','completed','lease issued');return {taskId:'mem-task-1',lease:'lease-1'};}
+    async releaseWork(projectId:string,taskId:string,lease:string){fake.calls.push({kind:'agentmem-release',projectId,taskId,lease});await this.auditCall('record_work','running');await this.auditCall('record_work','completed','lease released');return {status:'released'};}
+    async recordReceipt(){await this.auditCall('task_context','running');await this.auditCall('task_context','completed','requirements=1');await this.auditCall('record_work','running');await this.auditCall('record_work','completed','receipt=receipt-1');return {status:'done',ownership_released:true};}
+    async retryReceipt(){return {status:'done',ownership_released:true};}
+    async listProjects(){return [];}
+    async modelMcpServerConfig(projectId:string,root:string){await this.auditCall('repository_list','running');await this.auditCall('repository_list','completed','repository=repo-fixture');return {enabled:true,env:{PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:'repo-fixture'},projectId,root};}
+    close(){this.status={connected:false,projectVerified:false,detail:'Disconnected'};}
+  }
+  return {AgentMem:FakeAgentMem,agentMemFailureReleased:()=>false,agentMemRecordFailure:(error:unknown)=>({status:'failed',error:String(error)}),agentMemRecordState:(saved:any)=>({status:saved.status,ownershipReleased:true}),safeError:(error:unknown)=>error instanceof Error?error.message:String(error)};
 });
 
-let dataDirectory='';let projectRoot='';let previousDataDirectory:string|undefined;let modules:any;
-const assignment={outcome:'Perform the requested implementation.',deliverable:'A bounded change.',read_scope:[],write_scope:[],exclusions:[],constraints:[],context_refs:[],acceptance:['The requested behavior is delivered.'],verification:['Run focused verification.'],ordinary_authority:['Choose local implementation details.'],escalation_conditions:['Scope expands.'],receipt_requirements:['Return status and evidence.']};
+let dataDirectory='';let projectRoot='';let previousDataDirectory:string|undefined;let previousCodexHome:string|undefined;let previousCodexProfile:string|undefined;let testCodexHome='';let modules:any;
+const assignment={outcome:'Perform the requested implementation.',deliverable:'A bounded change.',read_scope:[],write_scope:[],exclusions:[],constraints:[],context_refs:[],skill_refs:[],acceptance:['The requested behavior is delivered.'],verification:['Run focused verification.'],ordinary_authority:['Choose local implementation details.'],escalation_conditions:['Scope expands.'],receipt_requirements:['Return status and evidence.']};
 const receipt={status:'complete',result:'Completed and verified.',changes:[],acceptance:{met:['The requested behavior is delivered.'],unmet:[]},verification:[{check:'Focused behavior check',result:'passed',evidence:'Mocked lifecycle completed.'},{check:'Unrelated integration suite',result:'not_run',evidence:null}],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};
 async function waitFor(predicate:()=>boolean){for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out waiting for the routed workflow.');}
 async function setup(fast=true){
-  vi.resetModules();fake.calls=[];fake.instances=[];fake.instance=null;fake.agentInstance=null;fake.threadOwners.clear();fake.threadCount=0;fake.turnCount=0;fake.fastAvailable=fast;
+  vi.resetModules();fake.calls=[];fake.steerErrors=[];fake.instances=[];fake.instance=null;fake.agentInstance=null;fake.threadOwners.clear();fake.threadConfigs.clear();fake.threadCount=0;fake.turnCount=0;fake.fastAvailable=fast;fake.agentMemMode='ok';fake.agentMemContextCalls=0;
   previousDataDirectory=process.env.PSEUDOHARNESS_DATA_DIR;dataDirectory=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-route-test-'));process.env.PSEUDOHARNESS_DATA_DIR=dataDirectory;
-  projectRoot=path.join(dataDirectory,'workspace');await import('node:fs/promises').then(fs=>fs.mkdir(path.join(projectRoot,'src'),{recursive:true}));
+  projectRoot=path.join(dataDirectory,'workspace');await import('node:fs/promises').then(fs=>fs.mkdir(path.join(projectRoot,'src'),{recursive:true}));execFileSync('git',['init','--quiet'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});execFileSync('git',['config','user.name','Pseudoharness test'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});await writeFile(path.join(projectRoot,'src','baseline.ts'),'export const baseline = true;\n');execFileSync('git',['add','.'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});execFileSync('git',['commit','--quiet','-m','test baseline'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});
   const state=await import('../server/state.js');await state.loadState();await state.mutate(value=>{value.settings={...value.settings,projectRoot,agentmemProjectId:'',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'};});
   const orchestrator=await import('../server/orchestrator.js');await orchestrator.initialize();await waitFor(()=>orchestrator.getRuntimeStatus().codex.models.length>0);modules={state,orchestrator};return modules;
 }
@@ -50,30 +73,157 @@ function lastTurn(role:string){const turn=[...fake.calls].reverse().find(row=>ro
 function turns(role:string){return fake.calls.filter(row=>row.kind==='turn'&&row.role===role);}
 function pngAttachment(name='shape.png'){const bytes=Buffer.from('89504e470d0a1a0a','hex');return {name,type:'image/png',size:bytes.length,data:bytes.toString('base64')};}
 async function complete(role:string,value:unknown){const turn=lastTurn(role);const owner=fake.threadOwners.get(turn.threadId)||fake.instance;owner.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'agentMessage',text:JSON.stringify(value)}]}});return turn;}
-async function waitForRole(role:string){await waitFor(()=>fake.calls.some(row=>row.kind==='turn'&&row.role===role));return lastTurn(role);}
+async function waitForRole(role:string){await waitFor(()=>fake.calls.some(row=>row.kind==='turn'&&row.role===role));const turn=lastTurn(role);await waitFor(()=>modules?.state.getState().tasks.some((task:any)=>task[`${role}ThreadId` as string]===turn.threadId&&task.activeTurnId===turn.turnId));return turn;}
+async function modelAgentMemCall(role:string,toolName:string,argumentsValue:Record<string,unknown>,result:unknown){const turn=lastTurn(role);const owner=fake.threadOwners.get(turn.threadId)||fake.instance;const id=`${role}-${toolName}-${fake.calls.length}`;const item={id,type:'mcpToolCall',serverName:'agentmem',toolName,arguments:argumentsValue,status:'inProgress'};owner.emit('notification','item/started',{threadId:turn.threadId,turnId:turn.turnId,item});owner.emit('notification','item/completed',{threadId:turn.threadId,turnId:turn.turnId,item:{...item,status:'completed',result:{structuredContent:result}}});await waitFor(()=>modules?.state.getState().tasks.some((task:any)=>task.passes?.some((pass:any)=>pass.agentmemAudit?.calls?.some((call:any)=>call.id===`model:${turn.threadId}:${turn.turnId}:${id}`&&call.status==='completed'))));}
 
-afterEach(async()=>{await new Promise(resolve=>setImmediate(resolve));if(modules?.state)await modules.state.mutate(()=>{});if(modules?.orchestrator){modules.orchestrator.shutdown();modules=null;}if(previousDataDirectory===undefined)delete process.env.PSEUDOHARNESS_DATA_DIR;else process.env.PSEUDOHARNESS_DATA_DIR=previousDataDirectory;if(dataDirectory)await rm(dataDirectory,{recursive:true,force:true});});
+afterEach(async()=>{await new Promise(resolve=>setImmediate(resolve));if(modules?.state)await modules.state.mutate(()=>{});if(modules?.orchestrator){modules.orchestrator.shutdown();modules=null;}if(dataDirectory){const library=await import('../server/skill-library.js');library.closeSkillLibrary();}if(previousDataDirectory===undefined)delete process.env.PSEUDOHARNESS_DATA_DIR;else process.env.PSEUDOHARNESS_DATA_DIR=previousDataDirectory;if(previousCodexHome===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=previousCodexHome;if(previousCodexProfile===undefined)delete process.env.CODEX_PROFILE;else process.env.CODEX_PROFILE=previousCodexProfile;if(dataDirectory)await rm(dataDirectory,{recursive:true,force:true});if(testCodexHome)await rm(testCodexHome,{recursive:true,force:true});});
 beforeEach(()=>vi.clearAllMocks());
 
 describe('routed request workflow',()=>{
-  it('writes the app-owned isolated runtime config without ambient instruction sources or saved credentials',async()=>{
-    await setup();
-    const config=await readFile(path.join(dataDirectory,'agent-codex-home-v1','config.toml'),'utf8');
-    expect(config).toContain('include_permissions_instructions = false');expect(config).toContain('include_environment_context = false');
-    expect(config).toContain('project_doc_max_bytes = 0');expect(config).toContain('include_instructions = false');expect(config).toContain('use_memories = false');
-    expect(config).toContain('multi_agent = false');expect(config).toContain('experimental_compact_prompt_file = ');
-    await expect(readFile(path.join(dataDirectory,'agent-codex-home-v1','auth.json'))).rejects.toMatchObject({code:'ENOENT'});
+  it('keeps the library passive on ordinary turns and does not inherit a prior invocation into a new pass',async()=>{
+    const {orchestrator,state}=await setup();const library=await import('../server/skill-library.js');const skill=await library.createSkill({name:'Passive fixture',description:'Must remain unloaded',instructions:'DO NOT LOAD THIS ON AN ORDINARY REQUEST.'});
+    const task=await orchestrator.submitTask('Explain a simple idea.',undefined,[],[skill.id]);expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([]);expect(lastTurn('router').input).not.toContain(skill.instructions);await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});await waitForRole('direct');expect(lastTurn('direct').input).not.toContain(skill.instructions);await complete('direct',{answer:'A concise explanation.'});await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');
+    const next=await orchestrator.submitTask('Explain another idea.',task.id);expect(next.id).toBe(task.id);expect(state.getTask(task.id)?.passes?.[1]?.selectedSkills).toEqual([]);expect(lastTurn('router').input).not.toContain(skill.instructions);await orchestrator.cancelTask(task.id);
   });
-  it('bridges isolated-agent credential refresh through the metadata-only signed-in transport',async()=>{
+  it('steers the exact slash-invoked revision into the active turn and leaves the next pass empty',async()=>{
+    const {orchestrator,state}=await setup();const library=await import('../server/skill-library.js');const skill=await library.createSkill({name:'Steering fixture',description:'Explicit mid-turn guidance',instructions:'Preserve the active-turn boundary exactly.'});const task=await orchestrator.submitTask('Explain this idea.');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});const first=await waitForRole('direct');
+    await orchestrator.submitTask(`Apply this edge case.\n/skill library:${skill.id}`,task.id);expect(fake.calls).toContainEqual(expect.objectContaining({kind:'steer',threadId:first.threadId,expectedTurnId:first.turnId,input:expect.stringContaining('Preserve the active-turn boundary exactly.')}));expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([expect.objectContaining({revision:skill.revision,instructions:skill.instructions})]);
+    await complete('direct',{answer:'The edge case was checked.'});await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');await orchestrator.submitTask('Continue without a saved procedure.',task.id);expect(state.getTask(task.id)?.passes?.[1]?.selectedSkills).toEqual([]);expect(lastTurn('router').input).not.toContain(skill.instructions);await orchestrator.cancelTask(task.id);
+  });
+  it('pins an explicitly selected app skill to direct and delegated pass instructions',async()=>{
+    const {orchestrator,state}=await setup();const library=await import('../server/skill-library.js');const skill=await library.createSkill({name:'QA saved skill',description:'Selection provenance fixture',instructions:'Use the saved procedure exactly: preserve the boundary value 37.'});
+    const directTask=await orchestrator.submitTask(`Explain this value using the selected procedure.\n/skill library:${skill.id}`);
+    expect(state.getTask(directTask.id)?.passes?.[0]?.selectedSkills).toEqual([expect.objectContaining({id:`library:${skill.id}`,revision:skill.revision,source:skill.source,instructions:skill.instructions})]);
+    const router=lastTurn('router');expect(router.input).not.toContain(skill.instructions);expect(router.input).not.toContain(skill.revision);
+    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});const direct=await waitForRole('direct');
+    expect(direct.input).toContain('Use the saved procedure exactly: preserve the boundary value 37.');expect(direct.input).toContain(skill.revision);await complete('direct',{answer:'The selected procedure was followed.'});await waitFor(()=>state.getTask(directTask.id)?.phase==='needs_attention');
+    expect(fake.calls.find(row=>row.kind==='thread'&&row.role==='direct')?.skillsMcpConfig).toBeTruthy();
+
+    const hardTask=await orchestrator.submitTask(`Implement a bounded change using the selected procedure.\n/skill library:${skill.id}`);
+    await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'This request introduces behavior.'});await waitForRole('orchestrator');
+    expect(lastTurn('orchestrator').input).toContain('Use the saved procedure exactly: preserve the boundary value 37.');
+    await complete('orchestrator',{...assignment,write_scope:[path.join(projectRoot,'src')]});await waitForRole('worker');
+    await complete('worker',{type:'context_plan',queries:['bounded change'],scope_summary:'Implement the bounded change.'});await waitFor(()=>turns('worker').length===2);await waitForRole('worker');
+    await complete('worker',{type:'context_ready',summary:'The relevant source context is ready.'});await waitFor(()=>turns('worker').length===3);const execute=await waitForRole('worker');
+    expect(execute.input).toContain('Use the saved procedure exactly: preserve the boundary value 37.');expect(execute.input).toContain(skill.revision);
+    expect(state.getTask(hardTask.id)?.passes?.[0]?.selectedSkills).toEqual([expect.objectContaining({id:`library:${skill.id}`,revision:skill.revision,source:skill.source})]);
+    expect(fake.calls.find(row=>row.kind==='thread'&&row.role==='worker')?.skillsMcpConfig).toBeTruthy();
+    await orchestrator.cancelTask(hardTask.id);
+  });
+  it('honors a picker-pinned historical revision when the active skill has since changed',async()=>{
+    const {orchestrator,state}=await setup();const library=await import('../server/skill-library.js');const original=await library.createSkill({name:'Pinned history fixture',description:'First metadata revision',instructions:'Use the original instruction snapshot.'});
+    const updated=await library.updateSkill(original.id,{name:original.name,description:'Current metadata revision',instructions:'Use the newer instruction snapshot.'},original.revision);
+    const task=await orchestrator.submitTask(`Explain the saved procedure.\n/skill library:${original.id}@${original.revision}`);
+    expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([expect.objectContaining({revision:original.revision,instructions:original.instructions})]);
+    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});const direct=await waitForRole('direct');
+    expect(direct.input).toContain(original.instructions);expect(direct.input).not.toContain(updated.instructions);
+    await orchestrator.cancelTask(task.id);
+  });
+  it('uses an instruction-filtered Codex home with the normal MCP/plugin config and no global instruction file',async()=>{
+    await setup();
+    const normalHome=process.env.CODEX_HOME||path.join(os.homedir(),'.codex');const home=path.join(dataDirectory,'agent-codex-home-v2');
+    const [normalConfig,linkedConfig]=await Promise.all([stat(path.join(normalHome,'config.toml')),stat(path.join(home,'config.toml'))]);
+    expect([linkedConfig.dev,linkedConfig.ino]).toEqual([normalConfig.dev,normalConfig.ino]);
+    expect(await realpath(path.join(home,'plugins'))).toBe(await realpath(path.join(normalHome,'plugins')));
+    await expect(lstat(path.join(home,'AGENTS.md'))).rejects.toMatchObject({code:'ENOENT'});
+    const config=await readFile(path.join(home,'config.toml'),'utf8');expect(config).toContain('[mcp_servers.agentmem]');expect(config).toContain('[plugins.');
+    await expect(lstat(path.join(home,'auth.json'))).rejects.toMatchObject({code:'ENOENT'});
+  });
+  it('refreshes app-owned config/profile links from the selected Codex home on initialization',async()=>{
+    previousCodexHome=process.env.CODEX_HOME;previousCodexProfile=process.env.CODEX_PROFILE;testCodexHome=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-codex-home-'));process.env.CODEX_HOME=testCodexHome;process.env.CODEX_PROFILE='qa-profile';
+    await mkdir(path.join(testCodexHome,'plugins'),{recursive:true});await writeFile(path.join(testCodexHome,'config.toml'),'[mcp_servers.fixture]\ncommand="node"\n');await writeFile(path.join(testCodexHome,'qa-profile.config.toml'),'[mcp_servers.profile_fixture]\ncommand="node"\n');await writeFile(path.join(testCodexHome,'AGENTS.md'),'GLOBAL_MARKER_DO_NOT_LOAD');
+    const {orchestrator}=await setup();const home=path.join(dataDirectory,'agent-codex-home-v2');
+    expect(await readFile(path.join(home,'config.toml'),'utf8')).toContain('mcp_servers.fixture');expect(await readFile(path.join(home,'qa-profile.config.toml'),'utf8')).toContain('mcp_servers.profile_fixture');expect(await realpath(path.join(home,'plugins'))).toBe(await realpath(path.join(testCodexHome,'plugins')));await expect(lstat(path.join(home,'AGENTS.md'))).rejects.toMatchObject({code:'ENOENT'});
+    const replacement=path.join(testCodexHome,'config.replacement.toml');await writeFile(replacement,'[mcp_servers.refreshed_fixture]\ncommand="node"\n');await rename(replacement,path.join(testCodexHome,'config.toml'));await orchestrator.initialize();
+    expect(await readFile(path.join(home,'config.toml'),'utf8')).toContain('mcp_servers.refreshed_fixture');
+  });
+  it('bridges Codex credential refresh through the metadata-only signed-in transport',async()=>{
     await setup();fake.agentInstance.emit('serverRequest','agent-auth-1','account/chatgptAuthTokens/refresh',{reason:'unauthorized',previousAccountId:'test-account'});
     await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'));
     expect(fake.calls.find(row=>row.kind==='refresh-auth')).toMatchObject({previousAccountId:'test-account'});
-    expect(fake.calls.find(row=>row.kind==='server-response')).toMatchObject({id:'agent-auth-1',result:{accessToken:'opaque-refreshed-token',chatgptAccountId:'test-account',chatgptPlanType:'plus'}});
+    expect(fake.calls.find(row=>row.kind==='server-response')).toMatchObject({id:'agent-auth-1',result:{accessToken:fake.refreshedToken,chatgptAccountId:'test-account',chatgptPlanType:'plus'}});
   });
   it('runs a direct answer only on Luna and records a user-facing answer without a worker receipt',async()=>{
     const {orchestrator}=await setup();let task=await orchestrator.submitTask('Explain why the sky looks blue.');expect(task.phase).toBe('routing');const router=lastTurn('router');expect(router).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:'priority'});
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A concise explanation needs no implementation.'});const direct=await waitForRole('direct');expect(direct).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:undefined});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
-    await complete('direct',{type:'answer',answer:'Short wavelengths scatter more strongly.',escalation:null,route:null,justification:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');task=modules.state.getTask(task.id);expect(task).toMatchObject({resolution:'direct'});expect(task.passes?.[0].publicAnswer).toBe('Short wavelengths scatter more strongly.');expect(task.receipt).toBeUndefined();
+    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A concise explanation needs no implementation.'});const direct=await waitForRole('direct');expect(direct).toMatchObject({model:'gpt-6-luna',effort:'high',serviceTierForTurn:undefined});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
+    expect(fake.agentMemContextCalls).toBe(0);await complete('direct',{type:'answer',answer:'Short wavelengths scatter more strongly.',escalation:null,route:null,justification:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');task=modules.state.getTask(task.id);expect(task).toMatchObject({resolution:'direct',reviewNote:expect.stringContaining('high effort')});expect(task.passes?.[0].reasoningTurns?.find((turn:any)=>turn.role==='direct')?.requestedEffort).toBe('high');expect(task.passes?.[0].publicAnswer).toBe('Short wavelengths scatter more strongly.');expect(task.receipt).toBeUndefined();
+  });
+  it('retrieves query-matched AgentMem decisions before a generic direct answer without changing the direct route',async()=>{
+    const {orchestrator,state}=await setup();await state.mutate((value:any)=>{value.settings.agentmemProjectId='demo-project';});
+    const task=await orchestrator.submitTask('what is dec001');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short identifier question can be answered directly.'});
+    const direct=await waitForRole('direct');const retrieval=fake.calls.find(row=>row.kind==='agentmem-context');
+    expect(retrieval).toMatchObject({projectId:'demo-project',query:'what is dec001'});expect(direct).toMatchObject({model:'gpt-6-luna',effort:'high'});
+    expect(direct.input).toContain('DEC-0001');expect(direct.input).toContain('Explicit user decision in current Codex task, 2026-10-22');expect(direct.input).toContain('ground the answer');
+    const audit=modules.state.getTask(task.id)?.passes?.[0].agentmemAudit;expect(audit).toMatchObject({recorded:true,coverage:'full_pass',selectedProjectId:'demo-project',workspaceRoot:projectRoot,identityStatus:'verified',verifiedProjectId:'demo-project',verifiedRoot:projectRoot,modelMcpStatus:'available'});expect(audit.contexts).toMatchObject([{role:'direct',purpose:'query_context_before_answer',status:'supplied',threadId:direct.threadId,turnId:direct.turnId}]);expect(audit.calls.map((call:any)=>[call.source,call.method,call.status])).toEqual([['application','repository_list','completed'],['application','attach_project','completed'],['application','requirements','completed'],['application','lessons','completed'],['application','retrieve_evidence','completed'],['application','decisions','completed']]);
+    expect(modules.state.getTask(task.id)?.routeDecision).toMatchObject({effectiveRoute:'direct_answer'});expect(turns('orchestrator')).toHaveLength(0);
+    await complete('direct',{type:'answer',answer:'DEC-0001 pairs the selected knowledge base with its registered workspace.',escalation:null,route:null,justification:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');
+  });
+  it('blocks a direct answer when selected AgentMem identity does not match the task workspace',async()=>{
+    const {orchestrator,state}=await setup();await state.mutate((value:any)=>{value.settings.agentmemProjectId='demo-project';});fake.agentMemMode='identity-mismatch';const task=await orchestrator.submitTask('what is dec001');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'Short identifier lookup.'});
+    await waitFor(()=>modules.state.getTask(task.id)?.phase==='needs_attention');const current=modules.state.getTask(task.id);expect(current?.error).toMatch(/does not match or is not registered/i);expect(current?.error).toContain('start a new pass');expect(current?.passes?.[0].agentmemAudit).toMatchObject({identityStatus:'mismatch',selectedProjectId:'demo-project',workspaceRoot:projectRoot});expect(fake.agentMemContextCalls).toBe(0);expect(turns('direct')).toHaveLength(0);
+  });
+  it('uses fresh query-scoped retrieval for each direct pass and fails actionably when selected context is unavailable',async()=>{
+    const {orchestrator,state}=await setup();await state.mutate((value:any)=>{value.settings.agentmemProjectId='demo-project';});
+    const first=await orchestrator.submitTask('What is DEC001?');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'Short identifier lookup.'});await waitForRole('direct');
+    expect(fake.calls.find(row=>row.kind==='agentmem-context')?.query).toBe('What is DEC001?');await complete('direct',{type:'answer',answer:'DEC-0001 pairs the selected knowledge base with its registered workspace.',escalation:null,route:null,justification:null});await waitFor(()=>modules.state.getTask(first.id)?.phase==='accepted');
+    fake.agentMemMode='unavailable';await orchestrator.submitTask('what is dec001',first.id);await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'Short identifier lookup.'});
+    await waitFor(()=>modules.state.getTask(first.id)?.phase==='needs_attention');expect(modules.state.getTask(first.id)?.error).toMatch(/AgentMem test service unavailable/);expect(modules.state.getTask(first.id)).toMatchObject({activeRole:undefined,activeTurnId:undefined});expect(fake.calls.filter(row=>row.kind==='agentmem-context').at(-1)?.query).toBe('what is dec001');expect(turns('direct')).toHaveLength(1);
+  });
+  it('allows an enabled but empty direct retrieval to answer with an explicit no-match boundary',async()=>{
+    const {orchestrator,state}=await setup();await state.mutate((value:any)=>{value.settings.agentmemProjectId='demo-project';});fake.agentMemMode='empty';
+    await orchestrator.submitTask('What is DEC999?');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'Short identifier lookup.'});const direct=await waitForRole('direct');
+    expect(direct.input).toContain('"matching_record_count":0');expect(direct.input).toContain('no relevant record');expect(direct.effort).toBe('high');
+  });
+  it('forces explicit AgentMem context requests through verified retrieval before answering',async()=>{
+    const {orchestrator,state}=await setup();await state.mutate((value:any)=>{value.settings.agentmemProjectId='demo-project';});
+    const task=await orchestrator.submitTask('Attach to the AgentMem knowledge base and reanswer the earlier question.');
+    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'This looks like a short answer.'});
+    const sol=await waitForRole('orchestrator');expect(sol.input).toContain('Verified project context');expect(sol.input).toContain('@memory/architecture.md#L2-L4');
+    expect(modules.state.getTask(task.id)?.routeDecision).toMatchObject({route:'hard_task',effectiveRoute:'hard_task',rule_id:'hard_explicit_project_knowledge'});
+    expect(turns('direct')).toHaveLength(0);expect(fake.calls.some(row=>row.kind==='agentmem-context'&&row.projectId==='demo-project')).toBe(true);
+    await complete('orchestrator',assignment);await waitForRole('worker');expect(fake.calls.some(row=>row.kind==='agentmem-create-work'&&row.projectId==='demo-project')).toBe(true);
+    let audit=modules.state.getTask(task.id)?.passes?.[0].agentmemAudit;expect(audit.calls).toContainEqual(expect.objectContaining({source:'application',role:'orchestrator',purpose:'assignment_work_lease',method:'claim_task',status:'completed',projectId:'demo-project'}));
+    const workerCount=turns('worker').length;await complete('worker',{type:'context_plan',queries:['earlier question context'],scope_summary:'Reanswer using selected project knowledge.'});await waitFor(()=>turns('worker').length===workerCount+1&&modules.state.getState().tasks.some((row:any)=>row.workerThreadId===lastTurn('worker').threadId&&row.activeTurnId===lastTurn('worker').turnId));const compose=lastTurn('worker');
+    expect(fake.agentMemContextCalls).toBe(2);const composeCount=turns('worker').length;await complete('worker',{type:'context_ready',summary:'Cited context was retrieved.'});await waitFor(()=>turns('worker').length===composeCount+1&&modules.state.getState().tasks.some((row:any)=>row.workerThreadId===lastTurn('worker').threadId&&row.activeTurnId===lastTurn('worker').turnId));
+    expect(compose.input).toContain('DEC-0001');audit=modules.state.getTask(task.id)?.passes?.[0].agentmemAudit;expect(audit.contexts).toContainEqual(expect.objectContaining({role:'worker',purpose:'worker_scoped_context',status:'supplied',turnId:compose.turnId}));expect(lastTurn('worker').input).toContain('Cited context was retrieved.');
+  });
+  it('captures model-issued KB and repository MCP reads, a KB update, source changes, and post-change repository resync before accepting a worker receipt',async()=>{
+    const {orchestrator,state}=await setup();await state.mutate((value:any)=>{value.settings={...value.settings,agentmemProjectId:'demo-project'};});
+    const task=await orchestrator.submitTask('Implement the scoped project change.');
+    await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'A bounded source change is requested.'});const plan=await waitForRole('orchestrator');
+    const workerAssignment={...assignment,outcome:'Change the selected source file.',write_scope:[path.join(projectRoot,'src')]};
+    await complete('orchestrator',workerAssignment);await waitFor(()=>turns('worker').length===1);await waitForRole('worker');
+    await complete('worker',{type:'context_plan',queries:['source file'],scope_summary:'Implement the one scoped source change.'});await waitFor(()=>turns('worker').length===2);await waitForRole('worker');
+    await complete('worker',{type:'context_ready',summary:'The scoped source context is ready.'});await waitFor(()=>turns('worker').length===3);const execute=await waitForRole('worker');
+    expect(execute.writeRoots).toEqual([path.join(projectRoot,'src')]);
+    await writeFile(path.join(projectRoot,'src','baseline.ts'),'export const baseline = false;\n');
+    await modelAgentMemCall('worker','decisions',{action:'list'},{items:[{id:'DEC-0001',source_ref:'@memory/decisions.md#DEC-0001'}]});
+    await modelAgentMemCall('worker','repository_search',{query:'baseline source'},{items:[{path:'src/baseline.ts',line_start:1,excerpt:'baseline'}]});
+    await modelAgentMemCall('worker','knowledge',{action:'update',page_id:'architecture',content:'Updated project fact.'},{page_id:'architecture',revision:12});
+    await modelAgentMemCall('worker','repository_resync',{}, {status:'fresh',repository_id:'repo-fixture'});
+    const workerReceipt={status:'complete',result:'Changed the selected source file.',changes:['src/baseline.ts'],acceptance:{met:['The requested scoped change is complete.'],unmet:[]},verification:[{check:'Focused check',result:'passed',evidence:'Mocked provider receipt.'}],risks:[],knowledge:{consulted:['DEC-0001','repository_search src/baseline.ts'],updated:['Updated knowledge/architecture.md to record the established project fact.','Repository index resynced after source editing.']},decision_required:null};
+    await complete('worker',{type:'receipt',receipt:workerReceipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});await waitFor(()=>['reviewing','needs_attention'].includes(state.getTask(task.id)?.phase));
+    const pass=state.getTask(task.id)?.passes?.[0];expect(state.getTask(task.id)?.phase).toBe('reviewing');expect(pass?.turnSourceChanges).toContainEqual(expect.objectContaining({role:'worker',threadId:execute.threadId,turnId:execute.turnId,status:'verified',changedPaths:['src/baseline.ts']}));expect(pass?.receiptProvenance).toMatchObject({producerRole:'worker',threadId:execute.threadId,turnId:execute.turnId,artifactRefs:['src/baseline.ts']});expect(pass?.agentReceipts).toHaveLength(1);expect(pass?.agentmemAudit?.calls).toEqual(expect.arrayContaining([expect.objectContaining({source:'model',method:'decisions',service:'knowledge',operation:'read',projectId:'demo-project',turnId:execute.turnId}),expect.objectContaining({source:'model',method:'repository_search',service:'repository_index',operation:'read',repositoryId:'repo-fixture',turnId:execute.turnId}),expect.objectContaining({source:'model',method:'knowledge',service:'knowledge',operation:'write',turnId:execute.turnId}),expect.objectContaining({source:'model',method:'repository_resync',service:'repository_index',operation:'write',repositoryId:'repo-fixture',turnId:execute.turnId})]));
+    expect(plan.role).toBe('orchestrator');await waitFor(()=>turns('orchestrator').length>1||state.getTask(task.id)?.phase==='needs_attention');expect(state.getTask(task.id)?.phase).toBe('reviewing');await complete('orchestrator',{outcome:'accept',note:'The worker receipt is complete.',assignment:null,decision_required:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted'&&state.getTask(task.id)?.agentmemRecordStatus==='done');
+  });
+  it('blocks explicit project-context requests when this pass has no registered AgentMem selection',async()=>{
+    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Attach to the AgentMem knowledge base and reanswer the earlier question.');
+    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'This looks like a short answer.'});
+    await waitFor(()=>modules.state.getTask(task.id)?.phase==='needs_attention');
+    expect(modules.state.getTask(task.id)?.error).toMatch(/no AgentMem project is selected/i);expect(turns('direct')).toHaveLength(0);expect(turns('orchestrator')).toHaveLength(0);expect(fake.calls.some(row=>row.kind==='agentmem-context')).toBe(false);
+  });
+  it('forwards a provider MCP elicitation request to the user and sends only the explicit response',async()=>{
+    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Explain the existing project decision briefly.');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});const direct=await waitForRole('direct');
+    fake.agentInstance.emit('serverRequest','elicitation-1','mcpServer/elicitation/request',{threadId:direct.threadId,turnId:direct.turnId,serverName:'agentmem',mode:'form',message:'Confirm the knowledge lookup.',requestedSchema:{type:'object',properties:{confirmed:{type:'boolean'}},required:['confirmed']}});
+    await waitFor(()=>state.getTask(task.id)?.approvalRequests?.length===1);expect(state.getTask(task.id)?.approvalRequests?.[0]).toMatchObject({method:'mcpServer/elicitation/request',serverName:'agentmem',mode:'form'});
+    await orchestrator.resolveApproval(task.id,'elicitation-1','accept',{confirmed:true});expect(fake.calls.find(row=>row.kind==='mcp-response')).toMatchObject({id:'elicitation-1',result:{action:'accept',content:{confirmed:true}}});expect(state.getTask(task.id)?.approvalRequests).toHaveLength(0);
+  });
+  it('stops worker execution and releases its AgentMem lease when selected context becomes unavailable',async()=>{
+    const {orchestrator,state}=await setup();await state.mutate((value:any)=>{value.settings.agentmemProjectId='demo-project';});fake.agentMemMode='context-fails-after-first';
+    const task=await orchestrator.submitTask('Add a new feature using current project constraints.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'This adds project behavior.'});await waitForRole('orchestrator');
+    await complete('orchestrator',assignment);await waitForRole('worker');await complete('worker',{type:'context_plan',queries:['current constraints'],scope_summary:'Implement the requested feature.'});
+    await waitFor(()=>modules.state.getTask(task.id)?.phase==='needs_attention');
+    const saved=modules.state.getTask(task.id);expect(saved?.error).toMatch(/AgentMem retrieval did not complete.*Worker execution was stopped/i);expect(saved?.agentmemRecordStatus).toBe('released');expect(saved?.agentmemLease).toBeUndefined();expect(turns('worker')).toHaveLength(1);expect(fake.calls.some(row=>row.kind==='agentmem-release'&&row.taskId==='mem-task-1')).toBe(true);
   });
   it('passes current-pass image and text content to router/direct, then starts an attachment-free follow-up pass',async()=>{
     const {orchestrator}=await setup();const image=pngAttachment();const text=Buffer.from('The red square is in the upper left.');const file={name:'notes.txt',type:'text/plain',size:text.length,data:text.toString('base64')};
@@ -86,6 +236,33 @@ describe('routed request workflow',()=>{
   it('runs a bounded implementation on Luna xhigh, confines it to the workspace and does not start Sol review',async()=>{
     const {orchestrator}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/` and run its focused test.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const simple=await waitForRole('simple');expect(simple).toMatchObject({model:'gpt-6-luna',effort:'xhigh',writeRoots:[path.join(projectRoot,'src')],serviceTierForTurn:undefined});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
     await complete('simple',{type:'complete',receipt,escalation:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');expect(modules.state.getTask(task.id)).toMatchObject({phase:'accepted',resolution:'simple',reviewNote:expect.stringContaining('No Sol review')});
+  });
+  it('steers the exact active role turn in the same pass, then starts a new pass after completion',async()=>{
+    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/`.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const firstTurn=await waitForRole('simple');
+    const attachment=pngAttachment();await orchestrator.submitTask('Please check the focused test first.',task.id,[attachment]);const afterSteer=state.getTask(task.id)!;expect(afterSteer.passes).toHaveLength(1);expect(afterSteer.passes![0].userInputs).toEqual(['Fix the known typo under `src/`.','Please check the focused test first.']);expect(afterSteer.passes![0].attachments).toHaveLength(1);expect(afterSteer.messages.at(-1)).toMatchObject({passId:afterSteer.passes![0].id,submissionKind:'steering',deliveryStatus:'steered',attachments:[expect.objectContaining({name:'shape.png'})]});expect(fake.calls).toContainEqual(expect.objectContaining({kind:'steer',threadId:firstTurn.threadId,expectedTurnId:firstTurn.turnId,input:'Please check the focused test first.',images:[expect.objectContaining({mediaType:'image/png'})]}));expect(fake.calls.some(row=>row.kind==='interrupt')).toBe(false);expect(turns('orchestrator')).toHaveLength(0);
+    await complete('simple',{type:'complete',receipt,escalation:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');await orchestrator.submitTask('A separate follow-up after completion.',task.id);const afterCompletion=state.getTask(task.id)!;expect(afterCompletion.passes).toHaveLength(2);expect(afterCompletion.passes![0].userInputs).toEqual(['Fix the known typo under `src/`.','Please check the focused test first.']);expect(afterCompletion.passes![1].userInputs).toEqual(['A separate follow-up after completion.']);
+  });
+  it('does not deliver a stale steer to the subsequent active turn',async()=>{
+    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/`.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const turn=await waitForRole('simple');fake.steerErrors.push(`expected active turn id \`${turn.turnId}\` but found \`turn-newer\``);
+    await expect(orchestrator.submitTask('Keep this for the next pass.',task.id)).rejects.toThrow('active turn changed');const steers=fake.calls.filter(row=>row.kind==='steer');expect(steers.map(row=>row.expectedTurnId)).toEqual([turn.turnId]);expect(state.getTask(task.id)?.passes).toHaveLength(1);expect(state.getTask(task.id)?.messages.some((row:any)=>row.text==='Keep this for the next pass.')).toBe(false);expect(fake.calls.some(row=>row.kind==='interrupt')).toBe(false);
+  });
+  it('starts a new pass when the active turn completed during submit without interrupting',async()=>{
+    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/`.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const turn=await waitForRole('simple');fake.steerErrors.push('no active turn to steer');
+    await orchestrator.submitTask('Save this as a separate follow-up.',task.id);const saved=state.getTask(task.id)!;expect(saved.passes).toHaveLength(2);expect(saved.passes![0]).toMatchObject({phase:'needs_attention'});expect(saved.passes![1].userInputs).toEqual(['Save this as a separate follow-up.']);expect(fake.calls).toContainEqual(expect.objectContaining({kind:'steer',threadId:turn.threadId,expectedTurnId:turn.turnId}));expect(fake.calls.some(row=>row.kind==='interrupt')).toBe(false);
+  });
+  it('keeps explicit Stop mapped to turn/interrupt for the current active turn',async()=>{
+    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/`.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const turn=await waitForRole('simple');
+    await orchestrator.cancelTask(task.id);expect(fake.calls).toContainEqual(expect.objectContaining({kind:'interrupt',threadId:turn.threadId,turnId:turn.turnId}));expect(fake.calls.filter(row=>row.kind==='steer')).toHaveLength(0);
+  });
+  it('steers the active delegated worker thread without starting or waking an orchestrator turn',async()=>{
+    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Implement the requested bounded behavior.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'This request needs a worker.'});await waitForRole('orchestrator');await complete('orchestrator',assignment);const worker=await waitForRole('worker');
+    await orchestrator.submitTask('Keep the current scope and verify this edge case.',task.id);expect(fake.calls).toContainEqual(expect.objectContaining({kind:'steer',threadId:worker.threadId,expectedTurnId:worker.turnId,input:'Keep the current scope and verify this edge case.'}));expect(turns('orchestrator')).toHaveLength(1);expect(state.getTask(task.id)?.passes).toHaveLength(1);expect(fake.calls.some(row=>row.kind==='interrupt')).toBe(false);
+  });
+  it('marks an unfinished pass needs-attention when the composer arrives before turn/started',async()=>{
+    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('First request before the router turn starts.');
+    await waitForRole('router');await state.mutate((saved:any)=>{const row=saved.tasks.find((item:any)=>item.id===task.id);row.activeTurnId=undefined;row.phase='routing';});
+    await orchestrator.submitTask('A separate request while the first route is still starting.',task.id);const saved=state.getTask(task.id)!;
+    expect(saved.passes).toHaveLength(2);expect(saved.passes![0]).toMatchObject({phase:'needs_attention',activeTurnId:undefined,activeRole:undefined});expect(saved.passes![1].userInputs).toEqual(['A separate request while the first route is still starting.']);
   });
   it('escalates a direct answer to Luna simple work without entering the hard flow',async()=>{
     const {orchestrator}=await setup();const task=await orchestrator.submitTask('Explain then rename one bounded internal label under `src/`.');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'The initial request appears to ask for a brief explanation.'});await waitForRole('direct');await complete('direct',{type:'escalate',answer:null,escalation:'The request includes a bounded implementation.',route:'simple_implementation',justification:'Rename one known internal label and run its focused test.'});const simple=await waitForRole('simple');expect(simple).toMatchObject({model:'gpt-6-luna',effort:'xhigh',writeRoots:[path.join(projectRoot,'src')]});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);expect(modules.state.getTask(task.id)?.executionEscalation).toMatchObject({from:'direct_answer',to:'simple_implementation'});

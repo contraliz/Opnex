@@ -2,16 +2,45 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Receipt } from './contracts.js';
 import os from 'node:os';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 
 type Status = { connected:boolean; projectVerified:boolean; detail:string };
 export type AgentMemProject = { id:string; name:string; description?:string; sourceRoot:string; memoryDirectory:string };
+export type AgentMemAuditScope={taskId:string;passId:string;role:'direct'|'simple'|'orchestrator'|'worker';purpose:string;projectId:string;workspaceRoot:string;threadId?:string;contextId:string};
+export type AgentMemCallAudit={taskId:string;passId:string;role:AgentMemAuditScope['role'];purpose:string;projectId:string;repositoryId?:string;contextId:string;callId:string;method:string;service:'knowledge'|'repository_index'|'unknown';operation:'read'|'write'|'unknown';status:'running'|'completed'|'failed';startedAt:string;updatedAt:string;resultSummary?:string;error?:string};
+function decisionIdKey(value:string){
+  const match=value.toLowerCase().replace(/[^a-z0-9]/g,'').match(/^([a-z]+)0*(\d+)$/);
+  return match?`${match[1]}${Number(match[2])}`:'';
+}
+export function relevantDecisions(value:unknown,query:string){
+  const records=Array.isArray(value)?value:(value as any)?.decisions||(value as any)?.items||(value as any)?.data?.decisions||[];
+  if(!Array.isArray(records))return {items:[],query,match_count:0};
+  const queryIds=new Set((query.match(/[a-z]+[-\s]?0*\d+/gi)||[]).map(decisionIdKey).filter(Boolean));
+  const terms=query.toLowerCase().match(/[a-z0-9]{3,}/g)||[];
+  const stopWords=new Set(['what','which','that','this','with','from','about','does','have','into','tell','show','explain','decision','decisions','project']);
+  const queryTerms=[...new Set(terms.filter(term=>!stopWords.has(term)))];
+  const ranked=records.map((record:any)=>{
+    const id=typeof record?.id==='string'?decisionIdKey(record.id):'';
+    const text=[record?.title,record?.choice,record?.rationale,record?.original_quote].filter(x=>typeof x==='string').join(' ').toLowerCase();
+    const idMatch=!!id&&queryIds.has(id);
+    const score=queryTerms.reduce((total,term)=>total+(text.includes(term)?1:0),0);
+    return {record,idMatch,score};
+  }).filter(x=>x.idMatch||x.score>0).sort((a,b)=>Number(b.idMatch)-Number(a.idMatch)||b.score-a.score);
+  return {items:ranked.slice(0,8).map(x=>x.record),query,match_count:ranked.length};
+}
 export class AgentMem {
   private client?:Client; private transport?:StdioClientTransport;
+  private auditScope=new AsyncLocalStorage<AgentMemAuditScope>();
+  private auditObserver?: (event:AgentMemCallAudit)=>Promise<void>|void;
   private connecting?:Promise<void>;
   status:Status={connected:false,projectVerified:false,detail:'Not connected'};
   private command?:string; private args:string[]=[]; private env:Record<string,string>={};
+  setAuditObserver(observer:(event:AgentMemCallAudit)=>Promise<void>|void){this.auditObserver=observer;}
+  withAuditScope<T>(scope:AgentMemAuditScope,run:()=>Promise<T>):Promise<T>{return this.auditScope.run(scope,run);}
   async configure() {
     const codexHome=process.env.CODEX_HOME || path.join(os.homedir(),'.codex');
     const config=await readFile(path.join(codexHome,'config.toml'),'utf8');
@@ -23,6 +52,17 @@ export class AgentMem {
     this.command=command; this.args=JSON.parse(argsRaw.replace(/'/g,'"')) as string[];
     const dataDir=envBlock?.match(/^\s*AGENTMEM_DATA_DIR\s*=\s*['"]([^'"\r\n]+)['"]/m)?.[1];
     if(dataDir) this.env.AGENTMEM_DATA_DIR=dataDir;
+  }
+  async modelMcpServerConfig(projectId:string,workspaceRoot:string){
+    if(!projectId||!workspaceRoot||!this.command)throw new Error('A verified AgentMem project is required before exposing project knowledge to a model.');
+    const repositories=await this.call('repository_list',{project_id:projectId});const rows=Array.isArray(repositories?.repositories)?repositories.repositories:[];
+    const rootKey=(value:string)=>path.resolve(value).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase();
+    const repository=rows.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&rootKey(row.root)===rootKey(workspaceRoot));
+    if(!repository)throw new Error('The selected AgentMem project has no repository index registered for this exact workspace. Register or select the matching repository index before starting project work.');
+    const modulePath=fileURLToPath(import.meta.url);const development=modulePath.endsWith('.ts');
+    const gatewayPath=development?modulePath.replace(/agentmem\.ts$/,'agentmem-mcp-gateway.ts'):path.join(path.dirname(modulePath),'agentmem-mcp-gateway.js');
+    const nodeArgs=development?['--import','tsx',gatewayPath]:[gatewayPath];
+    return {command:process.execPath,args:nodeArgs,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes'],env:{PSEUDOHARNESS_AGENTMEM_PROJECT_ID:projectId,PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:repository.repository_id,PSEUDOHARNESS_AGENTMEM_COMMAND:this.command,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify(this.args),PSEUDOHARNESS_AGENTMEM_DATA_DIR:this.env.AGENTMEM_DATA_DIR||'',...(process.versions.electron?{ELECTRON_RUN_AS_NODE:'1'}:{})}};
   }
   async connect(projectId:string,expectedRoot:string) {
     try {
@@ -58,7 +98,7 @@ export class AgentMem {
     if(current)void current.close().catch(()=>{});
   }
   private canReplay(name:string,args:Record<string,unknown>){
-    if(['projects','attach_project','requirements','lessons','retrieve_evidence','task_context'].includes(name))return true;
+    if(['projects','attach_project','requirements','lessons','retrieve_evidence','decisions','task_context'].includes(name))return true;
     if(name==='tasks'&&['show','list'].includes(String(args.action||'')))return true;
     if(name==='record_work'&&args.action==='receipt'&&typeof args.idempotency_key==='string'&&!!args.idempotency_key)return true;
     if(name==='record_work'&&args.action==='release'&&typeof args.lease_token==='string'&&!!args.lease_token&&typeof args.task_id==='string'&&!!args.task_id)return true;
@@ -78,16 +118,25 @@ export class AgentMem {
   }
   private async call(name:string,args:Record<string,unknown>) {
     for(let attempt=0;attempt<2;attempt++){
-      let client:Client|undefined;
+      let client:Client|undefined;const scope=this.auditScope.getStore();const callId=randomUUID();const startedAt=new Date().toISOString();let sent=false;let finalized=false;
+      const repositoryMethods=new Set(['repository_list','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync']);
+      const service:AgentMemCallAudit['service']=repositoryMethods.has(name)?'repository_index':'knowledge';
+      const action=String(args.action||'');
+      const write= name==='repository_resync'||name==='update_project_brief'||name==='index_project'||name==='record_work'&&action==='receipt'||name==='record_work'&&action==='release'||name==='requirements'&&['create','revise','fulfill'].includes(action)||name==='decisions'&&action==='create'||name==='knowledge'&&['create','update'].includes(action)||name==='lessons'&&['propose','review'].includes(action);
+      const operation:AgentMemCallAudit['operation']=write?'write':'read';
+      const audit=async(event:Partial<AgentMemCallAudit>)=>{if(scope)await this.auditObserver?.({...scope,callId,method:name,service,operation,status:'running',startedAt,updatedAt:new Date().toISOString(),...(typeof args.project_id==='string'?{projectId:args.project_id}:{}),...(typeof args.repository_id==='string'?{repositoryId:args.repository_id}:{}),...event});};
       try{
         await this.ensureConnected();client=this.client;
         if(!client)throw new Error('AgentMem is not connected.');
+        await audit({status:'running'});sent=true;
         const result:any=await client.callTool({name,arguments:args});
-        if(result.isError) throw new Error(result.content?.map((x:any)=>x.text||'').join('\n')||`AgentMem ${name} failed`);
+        if(result.isError) {const failure=new Error(result.content?.map((x:any)=>x.text||'').join('\n')||`AgentMem ${name} failed`);await audit({status:'failed',error:`AgentMem ${name} returned an MCP error.`});finalized=true;throw failure;}
         const text=result.content?.find((x:any)=>x.type==='text')?.text;
-        if(text) {try{return JSON.parse(text)}catch{}}
-        return result.structuredContent||result;
+        let value:any;if(text) {try{value=JSON.parse(text)}catch{}}value??=result.structuredContent||result;
+        await audit({status:'completed',resultSummary:auditResultSummary(value)});finalized=true;return value;
       }catch(error){
+        // Only record failures after the call was sent; configuration/connection errors are not MCP calls.
+        if(sent&&!finalized)await audit({status:'failed',error:auditFailure(name,error)});
         if(!isTransportFailure(error)||attempt>0)throw error;
         if(client)this.invalidateConnection(client,this.transport);
         if(!this.canReplay(name,args))throw error;
@@ -96,13 +145,14 @@ export class AgentMem {
     throw new Error(`AgentMem ${name} failed after reconnecting.`);
   }
   async context(projectId:string,query:string) {
-    const [attached,requirements,lessons,evidence]=await Promise.all([
+    const [attached,requirements,lessons,evidence,decisions]=await Promise.all([
       this.call('attach_project',{project_id:projectId,query,max_chars:4500,include_sources:true}),
       this.call('requirements',{action:'list',project_id:projectId}),
       this.call('lessons',{action:'retrieve',project_id:projectId,query}),
       this.call('retrieve_evidence',{project_id:projectId,query,limit:8}),
+      this.call('decisions',{action:'list',project_id:projectId}),
     ]);
-    return {attached,requirements,lessons,evidence};
+    return {attached,requirements,lessons,evidence,decisions:relevantDecisions(decisions,query)};
   }
   async createWork(projectId:string,title:string,goal:string,paths:string[],criteria:string[]) {
     const result=await this.call('tasks',{action:'create',project_id:projectId,title,goal,authorized_paths:paths,acceptance:criteria});
@@ -184,6 +234,12 @@ export class AgentMem {
     return this.call('record_work',{action:'release',project_id:projectId,task_id:taskId,lease_token:lease,owner:'pseudoharness-local'});
   }
   close(){this.invalidateConnection(this.client,this.transport);this.status={connected:false,projectVerified:false,detail:'Disconnected'};}
+}
+function auditFailure(method:string,error:unknown){const message=error instanceof Error?error.message:String(error);if(/root does not match|not registered|cannot be verified/i.test(message))return 'Selected AgentMem project identity could not be verified.';if(isTransportFailure(error))return 'AgentMem connection failed during the request.';return `AgentMem ${method} request failed.`;}
+function auditResultSummary(value:any){
+  const refs:string[]=[];const visit=(x:any)=>{if(!x||typeof x!=='object')return;if(Array.isArray(x)){for(const row of x.slice(0,40))visit(row);return;}for(const key of ['source_ref','source_id','decision_id','requirement_id','lesson_id','id'])if(typeof x[key]==='string'&&x[key].length<160)refs.push(`${key}:${x[key]}`);for(const key of ['items','results','decisions','requirements','lessons','evidence','sources','projects'])if(x[key])visit(x[key]);};visit(value);
+  const unique=[...new Set(refs)].slice(0,12);const counts=['items','results','decisions','requirements','lessons','evidence','sources','projects'].flatMap(key=>Array.isArray(value?.[key])?[`${key}=${value[key].length}`]:[]);
+  return [...counts,...(unique.length?[`refs=${unique.join(', ')}`]:[])].join(' · ').slice(0,700)||'Response received';
 }
 export function toAgentMemReceipt(receipt:Receipt & Record<string,unknown>,context:any){
   const scopedAcceptance=Array.isArray(context?.task?.acceptance)?context.task.acceptance:[];

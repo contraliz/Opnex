@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { applyCodexReasoningNotification, beginReasoningTurn } from '../server/reasoning.js';
 import type { Task } from '../server/state.js';
 
-function task():Task{return {id:'task',title:'Work',phase:'worker_running',createdAt:'',updatedAt:'',userRoot:'D:/repo',agentmemProjectId:'demo',userMessages:[],messages:[],currentPassId:'pass-1',workerThreadId:'worker-thread',orchestratorThreadId:'orchestrator-thread',activeRole:'worker',activeTurnId:'worker-turn',activeModelId:'gpt-6-luna',activeEffort:'high',processedTurns:[],correctionCount:0,passes:[{id:'pass-1',index:1,createdAt:'',userInput:'work',userInputs:['work'],userMessageIds:[],phase:'worker_running',correctionCount:0,processedTurns:[]}]};}
+function task():Task{return {id:'task',title:'Work',phase:'worker_running',createdAt:'',updatedAt:'',userRoot:'D:/repo',agentmemProjectId:'demo',userMessages:[],messages:[],currentPassId:'pass-1',workerThreadId:'worker-thread',orchestratorThreadId:'orchestrator-thread',activeRole:'worker',activeTurnId:'worker-turn',activeModelId:'gpt-6-luna',activeEffort:'high',processedTurns:[],correctionCount:0,passes:[{id:'pass-1',index:1,createdAt:'',userInput:'work',userInputs:['work'],userMessageIds:[],phase:'worker_running',agentmemAudit:{recorded:true,selectedProjectId:'demo',workspaceRoot:'D:/repo',identityStatus:'verified',verifiedProjectId:'demo',verifiedRoot:'D:/repo',verifiedRepositoryId:'repo-demo',modelMcpStatus:'disabled',contexts:[],calls:[]},correctionCount:0,processedTurns:[]}]};}
 const event=(threadId:string,turnId:string,extra:Record<string,unknown>={})=>({threadId,turnId,...extra});
 
 describe('Codex activity channels',()=>{
@@ -50,6 +50,45 @@ describe('Codex activity channels',()=>{
     const t=task();beginReasoningTurn(t,'worker','worker-thread','worker-turn','gpt-6-luna','high');
     expect(applyCodexReasoningNotification(t,'item/started',event('worker-thread','worker-turn',{item:{id:'mcp-1',type:'mcpToolCall',server:'AgentMem',tool:'attach_project',status:'inProgress'}}))).toBe(true);
     expect(t.liveActivity?.[0]).toMatchObject({title:'AgentMem · attach_project',status:'running'});
+  });
+
+  it('records model-issued AgentMem MCP calls by role, pass, turn and lifecycle without saving payloads',()=>{
+    const t=task();beginReasoningTurn(t,'worker','worker-thread','worker-turn','gpt-6-luna','high');
+    expect(applyCodexReasoningNotification(t,'item/started',event('worker-thread','worker-turn',{item:{id:'mcp-agentmem-1',type:'mcpToolCall',serverName:'AgentMem',toolName:'retrieve_evidence',arguments:{project_id:'demo',query:'PRIVATE_QUERY'},status:'inProgress'}}))).toBe(true);
+    expect(t.passes?.[0].agentmemAudit?.calls[0]).toMatchObject({source:'model',role:'worker',method:'retrieve_evidence',status:'running',projectId:'demo',threadId:'worker-thread',turnId:'worker-turn',service:'knowledge',operation:'read'});
+    expect(applyCodexReasoningNotification(t,'item/completed',event('worker-thread','worker-turn',{item:{id:'mcp-agentmem-1',type:'mcpToolCall',serverName:'AgentMem',toolName:'retrieve_evidence',status:'failed',arguments:{project_id:'other',query:'PRIVATE_QUERY'},output:'PRIVATE_KB_RESULT'}}))).toBe(true);
+    expect(t.passes?.[0].agentmemAudit?.modelMcpStatus).toBe('observed');expect(t.passes?.[0].agentmemAudit?.identityStatus).toBe('mismatch');expect(t.passes?.[0].agentmemAudit?.calls).toMatchObject([{status:'failed',projectId:'other'}]);expect(JSON.stringify(t.passes?.[0].agentmemAudit)).not.toContain('PRIVATE_QUERY');expect(JSON.stringify(t.passes?.[0].agentmemAudit)).not.toContain('PRIVATE_KB_RESULT');
+  });
+  it('attributes project-scoped proxy calls to the verified selection when Codex omits the injected project argument',()=>{
+    const t=task();beginReasoningTurn(t,'worker','worker-thread','worker-turn','gpt-6-luna','high');
+    applyCodexReasoningNotification(t,'item/started',event('worker-thread','worker-turn',{item:{id:'proxy-call',type:'mcpToolCall',serverName:'AgentMem',toolName:'decisions',arguments:{action:'list'}}}));
+    expect(t.passes?.[0].agentmemAudit?.calls[0]).toMatchObject({source:'model',projectId:'demo',method:'decisions',role:'worker'});
+  });
+  it('distinguishes repository-index reads and writes from curated knowledge updates',()=>{
+    const t=task();beginReasoningTurn(t,'worker','worker-thread','worker-turn','gpt-6-luna','high');
+    applyCodexReasoningNotification(t,'item/started',event('worker-thread','worker-turn',{item:{id:'index-read',type:'mcpToolCall',serverName:'agentmem',toolName:'repository_search',arguments:{query:'src'},status:'inProgress'}}));
+    applyCodexReasoningNotification(t,'item/completed',event('worker-thread','worker-turn',{item:{id:'index-read',type:'mcpToolCall',serverName:'agentmem',toolName:'repository_search',status:'completed'}}));
+    applyCodexReasoningNotification(t,'item/started',event('worker-thread','worker-turn',{item:{id:'index-write',type:'mcpToolCall',serverName:'agentmem',toolName:'repository_resync',arguments:{},status:'inProgress'}}));
+    applyCodexReasoningNotification(t,'item/completed',event('worker-thread','worker-turn',{item:{id:'index-write',type:'mcpToolCall',serverName:'agentmem',toolName:'repository_resync',status:'completed'}}));
+    applyCodexReasoningNotification(t,'item/started',event('worker-thread','worker-turn',{item:{id:'kb-write',type:'mcpToolCall',serverName:'agentmem',toolName:'knowledge',arguments:{action:'update'},status:'inProgress'}}));
+    applyCodexReasoningNotification(t,'item/started',event('worker-thread','worker-turn',{item:{id:'graph-impact',type:'mcpToolCall',serverName:'agentmem',toolName:'repository_graph_impact',arguments:{query:'captureTurnSourceFingerprint'},status:'inProgress'}}));
+    const calls=t.passes?.[0].agentmemAudit?.calls;expect(calls?.find(row=>row.id.endsWith('index-read'))).toMatchObject({service:'repository_index',operation:'read',repositoryId:'repo-demo'});expect(calls?.find(row=>row.id.endsWith('index-write'))).toMatchObject({service:'repository_index',operation:'write',repositoryId:'repo-demo'});expect(calls?.find(row=>row.id.endsWith('kb-write'))).toMatchObject({service:'knowledge',operation:'write'});expect(calls?.find(row=>row.id.endsWith('graph-impact'))).toMatchObject({service:'repository_index',operation:'read',repositoryId:'repo-demo'});
+  });
+  it('stores only bounded counts and source references from successful AgentMem results',()=>{
+    const t=task();beginReasoningTurn(t,'worker','worker-thread','worker-turn','gpt-6-luna','high');
+    const result={items:[{id:'DEC-0005',source_ref:'@memory/decisions.md#DEC-0005',choice:'PRIVATE_KB_BODY'}]};
+    applyCodexReasoningNotification(t,'item/completed',event('worker-thread','worker-turn',{item:{id:'result-call',type:'mcpToolCall',serverName:'agentmem',toolName:'decisions',status:'completed',result:{structuredContent:result}}}));
+    const audit=t.passes?.[0].agentmemAudit;expect(audit?.calls[0].resultSummary).toContain('items=1');expect(audit?.calls[0].resultSummary).toContain('DEC-0005');expect(JSON.stringify(audit)).not.toContain('PRIVATE_KB_BODY');
+  });
+  it('closes an unfinished model MCP audit call when its turn is interrupted',()=>{
+    const t=task();beginReasoningTurn(t,'worker','worker-thread','worker-turn','gpt-6-luna','high');applyCodexReasoningNotification(t,'item/started',event('worker-thread','worker-turn',{item:{id:'mcp-running',type:'mcpToolCall',server:'AgentMem',tool:'attach_project',status:'inProgress'}}));
+    expect(applyCodexReasoningNotification(t,'turn/completed',{threadId:'worker-thread',turn:{id:'worker-turn',status:'interrupted',items:[]}})).toBe(true);expect(t.passes?.[0].agentmemAudit?.calls[0].status).toBe('interrupted');
+  });
+  it('audits AgentMem MCP calls from the router even though router text is not a displayed reasoning turn',()=>{
+    const t=task();t.phase='routing';t.routerThreadId='router-thread';t.activeRole='router';t.activeTurnId='router-turn';
+    expect(applyCodexReasoningNotification(t,'item/started',event('router-thread','router-turn',{item:{id:'router-mcp',type:'mcpToolCall',serverName:'agentmem',toolName:'attach_project',arguments:'{"project_id":"demo"}'}}))).toBe(true);
+    expect(t.passes?.[0].agentmemAudit?.calls[0]).toMatchObject({source:'model',role:'router',method:'attach_project',status:'running',projectId:'demo'});
+    expect(applyCodexReasoningNotification(t,'turn/completed',{threadId:'router-thread',turn:{id:'router-turn',status:'failed',items:[]}})).toBe(true);expect(t.passes?.[0].agentmemAudit?.calls[0].status).toBe('failed');
   });
 
   it('marks failed and interrupted in-flight items at turn completion without inventing activity',()=>{

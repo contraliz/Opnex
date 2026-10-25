@@ -2,20 +2,66 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
-import { AgentMem, agentMemRecordFailure, agentMemRecordState, toAgentMemReceipt } from '../server/agentmem.js';
+import { AgentMem, agentMemRecordFailure, agentMemRecordState, relevantDecisions, toAgentMemReceipt } from '../server/agentmem.js';
 import type { Receipt } from '../server/contracts.js';
 
 const receipt:Receipt={status:'complete',result:'The adapter completion task is implemented and verified.',changes:['server/agentmem.ts'],acceptance:{met:['Adapter submits completion schema','AgentMem releases completed task'],unmet:[]},verification:[{check:'Adapter contract',result:'passed',evidence:'The real service accepted the receipt and returned done with no owner or lease.'}],risks:[],knowledge:{consulted:['AgentMem store contract'],updated:[]},decision_required:null};
 const context={task:{acceptance:['Adapter submits completion schema','AgentMem releases completed task']},requirements:{requirements_revision:7,requirements_complete:true,applicable_requirements:[{id:'REQ-0001',revision:7}]}};
 
 describe('AgentMem receipt boundary',()=>{
+  it('exposes model MCP only after pairing the selected project with its registered repository index',async()=>{
+    const adapter=new AgentMem();(adapter as any).command='node';(adapter as any).args=[];
+    const call=vi.fn().mockResolvedValue({repositories:[{repository_id:'repo-fixture',root:'D:/fixture'}]});(adapter as any).call=call;
+    const config=await adapter.modelMcpServerConfig('fixture','D:/fixture');
+    expect(call).toHaveBeenCalledWith('repository_list',{project_id:'fixture'});
+    expect(config.enabled_tools).toContain('knowledge');expect(config.enabled_tools).toContain('repository_resync');expect(config.enabled_tools).toContain('repository_graph_query');
+    expect(config.env).toMatchObject({PSEUDOHARNESS_AGENTMEM_PROJECT_ID:'fixture',PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:expect.any(String),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:'repo-fixture'});
+    (adapter as any).call=vi.fn().mockResolvedValue({repositories:[{repository_id:'repo-other',root:'D:/other'}]});
+    await expect(adapter.modelMcpServerConfig('fixture','D:/fixture')).rejects.toThrow(/no repository index registered for this exact workspace/i);
+  });
+
+  it('audits actual app-issued MCP calls with pass context and metadata only',async()=>{
+    const adapter=new AgentMem();const events:any[]=[];(adapter as any).client={callTool:vi.fn(async()=>({isError:false,structuredContent:{results:[{id:'EV-4',text:'PRIVATE_KB_CONTENT'}]}}))};(adapter as any).transport={};adapter.setAuditObserver(event=>{events.push(event);});
+    await adapter.withAuditScope({taskId:'task-audit',passId:'pass-audit',role:'direct',purpose:'query_context_before_answer',projectId:'demo-project',workspaceRoot:'D:/workspace/demo',contextId:'context-1'},()=> (adapter as any).call('retrieve_evidence',{project_id:'demo-project',query:'PRIVATE_QUERY'}));
+    expect(events).toHaveLength(2);expect(events[0]).toMatchObject({taskId:'task-audit',passId:'pass-audit',role:'direct',method:'retrieve_evidence',status:'running'});expect(events[1]).toMatchObject({method:'retrieve_evidence',status:'completed',resultSummary:'results=1 · refs=id:EV-4'});expect(JSON.stringify(events)).not.toContain('PRIVATE_KB_CONTENT');expect(JSON.stringify(events)).not.toContain('PRIVATE_QUERY');
+  });
+  it('classifies model-invoked structural graph calls as scoped repository-index reads',async()=>{
+    const adapter=new AgentMem();const events:any[]=[];(adapter as any).client={callTool:vi.fn(async()=>({isError:false,structuredContent:{results:[{symbol:'captureTurnSourceFingerprint'}]}}))};(adapter as any).transport={};adapter.setAuditObserver(event=>{events.push(event);});
+    await adapter.withAuditScope({taskId:'task-graph',passId:'pass-graph',role:'worker',purpose:'inspect_index',projectId:'pseudoharness',workspaceRoot:'D:/programming/pseudoharness',contextId:'context-graph'},()=> (adapter as any).call('repository_graph_query',{project_id:'pseudoharness',repository_id:'repo-1',query:'captureTurnSourceFingerprint'}));
+    expect(events).toHaveLength(2);expect(events[0]).toMatchObject({method:'repository_graph_query',service:'repository_index',operation:'read',status:'running',repositoryId:'repo-1'});expect(events[1]).toMatchObject({method:'repository_graph_query',service:'repository_index',operation:'read',status:'completed',resultSummary:'results=1'});
+  });
+  it('records a failed actual MCP request without persisting the returned error payload',async()=>{
+    const adapter=new AgentMem();const events:any[]=[];(adapter as any).client={callTool:vi.fn(async()=>({isError:true,content:[{type:'text',text:'PRIVATE_AGENTMEM_ERROR_PAYLOAD'}]}))};(adapter as any).transport={};adapter.setAuditObserver(event=>{events.push(event);});
+    await expect(adapter.withAuditScope({taskId:'task-audit',passId:'pass-audit',role:'worker',purpose:'scoped_context',projectId:'demo-project',workspaceRoot:'D:/workspace/demo',contextId:'context-2'},()=> (adapter as any).call('attach_project',{project_id:'demo-project'}))).rejects.toThrow('PRIVATE_AGENTMEM_ERROR_PAYLOAD');
+    expect(events.map(event=>event.status)).toEqual(['running','failed']);expect(events[1].error).toBe('AgentMem attach_project returned an MCP error.');expect(JSON.stringify(events)).not.toContain('PRIVATE_AGENTMEM_ERROR_PAYLOAD');
+  });
+  it('keeps concurrent MCP calls isolated to their own pass and context',async()=>{
+    const adapter=new AgentMem();const events:any[]=[];(adapter as any).client={callTool:vi.fn(async({name}:any)=>{await new Promise(resolve=>setTimeout(resolve,name==='decisions'?2:0));return {isError:false,structuredContent:{id:name}};})};(adapter as any).transport={};adapter.setAuditObserver(event=>{events.push(event);});
+    const run=(taskId:string,passId:string,contextId:string,method:string)=>adapter.withAuditScope({taskId,passId,role:'direct',purpose:'query_context_before_answer',projectId:'demo-project',workspaceRoot:'D:/workspace/demo',contextId},()=> (adapter as any).call(method,{}));
+    await Promise.all([run('task-one','pass-one','context-one','attach_project'),run('task-two','pass-two','context-two','decisions')]);
+    expect(events.filter(event=>event.taskId==='task-one').every(event=>event.passId==='pass-one'&&event.contextId==='context-one'&&event.method==='attach_project')).toBe(true);expect(events.filter(event=>event.taskId==='task-two').every(event=>event.passId==='pass-two'&&event.contextId==='context-two'&&event.method==='decisions')).toBe(true);
+  });
+  it('matches terse zero-padded decision identifiers to current records and keeps source references',()=>{
+    const selected={id:'DEC-0001',title:'Pair selected AgentMem knowledge base with its registered workspace',choice:'Keep the registered workspace paired.',source_ref:'Decision source'};
+    const unrelated={id:'DEC-0002',title:'Use bounded assignments',choice:'Delegate bounded work.'};
+    expect(relevantDecisions({decisions:[selected,unrelated]},'what is dec001')).toMatchObject({items:[selected],query:'what is dec001',match_count:1});
+    expect(relevantDecisions({decisions:[selected,unrelated]},'what is DEC-999')).toMatchObject({items:[],match_count:0});
+  });
+  it('assembles query-specific knowledge records through the project context adapter',async()=>{
+    const adapter=new AgentMem();(adapter as any).client={};const selected={id:'DEC-0001',title:'Pair the selected knowledge base with its workspace',choice:'Keep the project selection paired.',source_ref:'Explicit user decision'};
+    const call=vi.fn(async(name:string)=>name==='decisions'?{decisions:[selected,{id:'DEC-0002',title:'Unrelated policy',choice:'Other content.'}]}:name==='retrieve_evidence'?{results:[]}:name==='lessons'?{items:[]}:name==='requirements'?{requirements:[]}: {question_context:{results:[]}});(adapter as any).call=call;
+    const result=await adapter.context('demo-project','what is dec001');
+    expect(result.decisions).toMatchObject({items:[selected],match_count:1});expect(result.decisions.items[0].source_ref).toBe('Explicit user decision');
+    expect(call).toHaveBeenCalledWith('decisions',{action:'list',project_id:'demo-project'});expect(call).toHaveBeenCalledWith('attach_project',{project_id:'demo-project',query:'what is dec001',max_chars:4500,include_sources:true});
+  });
   it('lists only registered projects with a projects-directory memory root and verifies the paired workspace',async()=>{
     const adapter=new AgentMem();(adapter as any).client={};
     const projects=path.join(os.tmpdir(),'projects');const call=vi.fn(async()=>({projects:[{id:'other',name:'Other',root:'D:/other',memory_root:path.join(os.tmpdir(),'private','other')},{id:'demo',root:'D:/workspace/demo',memory_root:path.join(projects,'demo')},{id:'missing-root',memory_root:path.join(projects,'missing-root')},{id:'outside',root:'D:/outside',memory_root:path.join(os.tmpdir(),'projects-backup','outside')}]}));(adapter as any).call=call;
     await expect(adapter.listProjects()).resolves.toEqual([{id:'demo',name:'demo',sourceRoot:'D:/workspace/demo',memoryDirectory:'demo'}]);
     await expect(adapter.connect('demo','d:/workspace/demo')).resolves.toMatchObject({id:'demo'});
+    await expect(adapter.connect('demo','D:/different-workspace')).rejects.toThrow(/root does not match/i);
     await expect(adapter.connect('other','D:/workspace/demo')).rejects.toThrow(/not registered/);
-    expect(call).toHaveBeenCalledTimes(3);
+    expect(call).toHaveBeenCalledTimes(4);
   });
 
   it('rejects malformed project listings instead of presenting invented choices',async()=>{

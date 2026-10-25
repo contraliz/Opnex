@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Compartment, EditorState, type Range, type SelectionRange } from '@codemirror/state';
+import { Compartment, EditorState, Prec, type Range, type SelectionRange } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
@@ -115,13 +115,15 @@ type Props = {
   disabled: boolean;
   hint: string;
   inputRef: { current: HTMLElement | null };
+  onKeyDown?: (event: KeyboardEvent, view: EditorView) => boolean;
+  onCompositionChange?: (composing:boolean)=>void;
 };
 
-export function LiveMarkdownEditor({ value, onChange, submit, disabled, hint, inputRef }: Props) {
+export function LiveMarkdownEditor({ value, onChange, submit, disabled, hint, inputRef, onKeyDown, onCompositionChange }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const latest = useRef({ onChange, submit, disabled });
-  latest.current = { onChange, submit, disabled };
+  const latest = useRef({ onChange, submit, disabled, onKeyDown });
+  latest.current = { onChange, submit, disabled, onKeyDown };
 
   useEffect(() => {
     const view = new EditorView({
@@ -140,15 +142,17 @@ export function LiveMarkdownEditor({ value, onChange, submit, disabled, hint, in
           EditorView.updateListener.of(update => {
             if (update.docChanged) latest.current.onChange(update.state.doc.toString());
           }),
-          EditorView.domEventHandlers({
+          Prec.highest(EditorView.domEventHandlers({
             keydown(event, current) {
+              if (event.key === 'Enter' && (event.isComposing || current.composing || event.keyCode === 229)) return false;
+              if (latest.current.onKeyDown?.(event, current)) return true;
               if (event.key !== 'Enter' || event.shiftKey) return false;
               if (event.isComposing || current.composing || event.keyCode === 229) return false;
               event.preventDefault();
               if (!latest.current.disabled) latest.current.submit();
               return true;
             },
-          }),
+          })),
           livePreview,
           editorTheme,
         ],
@@ -175,5 +179,5 @@ export function LiveMarkdownEditor({ value, onChange, submit, disabled, hint, in
     view.dispatch({ effects: placeholderConfig.reconfigure(placeholder(hint)) });
   }, [hint]);
 
-  return <div className="live-markdown-editor" ref={host} data-placeholder={hint} />;
+  return <div className="live-markdown-editor" ref={host} data-placeholder={hint} onCompositionStart={()=>onCompositionChange?.(true)} onCompositionEnd={()=>onCompositionChange?.(false)} />;
 }

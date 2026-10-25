@@ -1,4 +1,4 @@
-export type WorkspaceTabKind = 'session' | 'browser' | 'git';
+export type WorkspaceTabKind = 'session' | 'browser' | 'git' | 'skills';
 
 export type WorkspaceTabRecord = {
   id: string;
@@ -22,6 +22,7 @@ export type WorkspaceTabContext = {
 export function workspaceTabKind(id: string): WorkspaceTabKind {
   if (id.startsWith('browser:')) return 'browser';
   if (id.startsWith('git:')) return 'git';
+  if (id.startsWith('skills:')) return 'skills';
   return 'session';
 }
 
@@ -69,6 +70,7 @@ export function workspaceTabTitle(id: string, sessionTitle?: string): string {
   const kind = workspaceTabKind(id);
   if (kind === 'browser') return 'Browser';
   if (kind === 'git') return 'Git';
+  if (kind === 'skills') return 'Skills';
   if (id.startsWith('new:')) return 'New session';
   return sessionTitle || 'Session';
 }
