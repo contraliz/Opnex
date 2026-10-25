@@ -99,7 +99,7 @@ export default function App() {
   const settingsDraft = useRef<Settings | null>(null);
   const rootPane = panes[0] || { id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 };
   const models = useMemo(() => runtime?.codex.models || [], [runtime]);
-  const selectedProject = state?.projects.find(project => project.id === state.selectedProjectId) || null;
+  const selectedProject = state?.projects?.find(project => project.id === state.selectedProjectId) || null;
   useEffect(()=>{projectExpandedRef.current=state?.expandedProjectIds||[];},[state?.expandedProjectIds]);
 
   const taskForTab = (id: string): Task | null => state?.tasks.find(task => task.id === id) || null;
