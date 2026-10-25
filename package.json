@@ -40,7 +40,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json"
   },
   "keywords": [],
-  "author": "Ethan Qin",
+  "author": "",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
