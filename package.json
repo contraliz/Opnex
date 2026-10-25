@@ -1,6 +1,6 @@
 {
   "name": "pseudoharness",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local Codex delegation harness with app-server and AgentMem integrations",
   "main": "dist-server/index.js",
   "bin": {
@@ -46,6 +46,10 @@
     "@modelcontextprotocol/sdk": "^1.32.1",
     "express": "^5.3.0",
     "zod": "^4.6.7"
+  },
+  "overrides": {
+    "body-parser": "^2.4.0",
+    "fast-uri": "^3.1.9"
   },
   "devDependencies": {
     "@codemirror/commands": "^6.11.1",

@@ -15,8 +15,10 @@ describe('typed workspace tabs', () => {
     expect(workspaceTabKind('task-123')).toBe('session');
     expect(createWorkspaceTabId('browser', 'one')).toBe('browser:one');
     expect(createWorkspaceTabId('git', 'two')).toBe('git:two');
+    expect(createWorkspaceTabId('skills', 'three')).toBe('skills:three');
     expect(workspaceTabKind('browser:one')).toBe('browser');
     expect(workspaceTabKind('git:two')).toBe('git');
+    expect(workspaceTabKind('skills:three')).toBe('skills');
   });
 
   it('adapts legacy browser and GitHub workspace commands into typed tab intents', () => {
@@ -51,6 +53,7 @@ describe('typed workspace tabs', () => {
   it('uses stable titles and rejects metadata that disagrees with its typed ID', () => {
     expect(workspaceTabTitle('browser:one')).toBe('Browser');
     expect(workspaceTabTitle('git:two')).toBe('Git');
+    expect(workspaceTabTitle('skills:three')).toBe('Skills');
     expect(workspaceTabTitle('new:0')).toBe('New session');
     expect(workspaceTabTitle('task-123', 'Research')).toBe('Research');
     expect(() => createWorkspaceTabRecord('git', 'browser:one', { originTabId: null, projectRoot: '' })).toThrow('git: prefix');

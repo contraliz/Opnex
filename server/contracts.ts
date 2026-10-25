@@ -25,7 +25,7 @@ export const routeNameSchema = z.enum(['direct_answer','simple_implementation','
 export const routeRuleSchema = z.enum([
   'direct_explanation_or_transform','simple_bounded_correction','simple_internal_rename','simple_mechanical_dependency_upgrade','simple_established_documentation','simple_routine_git',
   'hard_new_feature','hard_multi_component_change','hard_migration','hard_major_dependency_upgrade','hard_public_contract_change','hard_lifecycle_change',
-  'hard_unknown_cause_diagnosis','hard_mixed_scope','hard_significant_uncertainty'
+  'hard_unknown_cause_diagnosis','hard_mixed_scope','hard_significant_uncertainty','hard_explicit_project_knowledge'
 ]);
 export const ROUTE_RULES={
   direct_explanation_or_transform:'direct_answer',
@@ -43,6 +43,7 @@ export const ROUTE_RULES={
   hard_unknown_cause_diagnosis:'hard_task',
   hard_mixed_scope:'hard_task',
   hard_significant_uncertainty:'hard_task',
+  hard_explicit_project_knowledge:'hard_task',
 } as const;
 export const routeDecisionSchema=z.object({route:routeNameSchema,rule_id:routeRuleSchema,justification:z.string().trim().min(1).max(400)}).strict().superRefine((decision,ctx)=>{
   if(ROUTE_RULES[decision.rule_id]!==decision.route)ctx.addIssue({code:'custom',path:['rule_id'],message:'Routing rule does not authorize this route.'});
@@ -151,9 +152,9 @@ export function workerOutcomeFailureSummary(error:unknown){
 }
 
 const attachmentPayload=z.object({name:z.string().min(1).max(160),type:z.string().max(100),size:z.number().int().positive().max(5*1024*1024),data:z.string().min(1).max(Math.ceil(5*1024*1024*4/3)+8)}).strict();
-export const userTaskSchema = z.object({ message:z.string().trim().max(12000).default(''), attachments:z.array(attachmentPayload).max(5).default([]), taskId:z.string().uuid().optional() }).strict().refine(value=>!!value.message||value.attachments.length>0,{message:'Add a message or attach at least one supported file.'});
+export const userTaskSchema = z.object({ message:z.string().trim().max(12000).default(''), attachments:z.array(attachmentPayload).max(5).default([]), skillIds:z.array(z.string().uuid()).max(12).default([]), taskId:z.string().uuid().optional() }).strict().refine(value=>!!value.message||value.attachments.length>0,{message:'Add a message or attach at least one supported file.'});
 export const sessionTitleSchema = z.object({ title: z.string().trim().min(1, 'Session name cannot be empty.').max(120, 'Session name must be 120 characters or fewer.') }).strict();
-export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(), z.number()]), decision: z.enum(['accept','decline','cancel']) }).strict();
+export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(), z.number()]), decision: z.enum(['accept','decline','cancel']), content:z.record(z.string(),z.unknown()).optional() }).strict();
 export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never' | 'full-access';
 export const settingsSchema = z.object({
   projectRoot: z.string().trim().min(1).max(1024), agentmemProjectId: z.string().trim().max(128).default(''),
@@ -161,7 +162,7 @@ export const settingsSchema = z.object({
   approvalPolicy: z.enum(['on-request','untrusted','never','full-access']).default('on-request'),
 }).strict();
 
-export const assignmentJsonSchema = { type: 'object', additionalProperties: false, required: ['outcome','deliverable','read_scope','write_scope','exclusions','constraints','context_refs','acceptance','verification','ordinary_authority','escalation_conditions','receipt_requirements'], properties: {
+export const assignmentJsonSchema = { type: 'object', additionalProperties: false, required: ['outcome','deliverable','read_scope','write_scope','exclusions','constraints','context_refs','skill_refs','acceptance','verification','ordinary_authority','escalation_conditions','receipt_requirements'], properties: {
   outcome: { type: 'string' }, deliverable: { type: 'string' }, read_scope: { type: 'array', items: { type: 'string' } }, write_scope: { type: 'array', items: { type: 'string' } }, exclusions: { type: 'array', items: { type: 'string' } }, constraints: { type: 'array', items: { type: 'string' } }, context_refs: { type: 'array', items: { type: 'string' } }, skill_refs: { type: 'array', items: { type: 'string' } }, acceptance: { type: 'array', items: { type: 'string' } }, verification: { type: 'array', items: { type: 'string' } }, ordinary_authority: { type: 'array', items: { type: 'string' } }, escalation_conditions: { type: 'array', items: { type: 'string' } }, receipt_requirements: { type: 'array', items: { type: 'string' } },
 }};
 // Codex structured outputs require a top-level object. Branch-exclusive fields

@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const bridge={
+  platform:process.platform,
+  windowControls:process.platform==='win32'?{
+    minimize:()=>ipcRenderer.invoke('pseudoharness:window-minimize'),
+    toggleMaximize:()=>ipcRenderer.invoke('pseudoharness:window-toggle-maximize'),
+    close:()=>ipcRenderer.invoke('pseudoharness:window-close'),
+    onState:callback=>{const listener=(_event,maximized)=>callback(maximized===true);ipcRenderer.on('pseudoharness:window-state',listener);return()=>ipcRenderer.removeListener('pseudoharness:window-state',listener);},
+  }:undefined,
   openCodexThread:threadId=>ipcRenderer.invoke('pseudoharness:open-codex-thread',threadId),
   browser:{
     list:()=>ipcRenderer.invoke('pseudoharness:browser-list'),

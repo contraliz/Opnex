@@ -68,5 +68,7 @@ async function localFetch(url:string,init?:RequestInit){
 }
 
 export async function bootstrap(){const r=await localFetch('/api/bootstrap');const j=await readJson(r);token=j.csrf;return j;}
-async function request(url:string,body:unknown,signal?:AbortSignal){return localFetch(url,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'content-type':'application/json','x-pseudoharness-token':token},body:body===undefined?undefined:JSON.stringify(body),signal});}
-export async function api<T=any>(url:string,body?:unknown,signal?:AbortSignal):Promise<T>{try{return await readJson(await request(url,body,signal));}catch(error){if(signal?.aborted)throw error;if(error instanceof ApiError&&error.status===403&&/session token/i.test(error.message)){await bootstrap();return await readJson(await request(url,body,signal));}throw error;}}
+async function request(url:string,body:unknown,signal?:AbortSignal,method?:'POST'|'PUT'){return localFetch(url,{method:method||(body===undefined?'GET':'POST'),headers:body===undefined?{}:{'content-type':'application/json','x-pseudoharness-token':token},body:body===undefined?undefined:JSON.stringify(body),signal});}
+async function apiRequest<T>(url:string,body:unknown,signal:AbortSignal|undefined,method?:'POST'|'PUT'):Promise<T>{try{return await readJson(await request(url,body,signal,method));}catch(error){if(signal?.aborted)throw error;if(error instanceof ApiError&&error.status===403&&/session token/i.test(error.message)){await bootstrap();return await readJson(await request(url,body,signal,method));}throw error;}}
+export function api<T=any>(url:string,body?:unknown,signal?:AbortSignal):Promise<T>{return apiRequest<T>(url,body,signal);}
+export function apiPut<T=any>(url:string,body:unknown,signal?:AbortSignal):Promise<T>{return apiRequest<T>(url,body,signal,'PUT');}

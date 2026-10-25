@@ -1,4 +1,5 @@
 import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import type { Assignment } from './contracts.js';
@@ -37,6 +38,24 @@ async function skillDirectories(codexHome:string){
     }
   }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
   return roots;
+}
+
+function skillMetadata(content:string,fallback:string){
+  const front=content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);const field=(key:string)=>front?.[1].match(new RegExp(`^${key}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\r\\n#]*))\\s*$`,'mi'))?.slice(1).find(Boolean)?.trim()||'';
+  return {name:field('name')||fallback,description:field('description'),instructions:front?content.slice(front[0].length).trim():content.trim()};
+}
+export async function searchConfiguredSkills(query:string,codexHome=process.env.CODEX_HOME||path.join(os.homedir(),'.codex')){
+  const home=await realpath(path.resolve(codexHome)),needle=query.trim().toLocaleLowerCase().slice(0,200),matches=[] as {id:string;name:string;description:string;source:string;revision:string;createdAt:string;updatedAt:string;archived:boolean;fileCount:number}[];
+  for(const root of await skillDirectories(home)){
+    let entries;try{entries=await readdir(root,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')continue;throw error;}
+    for(const entry of entries){if(!entry.isDirectory()||entry.isSymbolicLink())continue;const file=path.join(root,entry.name,'SKILL.md');try{const fileStat=await lstat(file);if(!fileStat.isFile()||fileStat.isSymbolicLink()||fileStat.size>60_000)continue;const resolved=await realpath(file),relative=path.relative(home,resolved);if(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))continue;const content=await readFile(file,'utf8'),meta=skillMetadata(content,entry.name);if(needle&&!`${meta.name} ${meta.description}`.toLocaleLowerCase().includes(needle))continue;const id=`codex:${entry.name}:${createHash('sha256').update(resolved.toLocaleLowerCase()).digest('hex').slice(0,12)}`,revision=createHash('sha256').update(content).digest('hex');matches.push({id,name:meta.name,description:meta.description,source:'Configured Codex skill',revision,createdAt:'',updatedAt:'',archived:false,fileCount:0});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+  }
+  return matches.sort((a,b)=>a.name.localeCompare(b.name));
+}
+export async function loadConfiguredSkill(reference:string,codexHome=process.env.CODEX_HOME||path.join(os.homedir(),'.codex')){
+  const expected=reference.match(/^codex:([a-z0-9][a-z0-9._-]{0,79}):([a-f0-9]{12})$/i);if(!expected)throw new Error('Choose an installed Codex skill from the `/skill codex:` suggestions.');const home=await realpath(path.resolve(codexHome));
+  for(const root of await skillDirectories(home)){const file=path.join(root,expected[1],'SKILL.md');try{const stat=await lstat(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>60_000)continue;const resolved=await realpath(file),relative=path.relative(home,resolved);if(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))continue;const content=await readFile(file,'utf8'),key=createHash('sha256').update(resolved.toLocaleLowerCase()).digest('hex').slice(0,12);if(key!==expected[2])continue;const meta=skillMetadata(content,expected[1]);if(meta.instructions.length>18_000)throw new Error(`Installed skill "${meta.name}" exceeds the 18,000 character execution context limit.`);return {id:reference,revision:createHash('sha256').update(content).digest('hex'),name:meta.name,description:meta.description,source:resolved,instructions:meta.instructions,files:[] as {path:string;size:number}[]};}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+  throw new Error(`Installed Codex skill "${expected[1]}" is unavailable or changed. Search the configured skills again.`);
 }
 
 /** Resolve only named SKILL.md files from the configured Codex skills roots. */

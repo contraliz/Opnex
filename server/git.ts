@@ -4,7 +4,8 @@ import path from 'node:path';
 
 export type WorkspaceGitChange={path:string;status:string;kind:'tracked'|'untracked'};
 export type WorkspaceGitFile=WorkspaceGitChange&{additions:number|null;deletions:number|null;binary:boolean;patch?:string;omittedReason?:string};
-export type WorkspaceGitSnapshot={available:boolean;workspaceRoot:string;repositoryRoot?:string;branch?:string;capturedAt:string;changes:WorkspaceGitChange[];files:WorkspaceGitFile[];diff:string;truncated:boolean;message?:string};
+export type WorkspaceGitSnapshot={available:boolean;workspaceRoot:string;repositoryRoot?:string;branch?:string;headRevision?:string;capturedAt:string;changes:WorkspaceGitChange[];files:WorkspaceGitFile[];diff:string;truncated:boolean;message?:string};
+export type WorkspaceGitInventory={available:boolean;workspaceRoot:string;repositoryRoot?:string;headRevision?:string;capturedAt:string;changes:WorkspaceGitChange[];message?:string};
 
 const MAX_STATUS_BYTES=1024*1024;
 const MAX_DIFF_BYTES=512*1024;
@@ -37,6 +38,31 @@ function isWithin(root:string,candidate:string){const relative=path.relative(roo
 function hasControlCharacters(value:string){return [...value].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127);}
 function parseStatus(output:string):WorkspaceGitChange[]{
   return output.split('\0').filter(Boolean).map(record=>({status:record.slice(0,2),path:record.slice(3),kind:record.slice(0,2)==='??'?'untracked':'tracked'}));
+}
+
+/** Complete, bounded status inventory for source-change auditing; unlike the UI diff it does not truncate at MAX_CHANGES. */
+export async function readWorkspaceGitInventory(inputRoot:string):Promise<WorkspaceGitInventory>{
+  let root:string;
+  try{root=await realpath(inputRoot);}catch{return {available:false,workspaceRoot:path.resolve(inputRoot),capturedAt:new Date().toISOString(),changes:[],message:'The task workspace is no longer available.'};}
+  const base={workspaceRoot:root,capturedAt:new Date().toISOString()};
+  let top:string;
+  try{top=(await runGit(['rev-parse','--show-toplevel'],root,8192)).stdout.trim();}
+  catch(error){
+    const message=error instanceof Error?error.message:'';
+    if(/not a git repository/i.test(message))return {...base,available:false,changes:[],message:'This workspace is not inside a Git repository.'};
+    if((error as NodeJS.ErrnoException).code==='ENOENT')return {...base,available:false,changes:[],message:'Git is not available on PATH.'};
+    return {...base,available:false,changes:[],message:message||'Could not inspect the Git repository.'};
+  }
+  let repositoryRoot:string;
+  try{repositoryRoot=await realpath(top);}catch{return {...base,available:false,changes:[],message:'Git returned a repository path that is no longer available.'};}
+  if(!isWithin(root,repositoryRoot))return {...base,available:false,repositoryRoot,changes:[],message:'The Git repository root is outside this task workspace.'};
+  const status=await runGit(['-c','core.quotepath=false','status','--porcelain=v1','-z','--untracked-files=all','--no-renames'],root,4*1024*1024);
+  if(status.truncated)return {...base,available:false,repositoryRoot,changes:[],message:'The complete Git change inventory exceeds the audit safety limit.'};
+  const changes=parseStatus(status.stdout);
+  if(changes.length>10000)return {...base,available:false,repositoryRoot,changes:[],message:'The Git change inventory exceeds the audit safety limit.'};
+  if(changes.some(change=>!change.path||hasControlCharacters(change.path)))return {...base,available:false,repositoryRoot,changes:[],message:'A changed path cannot be represented safely in the audit.'};
+  const head=await runGit(['rev-parse','--verify','HEAD'],root,8192).catch(()=>null);
+  return {...base,available:true,repositoryRoot,changes,...(head?.stdout.trim()?{headRevision:head.stdout.trim()}:{}),...(changes.length?{}:{message:'The working tree is clean.'})};
 }
 function addedFilePatch(name:string,content:string){
   const pathHeader=[...name.replaceAll('\\','/')].map(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127?'?':character).join('');
@@ -126,5 +152,5 @@ export async function readWorkspaceGitSnapshot(inputRoot:string):Promise<Workspa
   for(const file of untracked.files){const index=files.findIndex(change=>change.path===file.path&&change.kind==='untracked');if(index>=0)Object.assign(files[index],file);}
   diff+=untracked.files.map(file=>file.patch||'').join('');truncated ||= untracked.truncated||Buffer.byteLength(diff)>=MAX_DIFF_BYTES;
   const branch=await runGit(['branch','--show-current'],root,4096).catch(()=>({stdout:'',stderr:'',truncated:false}));
-  return {available:true,...base,repositoryRoot,branch:branch.stdout.trim()||undefined,changes,files,diff,truncated,message:allChanges.length?'':'The working tree is clean.'};
+  return {available:true,...base,repositoryRoot,branch:branch.stdout.trim()||undefined,headRevision:head?.stdout.trim()||undefined,changes,files,diff,truncated,message:allChanges.length?'':'The working tree is clean.'};
 }
