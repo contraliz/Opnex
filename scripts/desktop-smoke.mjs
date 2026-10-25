@@ -64,8 +64,9 @@ try {
   const smokeOrigin = `http://127.0.0.1:${address.port}`;
   const launchers = [{ label: 'source', executable: process.execPath, args: [electronCli, appEntry], profile: profileDirectory }];
   if (process.argv.includes('--packaged')) {
-    const packaged = findPackagedLauncher(path.join(projectRoot, 'desktop-release'));
-    if (!packaged) throw new Error(`Packaged Electron application for ${process.platform}/${process.arch} was not found in desktop-release.`);
+    const packagedDir = path.resolve(process.env.PSEUDOHARNESS_PACKAGED_DIR ?? path.join(projectRoot, 'desktop-release'));
+    const packaged = findPackagedLauncher(packagedDir);
+    if (!packaged) throw new Error(`Packaged Electron application for ${process.platform}/${process.arch} was not found in ${packagedDir}.`);
     launchers.push({ label: 'packaged', ...packaged, profile: packagedProfileDirectory });
   }
   for (const launcher of launchers) {

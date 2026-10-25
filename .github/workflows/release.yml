@@ -39,6 +39,10 @@ jobs:
       - run: npm run package
       - run: npm run desktop:smoke
       - run: npm run desktop:package
+      - name: Verify Windows elevation and per-user upgrade
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows-installer-upgrade-smoke.ps1
       - name: Upload desktop packages
         uses: actions/upload-artifact@v4
         with:
