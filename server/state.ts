@@ -42,7 +42,7 @@ export type Settings = { projectRoot: string; agentmemProjectId: string; agentme
 export type State = { version: 3; settings: Settings; tasks: Task[]; activeTaskId: string|null; projects:Project[]; selectedProjectId:string|null; expandedProjectIds:string[] };
 const dataDir = stateDirectory();
 const statePath = path.join(dataDir, 'state.json');
-const defaults: State = { version: 3, settings: { projectRoot: '', agentmemProjectId: '', agentmemAutoSetup:false, orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request' }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:[] };
+const defaults: State = { version: 3, settings: { projectRoot: '', agentmemProjectId: '', agentmemAutoSetup:false, orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request' }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:['unclassified'] };
 let current = structuredClone(defaults);
 let loaded = false;
 let stateLoading:Promise<State>|undefined;
@@ -226,7 +226,7 @@ export function upgradeStoredState(value:any):State{
     syncCurrentPass(task);
     return task;
   });
-  return {...defaults,...value,version:3,settings:{...defaults.settings,...value.settings,approvalPolicy:savedApprovalPolicy(value.settings?.approvalPolicy)},tasks,projects:migratedProjects,selectedProjectId,expandedProjectIds:Array.isArray(value.expandedProjectIds)?value.expandedProjectIds.filter((id:string)=>id==='unclassified'||migratedProjects.some(row=>row.id===id)):migratedProjects.map(row=>row.id)};
+  return {...defaults,...value,version:3,settings:{...defaults.settings,...value.settings,approvalPolicy:savedApprovalPolicy(value.settings?.approvalPolicy)},tasks,projects:migratedProjects,selectedProjectId,expandedProjectIds:Array.isArray(value.expandedProjectIds)?value.expandedProjectIds.filter((id:string)=>id==='unclassified'||migratedProjects.some(row=>row.id===id)):[...migratedProjects.map(row=>row.id),'unclassified']};
 }
 export function getState() { return structuredClone(current); }
 export function getTask(id: string) { return current.tasks.find(t => t.id === id); }
@@ -245,7 +245,7 @@ export function moveTaskProjectInState(state:State,taskId:string,projectId:strin
   const blocked=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing','escalated','paused_after_restart'].includes(task.phase)||!!task.activeTurnId||!!task.activeRole||!!task.approvalRequests?.length||waitingForAgentmem;
   if(blocked)throw new Error(waitingForAgentmem?'Wait for AgentMem receipt completion before moving this session.':'Stop or finish this session, resolve approvals, or explicitly resume it before moving projects. Its current execution keeps the original project context.');
   task.projectId=projectId||undefined;
-  if(projectId){const project=state.projects.find(row=>row.id===projectId)!;task.userRoot=project.projectRoot;task.agentmemProjectId=project.agentmemEnabled?project.agentmemProjectId:'';}
+  if(projectId){const project=state.projects.find(row=>row.id===projectId)!;task.userRoot=project.projectRoot;task.agentmemProjectId=project.agentmemEnabled?project.agentmemProjectId:'';}else{task.userRoot=state.settings.projectRoot||task.userRoot;task.agentmemProjectId=state.settings.agentmemProjectId;}
   task.lastInteractedAt=new Date().toISOString();return task;
 }
 export function noteTaskInteractionInState(state:State,taskId:string){const task=state.tasks.find(row=>row.id===taskId);if(task)task.lastInteractedAt=new Date().toISOString();}
