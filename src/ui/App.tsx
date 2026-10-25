@@ -187,7 +187,7 @@ export default function App() {
       : contextTabId && workspaceTabKind(contextTabId) === 'session' ? contextTabId : null;
     const originTaskId = originTabId && !originTabId.startsWith('new:') ? originTabId : null;
     const originTask = originTaskId ? taskForTab(originTaskId) : null;
-    const projectRoot = currentWorkspace?.projectRoot || originTask?.userRoot || state?.settings.projectRoot || '';
+    const projectRoot = currentWorkspace?.projectRoot || originTask?.userRoot || selectedProject?.projectRoot || state?.settings.projectRoot || '';
     const id = createWorkspaceTabId(kind, Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9));
     const record = createWorkspaceTabRecord(kind, id, {
       originTabId,
@@ -404,7 +404,8 @@ export default function App() {
       if (task?.phase === 'escalated') await api('/api/tasks/' + task.id + '/escalation', { message, attachments: files });
       else if (task) await api('/api/tasks/' + task.id + '/messages', { message, attachments: files });
       else {
-        const created = await api('/api/tasks', { message, attachments: files, projectId:state?.selectedProjectId??null });
+        await contextSelectionQueue.current;
+        const created = await api('/api/tasks', { message, attachments: files });
         if (created?.id) {
           setPanes(current => current.map(pane => pane.tabs.includes(tab)
             ? { ...pane, tabs: pane.tabs.map(item => item === tab ? created.id : item), activeTab: pane.activeTab === tab ? created.id : pane.activeTab }
@@ -601,7 +602,7 @@ export default function App() {
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
       if(event.isComposing||event.keyCode===229||event.getModifierState('AltGraph'))return;
-      if(event.key==='Escape'){if(projectEditor){event.preventDefault();setProjectEditor(null);return;}if(shortcutsOpen){event.preventDefault();setShortcutsOpen(false);return;}if(settingsOpen){event.preventDefault();closeSettings();return;}return;}
+      if(event.key==='Escape'){if(projectEditor){event.preventDefault();setProjectEditor(null);return;}if(shortcutsOpen){event.preventDefault();setShortcutsOpen(false);return;}if(settingsOpen){event.preventDefault();closeSettings();return;}if(sessionDialogOpen){event.preventDefault();closeSessionDialog();return;}return;}
       if(projectEditor||shortcutsOpen||settingsOpen||sessionDialogOpen)return;
       const isMac=window.pseudoharnessDesktop?.platform==='darwin'||navigator.platform.toLocaleLowerCase().includes('mac');const mod=isMac?event.metaKey:event.ctrlKey;if(!mod||isMac&&event.ctrlKey||!isMac&&event.metaKey)return;
       const key=event.key.toLowerCase();const allowedAlt=event.altKey&&key==='p';if(event.altKey&&!allowedAlt)return;const editing=event.target instanceof HTMLElement&&(event.target.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
@@ -658,7 +659,7 @@ export default function App() {
       <button onClick={() => openNewTabInPane(pane.id)}><MessageSquarePlus size={14} />SESSION</button>
       <button onClick={() => openWorkspaceTab('browser', pane.id, tab)}><Globe size={14} />BROWSER</button>
       <button onClick={() => openWorkspaceTab('git', pane.id, tab)}><GitBranch size={14} />GIT</button>
-      <div className="new-tab-context"><Folder size={12}/><span>{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span><span>·</span>{selectedProject?selectedProject.agentmemEnabled?'AgentMem enabled':'AgentMem disabled':runtime?.codex.state==='connected'?'Connected':'Codex offline'}</div>
+      <div className="new-tab-context"><Folder size={12}/><span>{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span><span>·</span><span>Codex {runtime?.codex.state==='connected'?'connected':'offline'}</span><span>·</span><span>{selectedProject?selectedProject.agentmemEnabled?'AgentMem enabled · service '+(runtime?.agentmem.connected?'connected':'offline'):'AgentMem disabled':state?.settings.agentmemProjectId?'AgentMem enabled · service '+(runtime?.agentmem.connected?'connected':'offline'):'AgentMem disabled'}</span></div>
     </div>
   );
   const renderSessionPaneActions = (tab: string, task: Task | null) => {
@@ -727,6 +728,7 @@ export default function App() {
     const task = kind === 'session' ? taskForTab(tab) : null;
     const record = workspaceTabs[tab];
     const contextTask = record?.originTaskId ? taskForTab(record.originTaskId) : null;
+    const workspaceRoot = record?.originTaskId ? (contextTask?.userRoot || record.projectRoot) : (selectedProject?.projectRoot || record?.projectRoot || state?.settings.projectRoot || '');
     const isSession = kind === 'session';
     const baseClass = (index > 0 ? 'session-pane side-session-view ' : 'task-view ') + 'pane-body ' + (!task && isSession ? 'new-tab-view ' : '') + (sessionArrival === tab ? 'session-entering ' : '') + (selected ? 'workspace-tab-active ' : '') + (dropTarget?.paneId === pane.id ? 'drop-half-' + dropTarget.half : '');
     const row = panes.length > 1 ? 2 : 1;
@@ -748,7 +750,7 @@ export default function App() {
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
         onDrop={event => dropPane(event, pane.id)}>
         <EmbeddedWorkspace mode={kind === 'browser' ? 'browser' : 'github'} task={contextTask} placement="full" docked={false}
-          workspaceId={tab} active={selected} sidebarCollapsed={sidebarCollapsed} sidebarWidth={sidebarWidth} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={record?.projectRoot}
+          workspaceId={tab} active={selected} sidebarCollapsed={sidebarCollapsed} sidebarWidth={sidebarWidth} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={workspaceRoot}
           onOpenBrowserTab={url => openWorkspaceTab('browser', pane.id, tab, url)}
           onSummary={() => returnToOrigin(record)}
           onAnnotation={(annotation, comment) => record && addBrowserAnnotation(record, annotation, comment)} />
@@ -919,7 +921,7 @@ export default function App() {
     {projectEditor&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!projectSaving&&setProjectEditor(null)}><form className="project-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="project-editor-title" onSubmit={saveProject}>
       <header><div><h2 id="project-editor-title">{projectEditor==='new'?'Create project':`Configure ${projectEditor.name}`}</h2><p>Project settings apply to new sessions and future passes. Saved pass roots and knowledge base audit snapshots remain unchanged.</p></div><button type="button" className="icon-btn" aria-label="Close project settings" onClick={()=>setProjectEditor(null)} disabled={projectSaving}><X size={16}/></button></header>
       <label>Project name<input autoFocus value={projectName} maxLength={80} onChange={event=>setProjectName(event.target.value)} required/></label>
-      <label>Working directory<input value={projectRootDraft} maxLength={1024} placeholder="D:\\work\\project" onChange={event=>setProjectRootDraft(event.target.value)} required/><small>Choose an existing folder. The server resolves and validates the path when saving.</small></label>
+      <label>Working directory<input value={projectRootDraft} maxLength={1024} placeholder="D:\\work\\project" onChange={event=>{const next=event.currentTarget.value;setProjectRootDraft(next);if(projectAgentMemAuto)setProjectAgentMemId('');}} required/><small>Choose an existing folder. The server resolves and validates the path when saving.</small></label>
       <label className="project-editor-toggle"><input type="checkbox" checked={projectPinned} onChange={event=>setProjectPinned(event.target.checked)}/><span>Pin project above the rest</span></label>
       <label className="project-editor-toggle"><input type="checkbox" checked={projectAgentMemEnabled} onChange={event=>setProjectAgentMemEnabled(event.target.checked)}/><span>Enable AgentMem for this project</span></label>
       {projectAgentMemEnabled&&<><label>AgentMem project ID<input value={projectAgentMemId} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" onChange={event=>setProjectAgentMemId(event.target.value)} disabled={projectAgentMemAuto}/><small>Use the exact ID for a registered knowledge base. Automatic setup derives a stable ID for this folder.</small></label><label className="project-editor-toggle"><input type="checkbox" checked={projectAgentMemAuto} onChange={event=>setProjectAgentMemAuto(event.target.checked)}/><span>Set up a knowledge base for this folder automatically</span></label></>}
