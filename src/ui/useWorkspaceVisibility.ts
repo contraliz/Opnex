@@ -8,7 +8,7 @@ export function useWorkspaceVisibility<T extends HTMLElement>(ref:RefObject<T|nu
     const update=()=>{
       const element=ref.current;
       const hasLayout=!!element&&!element.closest('[hidden]');
-      setVisible(document.visibilityState==='visible'&&hasLayout&&(typeof IntersectionObserver==='undefined'||intersecting));
+      setVisible(document.visibilityState!=='hidden'&&hasLayout&&(typeof IntersectionObserver==='undefined'||intersecting));
     };
     const observer=typeof IntersectionObserver==='undefined'?null:new IntersectionObserver(entries=>{
       intersecting=entries.some(entry=>entry.target===ref.current&&entry.isIntersecting&&entry.intersectionRect.width>0&&entry.intersectionRect.height>0);
