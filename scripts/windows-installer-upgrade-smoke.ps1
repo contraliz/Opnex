@@ -69,7 +69,11 @@ function Assert-Uninstalled([string] $installPath, [string] $displayName, [strin
   for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
     $remainingFiles = @()
     if (Test-Path -LiteralPath $installPath) {
-      $remainingFiles = @(Get-ChildItem -LiteralPath $installPath -Force -ErrorAction SilentlyContinue)
+      # NSIS cannot remove its currently running uninstaller; the task-owned test root is cleaned afterward.
+      $remainingFiles = @(
+        Get-ChildItem -LiteralPath $installPath -Force -ErrorAction SilentlyContinue |
+          Where-Object Name -ne 'Uninstall Pseudoharness.exe'
+      )
     }
     $remainingEntries = @(Get-UninstallEntries $registryRoot $displayName)
     if ($remainingFiles.Count -eq 0 -and $remainingEntries.Count -eq 0) { return }
@@ -77,7 +81,8 @@ function Assert-Uninstalled([string] $installPath, [string] $displayName, [strin
   }
 
   $remainingNames = @($remainingFiles | ForEach-Object Name) -join ', '
-  throw "Uninstall left files [$remainingNames] or a registry entry for $displayName."
+  $entryCount = $remainingEntries.Count
+  throw "Uninstall left unexpected files [$remainingNames] and $entryCount registry entries for $displayName."
 }
 
 if ((Test-Path -LiteralPath $dataDirectory) -or (Test-Path -LiteralPath $testRoot)) {
