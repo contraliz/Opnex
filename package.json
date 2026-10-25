@@ -1,6 +1,6 @@
 {
   "name": "pseudoharness",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Local Codex delegation harness with app-server and AgentMem integrations",
   "main": "dist-server/index.js",
   "bin": {
