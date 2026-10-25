@@ -654,7 +654,7 @@ export default function App() {
       onOpenSkills={()=>openSkillsTab(paneId)}
     />;
   };
-  const renderNewTabActions = (pane: SessionPane, tab: string, task: Task | null) => (
+  const renderNewTabActions = (pane: SessionPane, tab: string) => (
     <div className="new-tab-actions">
       <button onClick={() => openNewTabInPane(pane.id)}><MessageSquarePlus size={14} />SESSION</button>
       <button onClick={() => openWorkspaceTab('browser', pane.id, tab)}><Globe size={14} />BROWSER</button>
@@ -776,7 +776,7 @@ export default function App() {
     </div> : <div className="new-tab-center">
       {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
       <div className="composer-dock">{paneComposer(tab, null, pane.id)}</div>
-      {renderNewTabActions(pane, tab, null)}
+      {renderNewTabActions(pane, tab)}
     </div>;
     return <div key={tab} data-workspace-tab={tab} data-tab-kind="session" className={baseClass} style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
       onClick={() => setFocusedPaneId(pane.id)} onDragOver={onDragOver}
