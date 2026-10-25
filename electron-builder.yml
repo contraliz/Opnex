@@ -23,6 +23,7 @@ asarUnpack:
   - node_modules/eventsource/**
   - node_modules/eventsource-parser/**
   - node_modules/express/**
+  - node_modules/smol-toml/**
   - node_modules/express-rate-limit/**
   - node_modules/hono/**
   - node_modules/jose/**

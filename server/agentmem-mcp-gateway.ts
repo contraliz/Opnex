@@ -12,10 +12,11 @@ let repositoryId=process.env.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID||'';
 const setupMode=(process.env.PSEUDOHARNESS_AGENTMEM_SETUP_MODE||'ready') as 'register'|'repository'|'ready';
 const command=process.env.PSEUDOHARNESS_AGENTMEM_COMMAND||'';
 const args=JSON.parse(process.env.PSEUDOHARNESS_AGENTMEM_ARGS||'[]') as string[];
+const configuredEnvValue=JSON.parse(process.env.PSEUDOHARNESS_AGENTMEM_CONFIG_ENV||'{}') as unknown;
 async function main(){
-  if(!projectId||!projectRoot||!command||!Array.isArray(args)||setupMode==='ready'&&!repositoryId)throw new Error('The selected AgentMem project/repository binding is incomplete.');
+  if(!projectId||!projectRoot||!command||!Array.isArray(args)||!args.every((value:unknown)=>typeof value==='string')||!configuredEnvValue||typeof configuredEnvValue!=='object'||Array.isArray(configuredEnvValue)||Object.entries(configuredEnvValue).some(([key,value])=>!key.trim()||typeof value!=='string')||setupMode==='ready'&&!repositoryId)throw new Error('The selected AgentMem project/repository binding is incomplete.');
   const client=new Client({name:'pseudoharness-agentmem-scope',version:'1.0.0'});
-  const childEnv={...process.env,AGENTMEM_DATA_DIR:process.env.PSEUDOHARNESS_AGENTMEM_DATA_DIR||process.env.AGENTMEM_DATA_DIR||''} as Record<string,string>;
+  const childEnv={...process.env,...configuredEnvValue} as Record<string,string>;
   const clientTransport=new StdioClientTransport({command,args,env:childEnv,stderr:'ignore'});
   await client.connect(clientTransport);
   const server=new Server({name:'agentmem',version:'1.0.0'},{capabilities:{tools:{listChanged:false}}});

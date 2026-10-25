@@ -117,3 +117,7 @@ Approval presets map to Codex app-server values: **On request** uses `on-request
 ## Checks and license
 
 Run `npm run lint`, `npm test`, `npm run typecheck`, and `npm run build` from the source checkout. The locked jsdom test environment needs Node.js 22.22.2; CI uses that tested version. `npm run package` produces the portable local tarball; it does not publish it. App-server model access, approval prompts, and sandbox behavior depend on each user's signed-in Codex installation. This project is licensed under MIT; see [LICENSE](LICENSE).
+
+## AgentMem MCP configuration
+
+Pseudoharness reads `config.toml` with a TOML parser and validates the configured AgentMem stdio `command`, optional string-array `args`, and string-valued `[mcp_servers.agentmem.env]` entries. Multiline TOML arrays, quoted values, and ordinary nested tables are supported. Malformed TOML and invalid field types stop configuration with a field-specific error. The configured environment map is forwarded to the direct AgentMem client and through the scoped model gateway; matching values in the Pseudoharness process environment override values from the TOML file. The map is carried in process configuration and is not written to logs.

@@ -181,17 +181,31 @@ async function recordAgentMemMcpAvailability(taskId:string,passId:string,role:Wo
 }
 async function verifySkillMcpAvailability(threadId:string){const rows=await agentCodex.mcpServerStatus(threadId);const server=rows.find((row:any)=>String(row?.name||row?.serverName||'').toLowerCase()==='pseudoharness_skills');const tools=server?.tools;const names=Array.isArray(tools)?tools.map((tool:any)=>String(tool?.name||'')):Object.keys(tools||{});if(!['skills_list','skills_search','skills_load','skills_read_file','skills_save'].every(name=>names.includes(name)))throw new Error('The Pseudoharness saved-skills library tools are not available in this execution thread. Refresh the app-server MCP catalog; no execution turn was started.');}
 function directContextForPrompt(value:any,query:string){
-  const words=[...new Set((query.toLowerCase().match(/[a-z0-9]{3,}/g)||[]).filter(word=>!['what','which','that','this','with','from','about','does','have','into','tell','show','explain','project'].includes(word)))];
+  const latinWords=(query.toLocaleLowerCase().match(/[a-z0-9]{3,}/g)||[]).filter(word=>!['what','which','that','this','with','from','about','does','have','into','tell','show','explain','project'].includes(word));
+  const cjkRuns=query.match(/[\u3400-\u9fff\uf900-\ufaff]+/g)||[];
+  const cjkWords=cjkRuns.flatMap(run=>Array.from({length:Math.max(0,run.length-1)},(_,index)=>run.slice(index,index+2)));
+  const words=[...new Set([...latinWords,...cjkWords])];
   const rows=(section:any)=>Array.isArray(section)?section:section?.requirements||section?.lessons||section?.items||section?.results||[];
   const matches=(record:any)=>{const text=JSON.stringify(record).toLowerCase();return words.some(word=>text.includes(word));};
-  const decisions=rows(value?.decisions).slice(0,8).map((row:any)=>({id:row.id,title:row.title,choice:row.choice,rationale:row.rationale,source_ref:row.source_ref,status:row.status}));
-  const requirements=rows(value?.requirements).filter(matches).slice(0,5).map((row:any)=>({id:row.id,title:row.title,statement:row.statement,source_ref:row.source_ref,lifecycle:row.lifecycle}));
-  const lessons=rows(value?.lessons).filter(matches).slice(0,4).map((row:any)=>({id:row.id||row.lesson_id,title:row.title,trigger_text:row.trigger_text,confirmed_cause:row.confirmed_cause,procedure:row.procedure,evidence:row.evidence,source_ref:row.source_ref}));
+  const compactString=(value:any,limit=1200)=>typeof value==='string'?value.slice(0,limit):value;
+  const decisions=rows(value?.decisions).slice(0,8).map((row:any)=>({id:compactString(row.id,160),title:compactString(row.title,300),choice:compactString(row.choice,600),rationale:compactString(row.rationale,1000),source_ref:compactString(row.source_ref,500),status:compactString(row.status,100)}));
+  const requirements=rows(value?.requirements).filter(matches).slice(0,5).map((row:any)=>({id:compactString(row.id,160),title:compactString(row.title,300),statement:compactString(row.statement,900),source_ref:compactString(row.source_ref,500),lifecycle:compactString(row.lifecycle,100)}));
+  const lessons=rows(value?.lessons).filter(matches).slice(0,4).map((row:any)=>({id:compactString(row.id||row.lesson_id,160),title:compactString(row.title,300),trigger_text:compactString(row.trigger_text,600),confirmed_cause:compactString(row.confirmed_cause,600),environment:row.environment,preconditions:row.preconditions,exclusions:row.exclusions,applicability:row.applicability,missing_information:row.missing_information,procedure:compactString(row.procedure,900),evidence:row.evidence,source_ref:compactString(row.source_ref,500)}));
   const identifierQuery=/\b[a-z]+[-\s]?0*\d+\b/i.test(query);
   const evidence=rows(value?.evidence).filter(()=>!identifierQuery||decisions.length===0).filter(matches).slice(0,5).map((row:any)=>({citation:row.citation,path:row.path,line_start:row.line_start,line_end:row.line_end,excerpt:String(row.excerpt||'').slice(0,1400)}));
   const attached=value?.attached?.question_context;
-  const context={query,decisions,requirements,lessons,evidence,attached_summary:typeof value?.attached?.summary==='string'?value.attached.summary:undefined,attached_sources:Array.isArray(value?.attached?.sources)?value.attached.sources:undefined,question_gap:attached?.gap||undefined,matching_record_count:decisions.length+requirements.length+lessons.length+evidence.length};
-  return JSON.stringify(context).slice(0,12000);
+  const context:any={query:compactString(query,2400),decisions,requirements,lessons,evidence,attached_summary:compactString(value?.attached?.summary,1200),attached_sources:Array.isArray(value?.attached?.sources)?value.attached.sources.slice(0,8):undefined,question_gap:compactString(attached?.gap,600),matching_record_count:decisions.length+requirements.length+lessons.length+evidence.length};
+  let serialized=JSON.stringify(context);
+  while(serialized.length>11500&&context.evidence.length)context.evidence.pop(),serialized=JSON.stringify(context);
+  while(serialized.length>11500&&context.requirements.length)context.requirements.pop(),serialized=JSON.stringify(context);
+  while(serialized.length>11500&&context.attached_sources?.length)context.attached_sources.pop(),serialized=JSON.stringify(context);
+  const lessonCount=context.lessons.length;
+  while(serialized.length>11500&&context.lessons.length)context.lessons.pop(),serialized=JSON.stringify(context);
+  if(context.lessons.length<lessonCount){(context as any).lessons_omitted_for_budget=lessonCount-context.lessons.length;(context as any).lesson_continuation='Call lessons(action=retrieve) with the query and explicitly validated environment/preconditions.';serialized=JSON.stringify(context);}
+  while(serialized.length>11500&&context.decisions.length)context.decisions.pop(),serialized=JSON.stringify(context);
+  context.matching_record_count=context.decisions.length+context.requirements.length+context.lessons.length+context.evidence.length;
+  serialized=JSON.stringify(context);
+  return serialized;
 }
 function model(id:string){return catalog.find(m=>m.id===id);}
 function requireModel(id:string,effort:string){const found=model(id);if(!found)throw new Error(`Model ${id} is not in the local Codex model catalog.`);if(!effortList(found).includes(effort))throw new Error(`Model ${id} does not advertise ${effort} reasoning effort.`);}
@@ -237,7 +251,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const contextQuery=pass.userInputs.join('\n\n');
   const needsProjectContext=(role==='simple'||role==='direct')&&isAgentMemEnabled(task.agentmemProjectId);
   const retrievedContext=needsProjectContext?await taskContext(task,contextQuery,role,'query_context_before_answer') as any:undefined;
-  const promptContext=role==='direct'&&retrievedContext?directContextForPrompt(retrievedContext,contextQuery):role==='simple'&&retrievedContext?JSON.stringify(retrievedContext).slice(0,10000):'';
+  const promptContext=(role==='direct'||role==='simple')&&retrievedContext?directContextForPrompt(retrievedContext,contextQuery):'';
   const prompt=stagePrompt(task,role,promptContext);
   if(!getTask(task.id)||getTask(task.id)!.phase==='cancelled'||getTask(task.id)!.currentPassId!==pass.id)return;
   const selected=role==='router'?'':pass.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (explicitly authorized for this pass; immutable snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';

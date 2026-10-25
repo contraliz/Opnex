@@ -8,6 +8,7 @@ import os from 'node:os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { resolveMcpHelperLaunch } from './mcp-helper-runtime.js';
+import { parse as parseToml } from 'smol-toml';
 
 type Status = { connected:boolean; projectVerified:boolean; detail:string };
 export type AgentMemProject = { id:string; name:string; description?:string; sourceRoot:string; memoryDirectory:string };
@@ -23,14 +24,19 @@ export function relevantDecisions(value:unknown,query:string){
   const records=Array.isArray(value)?value:(value as any)?.decisions||(value as any)?.items||(value as any)?.data?.decisions||[];
   if(!Array.isArray(records))return {items:[],query,match_count:0};
   const queryIds=new Set((query.match(/[a-z]+[-\s]?0*\d+/gi)||[]).map(decisionIdKey).filter(Boolean));
-  const terms=query.toLowerCase().match(/[a-z0-9]{3,}/g)||[];
-  const stopWords=new Set(['what','which','that','this','with','from','about','does','have','into','tell','show','explain','decision','decisions','project']);
-  const queryTerms=[...new Set(terms.filter(term=>!stopWords.has(term)))];
+  const searchableTerms=(source:string)=>{
+    const terms=source.toLocaleLowerCase().match(/[a-z0-9]{3,}/g)||[];
+    const stopWords=new Set(['what','which','that','this','with','from','about','does','have','into','tell','show','explain','decision','decisions','project']);
+    const cjkRuns=source.match(/[\u3400-\u9fff\uf900-\ufaff]+/g)||[];
+    const cjkTerms=cjkRuns.flatMap(run=>Array.from({length:Math.max(0,run.length-1)},(_,index)=>run.slice(index,index+2)));
+    return [...new Set([...terms.filter(term=>!stopWords.has(term)),...cjkTerms])];
+  };
+  const queryTerms=searchableTerms(query);
   const ranked=records.map((record:any)=>{
     const id=typeof record?.id==='string'?decisionIdKey(record.id):'';
-    const text=[record?.title,record?.choice,record?.rationale,record?.original_quote].filter(x=>typeof x==='string').join(' ').toLowerCase();
+    const text=[record?.title,record?.choice,record?.rationale,record?.original_quote].filter(x=>typeof x==='string').join(' ').toLocaleLowerCase();
     const idMatch=!!id&&queryIds.has(id);
-    const score=queryTerms.reduce((total,term)=>total+(text.includes(term)?1:0),0);
+    const score=queryTerms.reduce((total,term)=>total+(new Set(searchableTerms(text)).has(term)?1:0),0);
     return {record,idMatch,score};
   }).filter(x=>x.idMatch||x.score>0).sort((a,b)=>Number(b.idMatch)-Number(a.idMatch)||b.score-a.score);
   return {items:ranked.slice(0,8).map(x=>x.record),query,match_count:ranked.length};
@@ -46,15 +52,28 @@ export class AgentMem {
   withAuditScope<T>(scope:AgentMemAuditScope,run:()=>Promise<T>):Promise<T>{return this.auditScope.run(scope,run);}
   async configure() {
     const codexHome=process.env.CODEX_HOME || path.join(os.homedir(),'.codex');
-    const config=await readFile(path.join(codexHome,'config.toml'),'utf8');
-    const block=config.match(/\[mcp_servers\.agentmem\]([\s\S]*?)(?=\n\[|$)/)?.[1];
-    const command=block?.match(/^\s*command\s*=\s*['"]([^'"\r\n]+)['"]/m)?.[1];
-    const argsRaw=block?.match(/^\s*args\s*=\s*(\[[^\r\n]+\])/m)?.[1];
-    const envBlock=config.match(/\[mcp_servers\.agentmem\.env\]([\s\S]*?)(?=\n\[|$)/)?.[1];
-    if(!command || !argsRaw) throw new Error('No usable AgentMem stdio server is configured in Codex settings.');
-    this.command=command; this.args=JSON.parse(argsRaw.replace(/'/g,'"')) as string[];
-    const configuredDataDir=envBlock?.match(/^\s*AGENTMEM_DATA_DIR\s*=\s*['"]([^'"\r\n]+)['"]/m)?.[1];
-    const dataDir=process.env.AGENTMEM_DATA_DIR||configuredDataDir;if(dataDir)this.env.AGENTMEM_DATA_DIR=dataDir;
+    let source:string;
+    try{source=await readFile(path.join(codexHome,'config.toml'),'utf8');}
+    catch(error){throw new Error('Could not read Codex config.toml: '+(error instanceof Error?error.message:'file unavailable'));}
+    let config:Record<string,unknown>;
+    try{config=parseToml(source) as Record<string,unknown>;}
+    catch(error){throw new Error('Could not parse Codex config.toml: '+(error instanceof Error?error.message:'invalid TOML'));}
+    const servers=config.mcp_servers;
+    const server=servers&&typeof servers==='object'&&!Array.isArray(servers)?(servers as Record<string,unknown>).agentmem:undefined;
+    if(!server||typeof server!=='object'||Array.isArray(server))throw new Error('Codex config.toml must define [mcp_servers.agentmem] as a table.');
+    const entry=server as Record<string,unknown>;
+    if(typeof entry.command!=='string'||!entry.command.trim())throw new Error('Codex config.toml [mcp_servers.agentmem] requires a non-empty string command.');
+    const args=entry.args===undefined?[]:entry.args;
+    if(!Array.isArray(args)||!args.every(value=>typeof value==='string'))throw new Error('Codex config.toml [mcp_servers.agentmem].args must be an array of strings when provided.');
+    const configuredEnv=entry.env===undefined?{}:entry.env;
+    if(!configuredEnv||typeof configuredEnv!=='object'||Array.isArray(configuredEnv)||Object.entries(configuredEnv).some(([key,value])=>!key.trim()||typeof value!=='string'))
+      throw new Error('Codex config.toml [mcp_servers.agentmem.env] must contain only named string values.');
+    this.command=entry.command.trim();this.args=args as string[];
+    this.env={...(configuredEnv as Record<string,string>)};
+    for(const key of Object.keys(this.env))if(typeof process.env[key]==='string')this.env[key]=process.env[key]!;
+    // Preserve explicit AgentMem data-root isolation even when set only on the
+    // Pseudoharness launcher rather than in Codex's MCP env table.
+    for(const key of ['AGENTMEM_DATA_DIR','AGENTMEM_MEMORY_ROOT'])if(typeof process.env[key]==='string')this.env[key]=process.env[key]!;
   }
   async modelMcpServerConfig(projectId:string,workspaceRoot:string){
     if(!projectId||!workspaceRoot||!this.command)throw new Error('Choose an AgentMem project ID and project root before exposing project knowledge to a model.');
@@ -67,7 +86,7 @@ export class AgentMem {
     if(setupMode==='ready'&&!repository)throw new Error('The selected AgentMem project has no repository index registered for this exact workspace.');
     const modulePath=fileURLToPath(import.meta.url),launch=resolveMcpHelperLaunch({modulePath,helperFile:modulePath.endsWith('.ts')?'agentmem-mcp-gateway.ts':'agentmem-mcp-gateway.js'});
     const setupTools=setupMode==='register'?['projects','repository_register']:setupMode==='repository'?['repository_register']:[];
-    return {command:launch.command,args:launch.args,cwd:launch.cwd,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes',...setupTools],env:{PSEUDOHARNESS_AGENTMEM_PROJECT_ID:projectId,PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:repository?.repository_id||'',PSEUDOHARNESS_AGENTMEM_SETUP_MODE:setupMode,PSEUDOHARNESS_AGENTMEM_COMMAND:this.command,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify(this.args),PSEUDOHARNESS_AGENTMEM_DATA_DIR:this.env.AGENTMEM_DATA_DIR||''}};
+    return {command:launch.command,args:launch.args,cwd:launch.cwd,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes',...setupTools],env:{PSEUDOHARNESS_AGENTMEM_PROJECT_ID:projectId,PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:repository?.repository_id||'',PSEUDOHARNESS_AGENTMEM_SETUP_MODE:setupMode,PSEUDOHARNESS_AGENTMEM_COMMAND:this.command,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify(this.args),PSEUDOHARNESS_AGENTMEM_CONFIG_ENV:JSON.stringify(this.env)}};
   }
   async setupMode(projectId:string,expectedRoot:string):Promise<AgentMemSetupMode>{
     if(!projectId||!expectedRoot)throw new Error('Choose an AgentMem project ID and project root.');
