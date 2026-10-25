@@ -86,3 +86,6 @@
   .github-device-panel { align-items: flex-start; flex-wrap: wrap; padding: 12px 14px; }
   .github-device-actions { flex: 1 1 100%; justify-content: flex-start; }
 }
+.git-workspace-failure { align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-primary); }
+.git-workspace-failure > span { max-width: 560px; color: var(--text-secondary); text-align: center; overflow-wrap: anywhere; }
+.git-workspace-failure > button { margin-top: 6px; }
