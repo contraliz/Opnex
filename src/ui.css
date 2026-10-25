@@ -884,6 +884,13 @@ body { min-width: 640px; min-height: 520px; }
 .workspace-area { position: relative; grid-column: 3; grid-row: 1; display: block; min-width: 0; overflow: hidden; }
 .main-column { width: 100%; height: 100%; }
 .topbar { flex: 0 0 44px; height: 44px; gap: 8px; padding: 0 10px 0 7px; border-bottom-color: #303030; background: #1e1e1e; }
+.topbar-project-context { min-width:0; max-width:min(390px,44vw); flex:0 0 auto; display:flex; align-items:center; gap:9px; }
+.topbar-project-context label { min-width:0; }
+.topbar-project-context select { width:min(220px,28vw); min-width:115px; height:29px; padding:0 8px; border:1px solid #383838; border-radius:6px; background:#252525; color:#ddd; font-size:11px; }
+.topbar-project-connection { display:flex; align-items:center; gap:6px; color:#929292; white-space:nowrap; font-size:10px; }
+.topbar-project-connection i { width:7px; height:7px; border-radius:50%; background:#816c47; }
+.topbar-project-connection.connected i { background:#70a979; }
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; clip-path:inset(50%); }
 .document-tabs { min-width: 0; flex: 1 1 auto; height: 100%; display: flex; align-items: stretch; gap: 1px; overflow-x: auto; scrollbar-width: none; }
 .document-tabs::-webkit-scrollbar { display: none; }
 .document-tab { position: relative; min-width: 126px; max-width: 210px; height: 39px; align-self: end; display: flex; align-items: center; gap: 1px; padding: 0 5px 0 8px; border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0; color: #999; }
@@ -1396,8 +1403,6 @@ body { min-width: 640px; min-height: 520px; }
 .project-move-error .icon-btn { position:absolute; top:1px; right:1px; }
 .new-tab-context { display:flex; align-items:center; justify-content:center; gap:5px; }
 .new-tab-context select { max-width:min(270px,65vw); height:25px; padding:0 5px; border:1px solid #383838; border-radius:5px; background:#252525; color:#aaa; font-size:11px; }
-.sidebar-project-picker { display:grid; gap:4px; margin:0 1px 4px; color:#898989; font-size:9px; }
-.sidebar-project-picker select { width:100%; height:29px; padding:0 7px; border:1px solid #383838; border-radius:5px; background:#202020; color:#c7c7c7; font-size:11px; }
 .project-editor-dialog,.shortcuts-dialog { width:min(520px,100%); max-height:min(90dvh,820px); overflow:auto; padding:20px 24px 16px; border:1px solid var(--border-strong); border-radius:11px; background:var(--surface); box-shadow:0 18px 48px #0008; }
 .project-editor-dialog header,.shortcuts-dialog header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:15px; }
 .project-editor-dialog h2,.shortcuts-dialog h2 { margin:0; color:var(--text); font-size:20px; }

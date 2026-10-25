@@ -173,7 +173,7 @@ export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active
     if(annotation&&annotationComment.trim()&&annotationTaskId===task?.id){onAnnotation?.(annotation,annotationComment.trim());closeAnnotation();void bridge?.workspaceSetCommenting(hostId,false).catch(()=>{});currentPage(page?{...page,commenting:false}:page);}
   };
 
-  if(mode==='github')return <Suspense fallback={<div className="git-empty"><LoaderCircle className="spinning" size={22}/><span>Loading local Git workspace…</span></div>}><LocalGitWorkspace taskId={task?.id} projectRoot={projectRoot} focusUrl={task?.workspaceCommand?.mode==='github'?task.workspaceCommand.url:undefined} onOpenBrowserTab={onOpenBrowserTab}/></Suspense>;
+  if(mode==='github')return <Suspense fallback={<div className="git-empty"><LoaderCircle className="spinning" size={22}/><span>Loading local Git workspace…</span></div>}><LocalGitWorkspace taskId={task?.id} projectRoot={projectRoot} active={active} focusUrl={task?.workspaceCommand?.mode==='github'?task.workspaceCommand.url:undefined} onOpenBrowserTab={onOpenBrowserTab}/></Suspense>;
 
   return <section ref={rootRef} className={`embedded-workspace native-browser-workspace ${placement==='side'?'chat-docked-workspace':'full-workspace'} ${placement==='side'&&!docked?'is-hidden':''}`} aria-label="Browser workspace" aria-hidden={placement==='side'&&!docked}>
     <header className={`native-browser-toolbar ${addressFocused&&suggestionsOpen&&suggestions.length?'has-address-suggestions':''}`}>

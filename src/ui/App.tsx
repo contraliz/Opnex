@@ -92,6 +92,7 @@ export default function App() {
   const projectExpandedRef = useRef<string[]>([]);
   const projectExpansionQueue = useRef(Promise.resolve());
   const projectSelectorRef = useRef<HTMLSelectElement>(null);
+  const recentSessionNavigation = useRef<{ids:string[];activeId:string|null}|null>(null);
   const tabDragSuppressUntil = useRef(0);
   const closeTimers = useRef<Record<string, number>>({});
   const settingsQueue = useRef(Promise.resolve());
@@ -135,9 +136,9 @@ export default function App() {
   const saveProject = async(event:React.FormEvent) => {
     event.preventDefault();if(!projectEditor||projectSaving)return;setProjectSaving(true);setProjectError('');
     const id=projectEditor==='new'?crypto.randomUUID():projectEditor.id;
-    try{await api('/api/projects',{id,name:projectName,projectRoot:projectRootDraft,agentmemProjectId:projectAgentMemId,agentmemEnabled:projectAgentMemEnabled,agentmemAutoSetup:projectAgentMemAuto,pinned:projectPinned});if(projectEditor==='new')await queueContextSelection('/api/projects/select',{projectId:id});await refresh();setProjectEditor(null);}catch(cause){setProjectError(String(cause));}finally{setProjectSaving(false);}
+    try{await api('/api/projects',{id,name:projectName,projectRoot:projectRootDraft,agentmemProjectId:projectAgentMemId,agentmemEnabled:projectAgentMemEnabled,agentmemAutoSetup:projectAgentMemAuto,pinned:projectPinned});if(projectEditor==='new'){await queueContextSelection('/api/projects/select',{projectId:id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}await refresh();setProjectEditor(null);}catch(cause){setProjectError(String(cause));}finally{setProjectSaving(false);}
   };
-  const selectProject = async(id:string|null) => {setState(current=>current?{...current,selectedProjectId:id}:current);try{await queueContextSelection('/api/projects/select',{projectId:id});}catch(cause){setError(String(cause));await refresh();}};
+  const selectProject = async(id:string|null) => {setState(current=>current?{...current,selectedProjectId:id}:current);try{await queueContextSelection('/api/projects/select',{projectId:id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}catch(cause){setError(String(cause));await refresh();}};
   const toggleProjectExpanded = (id:string) => {const current=projectExpandedRef.current;const expanded=!current.includes(id);const next=expanded?[...current,id]:current.filter(value=>value!==id);projectExpandedRef.current=next;setState(value=>value?{...value,expandedProjectIds:next}:value);projectExpansionQueue.current=projectExpansionQueue.current.then(()=>api(`/api/projects/${id}/expanded`,{expanded})).then(()=>undefined).catch(cause=>setError(String(cause)));};
   const moveSessionToProject = async(taskId:string,projectId:string|null)=>{try{await api('/api/tasks/'+taskId+'/project',{projectId});setProjectMoveError('');await refresh();}catch(cause){setProjectMoveError(String(cause));}};
   const dragSession = (event:React.DragEvent<HTMLDivElement>,task:Task)=>{event.dataTransfer.setData('application/x-pseudoharness-session-project',task.id);event.dataTransfer.effectAllowed='move';};
@@ -605,15 +606,15 @@ export default function App() {
       if(event.key==='Escape'){if(projectEditor){event.preventDefault();setProjectEditor(null);return;}if(shortcutsOpen){event.preventDefault();setShortcutsOpen(false);return;}if(settingsOpen){event.preventDefault();closeSettings();return;}if(sessionDialogOpen){event.preventDefault();closeSessionDialog();return;}return;}
       if(projectEditor||shortcutsOpen||settingsOpen||sessionDialogOpen)return;
       const isMac=window.pseudoharnessDesktop?.platform==='darwin'||navigator.platform.toLocaleLowerCase().includes('mac');const mod=isMac?event.metaKey:event.ctrlKey;if(!mod||isMac&&event.ctrlKey||!isMac&&event.metaKey)return;
-      const key=event.key.toLowerCase();const allowedAlt=event.altKey&&key==='p';if(event.altKey&&!allowedAlt)return;const editing=event.target instanceof HTMLElement&&(event.target.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
-      if(editing)return;
+      const key=event.key.toLowerCase();const allowedAlt=event.altKey&&key==='p';if(event.altKey&&!allowedAlt)return;const target=event.target instanceof HTMLElement?event.target:null;const formControl=!!target&&/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);const editable=!!target?.isContentEditable;
+      if((editable&&key==='b')||((formControl||editable)&&event.shiftKey&&(event.key==='ArrowUp'||event.key==='ArrowDown')))return;
       if(key==='n'&&!event.shiftKey){event.preventDefault();openNewTab();return;}
       if(key===','&&!event.shiftKey){event.preventDefault();openSettings();return;}
       if(key==='b'&&!event.shiftKey){event.preventDefault();setSidebarCollapsed(value=>!value);return;}
       if(key==='g'&&event.shiftKey){event.preventDefault();const pane=panes.find(item=>item.id===focusedPaneId)||rootPane;openWorkspaceTab('git',pane.id,pane.activeTab);return;}
       if(key==='l'&&event.shiftKey){event.preventDefault();openSkillsTab();return;}
       if(key==='p'&&event.altKey){event.preventDefault();projectSelectorRef.current?.focus();return;}
-      if((event.key==='ArrowUp'||event.key==='ArrowDown')&&event.shiftKey){const ordered=[...(state?.tasks||[])].sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0));if(!ordered.length)return;event.preventDefault();const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;const index=ordered.findIndex(task=>task.id===active);const next=(index+(event.key==='ArrowDown'?1:-1)+ordered.length)%ordered.length;selectTask(ordered[next].id);return;}
+      if((event.key==='ArrowUp'||event.key==='ArrowDown')&&event.shiftKey){const tasks=state?.tasks||[];if(!tasks.length)return;const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab||null;let navigation=recentSessionNavigation.current;const ids=tasks.map(task=>task.id);if(!navigation||navigation.activeId!==active||navigation.ids.length!==ids.length||navigation.ids.some(id=>!ids.includes(id))){navigation={ids:[...tasks].sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0)).map(task=>task.id),activeId:active};}const index=navigation.ids.indexOf(active||'');const next=index<0?(event.key==='ArrowDown'?0:navigation.ids.length-1):(index+(event.key==='ArrowDown'?1:-1)+navigation.ids.length)%navigation.ids.length;const nextId=navigation.ids[next];if(!nextId)return;event.preventDefault();navigation.activeId=nextId;recentSessionNavigation.current=navigation;selectTask(nextId);return;}
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
@@ -681,9 +682,11 @@ export default function App() {
         const selected = pane.activeTab === tab;
         const symbol = kind === 'browser' ? <Globe size={13} /> : kind === 'git' ? <GitBranch size={13} /> : kind==='skills'?<BookOpen size={13}/>: index === 0 && !split ? <MessageSquarePlus size={13} /> : null;
         const activate=()=>{setPaneActive(pane.id,tab);setFocusedPaneId(pane.id);if(kind==='session'&&!tab.startsWith('new:'))void selectSessionContext(tab).catch(cause=>setTabError(tab,String(cause)));};
+        const activateFromClick=(event:React.MouseEvent<HTMLElement>)=>{if(Date.now()<tabDragSuppressUntil.current||event.target instanceof Element&&event.target.closest('.tab-close')){event.preventDefault();event.stopPropagation();return;}activate();};
         return <div className={'document-tab ' + (selected ? 'active ' : '') + (tabDropTarget === tab ? 'tab-drop-target ' : '') + (sessionArrival === tab ? 'session-arrived tab-arrived ' : '') + (closingTabs[tab] ? 'tab-closing' : '')}
           key={tab} data-workspace-tab={tab} data-session-tab={tab} draggable={!closingTabs[tab]}
-          onClick={event=>{if(Date.now()<tabDragSuppressUntil.current||event.target instanceof Element&&event.target.closest('.tab-close'))return;activate();}}
+          onClick={activateFromClick}
+          onMouseDown={event=>{if(event.button===1)event.preventDefault();}}
           onAuxClick={event=>{if(event.button===1){event.preventDefault();closeTab(tab);}}}
           onDragStart={event => {
             if(event.target instanceof Element&&event.target.closest('.tab-close')){event.preventDefault();return;}
@@ -710,7 +713,7 @@ export default function App() {
             event.stopPropagation();
             moveTab(source, tab);
           }}>
-          <button role="tab" aria-label={title} aria-selected={selected} onClick={event=>{event.stopPropagation();activate();}}>{symbol}<span>{title}</span></button>
+          <button role="tab" aria-label={title} aria-selected={selected} onClick={event=>{event.stopPropagation();activateFromClick(event);}}>{symbol}<span>{title}</span></button>
           <button className="tab-close" aria-label={'Close ' + title + ' tab'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();closeTab(tab);}} disabled={!!closingTabs[tab]}><X size={13} /></button>
         </div>;
       })}
@@ -823,7 +826,6 @@ export default function App() {
         <button className="icon-btn" aria-label="Search sessions" onClick={() => document.querySelector<HTMLInputElement>('.session-search')?.focus()}><Search size={15} /></button>
       </div>
       <input className="session-search" type="search" aria-label="Search sessions" placeholder="Filter sessions" value={query} onChange={event => setQuery(event.target.value)} />
-      <label className="sidebar-project-picker"><span>Project context</span><select ref={projectSelectorRef} aria-label="Project for new sessions" title="Choose project (Ctrl/Cmd+Alt+P)" aria-keyshortcuts="Control+Alt+P Meta+Alt+P" value={state?.selectedProjectId||''} onChange={event=>void selectProject(event.currentTarget.value||null)}><option value="">Unclassified · legacy default</option>{(state?.projects||[]).map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
       <nav className="task-list project-task-list" aria-label="Sessions" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))event.preventDefault();}}>
         {orderedProjects.filter(project=>project.pinned).map(projectSessionSection)}
         {orderedProjects.filter(project=>!project.pinned).map(projectSessionSection)}
@@ -867,7 +869,7 @@ export default function App() {
     />
     <div className="workspace-area">
       <main className="main-column">
-        {panes.length === 1 && <header className="topbar">{renderPaneTabs(rootPane, 0, false)}</header>}
+        <header className="topbar">{panes.length===1&&renderPaneTabs(rootPane,0,false)}<div className="topbar-project-context"><label><span className="sr-only">Project for new sessions</span><select ref={projectSelectorRef} aria-label="Project for new sessions" title="Choose project (Ctrl/Cmd+Alt+P)" aria-keyshortcuts="Control+Alt+P Meta+Alt+P" value={state?.selectedProjectId||''} onChange={event=>void selectProject(event.currentTarget.value||null)}><option value="">Unclassified · legacy default</option>{(state?.projects||[]).map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label><span className={'topbar-project-connection '+(runtime?.codex.state==='connected'?'connected':'')}><i aria-hidden="true"/>{runtime?.codex.state==='connected'?'Connected':'Offline'}</span></div></header>
         <div className={'workspace-content mode-tasks ' + (panes.length > 1 ? 'has-session-panes has-side-session ' : '') + (draggedTab ? 'dragging-session' : '')}
           style={{ gridTemplateColumns: panes.flatMap((pane, index) => index < panes.length - 1 ? ['minmax(0,' + pane.weight + 'fr)', '5px'] : ['minmax(0,' + pane.weight + 'fr)']).join(' '), transition: 'grid-template-columns 180ms cubic-bezier(.2,.75,.25,1)' }}
           onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('application/x-pseudoharness-workspace')) event.preventDefault(); }}
