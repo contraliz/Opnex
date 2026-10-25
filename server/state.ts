@@ -241,7 +241,7 @@ export function saveProjectInState(state:State,input:Omit<Project,'createdAt'|'u
 export function moveTaskProjectInState(state:State,taskId:string,projectId:string|null){
   const task=state.tasks.find(row=>row.id===taskId);if(!task)throw new Error('Session not found.');
   if(projectId!==null&&!state.projects.some(project=>project.id===projectId))throw new Error('Project not found.');
-  const waitingForAgentmem=[task,...(task.passes||[])].some(row=>row.agentmemRecordStatus==='saving'||!!row.agentmemLease);
+  const waitingForAgentmem=[task,...(task.passes||[])].some(row=>row.agentmemRecordStatus==='saving'||row.agentmemRecordStatus==='in_progress'||!!row.agentmemLease);
   const blocked=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing','escalated','paused_after_restart'].includes(task.phase)||!!task.activeTurnId||!!task.activeRole||!!task.approvalRequests?.length||waitingForAgentmem;
   if(blocked)throw new Error(waitingForAgentmem?'Wait for AgentMem receipt completion before moving this session.':'Stop or finish this session, resolve approvals, or explicitly resume it before moving projects. Its current execution keeps the original project context.');
   task.projectId=projectId||undefined;
