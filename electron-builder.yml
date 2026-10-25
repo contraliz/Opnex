@@ -11,6 +11,35 @@ files:
   - LICENSE
   - package.json
   - policy/CODEX_DELEGATION_POLICY.md
+asarUnpack:
+  - dist-server/**
+  - node_modules/@modelcontextprotocol/**
+  - node_modules/@hono/node-server/**
+  - node_modules/ajv/**
+  - node_modules/ajv-formats/**
+  - node_modules/content-type/**
+  - node_modules/cors/**
+  - node_modules/cross-spawn/**
+  - node_modules/eventsource/**
+  - node_modules/eventsource-parser/**
+  - node_modules/express/**
+  - node_modules/express-rate-limit/**
+  - node_modules/hono/**
+  - node_modules/jose/**
+  - node_modules/json-schema-typed/**
+  - node_modules/pkce-challenge/**
+  - node_modules/raw-body/**
+  - node_modules/zod/**
+  - node_modules/zod-to-json-schema/**
+  - node_modules/fast-deep-equal/**
+  - node_modules/fast-uri/**
+  - node_modules/json-schema-traverse/**
+  - node_modules/require-from-string/**
+extraResources:
+  - from: node_modules/.cache/pseudoharness-mcp-runtime
+    to: pseudoharness-node
+    filter:
+      - '**/*'
 extraMetadata:
   main: desktop/main.cjs
 electronFuses:
