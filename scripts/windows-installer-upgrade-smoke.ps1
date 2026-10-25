@@ -59,7 +59,7 @@ function Invoke-Uninstall([string] $installPath) {
   if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
     throw "Uninstaller was not created at $uninstaller"
   }
-  $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', '/allusers', "_?=$installPath") -Wait -PassThru
+  $process = Start-Process -FilePath $uninstaller -Verb RunAs -ArgumentList @('/S', '/allusers', "_?=$installPath") -Wait -PassThru
   if ($process.ExitCode -ne 0) {
     throw "Uninstall failed with exit code $($process.ExitCode): $installPath"
   }
