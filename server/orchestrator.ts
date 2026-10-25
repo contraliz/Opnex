@@ -196,13 +196,13 @@ function directContextForPrompt(value:any,query:string){
   const attached=value?.attached?.question_context;
   const context:any={query:compactString(query,2400),decisions,requirements,lessons,evidence,attached_summary:compactString(value?.attached?.summary,1200),attached_sources:Array.isArray(value?.attached?.sources)?value.attached.sources.slice(0,8):undefined,question_gap:compactString(attached?.gap,600),matching_record_count:decisions.length+requirements.length+lessons.length+evidence.length};
   let serialized=JSON.stringify(context);
-  while(serialized.length>11500&&context.evidence.length)context.evidence.pop(),serialized=JSON.stringify(context);
-  while(serialized.length>11500&&context.requirements.length)context.requirements.pop(),serialized=JSON.stringify(context);
-  while(serialized.length>11500&&context.attached_sources?.length)context.attached_sources.pop(),serialized=JSON.stringify(context);
+  while(serialized.length>11500&&context.evidence.length){context.evidence.pop();serialized=JSON.stringify(context);}
+  while(serialized.length>11500&&context.requirements.length){context.requirements.pop();serialized=JSON.stringify(context);}
+  while(serialized.length>11500&&context.attached_sources?.length){context.attached_sources.pop();serialized=JSON.stringify(context);}
   const lessonCount=context.lessons.length;
-  while(serialized.length>11500&&context.lessons.length)context.lessons.pop(),serialized=JSON.stringify(context);
+  while(serialized.length>11500&&context.lessons.length){context.lessons.pop();serialized=JSON.stringify(context);}
   if(context.lessons.length<lessonCount){(context as any).lessons_omitted_for_budget=lessonCount-context.lessons.length;(context as any).lesson_continuation='Call lessons(action=retrieve) with the query and explicitly validated environment/preconditions.';serialized=JSON.stringify(context);}
-  while(serialized.length>11500&&context.decisions.length)context.decisions.pop(),serialized=JSON.stringify(context);
+  while(serialized.length>11500&&context.decisions.length){context.decisions.pop();serialized=JSON.stringify(context);}
   context.matching_record_count=context.decisions.length+context.requirements.length+context.lessons.length+context.evidence.length;
   serialized=JSON.stringify(context);
   return serialized;
