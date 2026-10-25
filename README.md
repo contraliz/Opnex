@@ -58,10 +58,10 @@ npm ci --include=dev
 npm run package
 ```
 
-The output is `artifacts/pseudoharness-1.1.0.tgz`. Copy that file to another machine with Node.js/npm and Codex CLI, then install and start it:
+The output is `artifacts/pseudoharness-1.1.1.tgz`. Copy that file to another machine with Node.js/npm and Codex CLI, then install and start it:
 
 ```sh
-npm install --global ./pseudoharness-1.1.0.tgz
+npm install --global ./pseudoharness-1.1.1.tgz
 pseudoharness
 ```
 
