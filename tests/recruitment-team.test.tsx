@@ -22,9 +22,11 @@ describe('recruitment roster panel', () => {
     expect((roster as HTMLUListElement).children).toHaveLength(2);
     expect(within(roster).getByRole('heading', { name: 'Worker One' })).toBeTruthy();
     expect(within(roster).getByRole('heading', { name: 'Worker Two' })).toBeTruthy();
-    expect(within(roster).getAllByText('max')).toHaveLength(2);
+    expect(within(roster).getAllByText('max')).toHaveLength(1);
     expect(screen.getByRole('heading', { name: 'Integration' })).toBeTruthy();
     expect(screen.queryByText('3 workers recruited')).toBeNull();
+    fireEvent.click(within(roster).getAllByText('Full worktree path')[1]);
+    expect(within(roster).getByText('D:/state/worker-two')).toBeTruthy();
   });
   it('offers steering for active context and integration turns', () => {
     const selected: string[] = [];

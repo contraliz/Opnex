@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -14,6 +14,11 @@ import {
 } from '../server/recruitment-git';
 
 describe('bounded recruitment Git worktrees', () => {
+  // Git worktree creation, merge, and cleanup are filesystem-heavy on hosted
+  // Windows runners when Vitest starts many file workers concurrently.
+  // Keep these integration checks bounded without racing teardown against Git.
+  vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
+
   let fixture: string;
   let repo: string;
   let worktrees: string;
