@@ -106,10 +106,12 @@ function WorkerCard({ worker, selected, onSelectSteerWorker }: { worker: Recruit
           <span className="recruitment-team__status" role="status">{worker.status}</span>
         </header>
         <dl className="recruitment-team__metadata">
-          <div><dt>Effort</dt><dd>{worker.effort}</dd></div>
           <div><dt>Branch</dt><dd><code>{worker.branch}</code></dd></div>
-          <div><dt>Worktree</dt><dd><code>{worker.worktreePath}</code></dd></div>
         </dl>
+        <details className="recruitment-team__disclosure recruitment-team__worktree">
+          <summary>Full worktree path</summary>
+          <code>{worker.worktreePath}</code>
+        </details>
         {worker.error ? <p className="recruitment-team__error" role="alert">{worker.error}</p> : null}
         {onSelectSteerWorker&&worker.canSteer&&<button type="button" className="recruitment-team__steer" aria-pressed={selected} onClick={()=>onSelectSteerWorker(worker.workerId)}>{selected?'Selected for next update':'Steer this worker'}</button>}
         <section className="recruitment-team__assignment" aria-label={`${worker.name} assignment`}>
@@ -157,8 +159,11 @@ export function RecruitmentTeamPanel({ team, selectedWorkerId, onSelectSteerWork
           </header>
           <dl className="recruitment-team__metadata">
             <div><dt>Branch</dt><dd><code>{team.integration.branch}</code></dd></div>
-            <div><dt>Worktree</dt><dd><code>{team.integration.worktreePath}</code></dd></div>
           </dl>
+          <details className="recruitment-team__disclosure recruitment-team__worktree">
+            <summary>Full worktree path</summary>
+            <code>{team.integration.worktreePath}</code>
+          </details>
           {team.integration.error ? <p className="recruitment-team__error" role="alert">{team.integration.error}</p> : null}
           {onSelectSteerWorker&&team.integration.canSteer&&<button type="button" className="recruitment-team__steer" aria-pressed={selectedWorkerId==='integration'} onClick={()=>onSelectSteerWorker('integration')}>{selectedWorkerId==='integration'?'Selected for next update':'Steer integration agent'}</button>}
           {team.integration.receipt ? <ReceiptDetails receipt={team.integration.receipt} /> : null}

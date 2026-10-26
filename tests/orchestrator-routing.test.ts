@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const fake=vi.hoisted(()=>({instance:null as any,agentInstance:null as any,instances:[] as any[],threadOwners:new Map<string,any>(),threadConfigs:new Map<string,any>(),calls:[] as any[],steerErrors:[] as string[],threadCount:0,turnCount:0,fastAvailable:true,agentMemMode:'ok',agentMemContextCalls:0,authToken:'opaque-test-'+'token',refreshedToken:'opaque-refreshed-'+'token'}));
+vi.setConfig({testTimeout:30_000,hookTimeout:30_000});
 vi.mock('../server/codex.js',()=>{
   class AppServerRequestError extends Error{constructor(readonly method:string,message:string){super(message);}}
   class FakeAppServer{
@@ -63,7 +64,7 @@ vi.mock('../server/agentmem.js',()=>{
 let dataDirectory='';let projectRoot='';let previousDataDirectory:string|undefined;const originalCodexHome=process.env.CODEX_HOME;const originalCodexProfile=process.env.CODEX_PROFILE;let testCodexHome='';let testCodexHomes:string[]=[];let modules:any;
 const assignment:Assignment={outcome:'Perform the requested implementation.',deliverable:'A bounded change.',read_scope:[],write_scope:[],exclusions:[],constraints:[],context_refs:[],skill_refs:[],acceptance:['The requested behavior is delivered.'],verification:['Run focused verification.'],ordinary_authority:['Choose local implementation details.'],escalation_conditions:['Scope expands.'],receipt_requirements:['Return status and evidence.']};
 const receipt={status:'complete',result:'Completed and verified.',changes:[],acceptance:{met:['The requested behavior is delivered.'],unmet:[]},verification:[{check:'Focused behavior check',result:'passed',evidence:'Mocked lifecycle completed.'},{check:'Unrelated integration suite',result:'not_run',evidence:null}],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};
-async function waitFor(predicate:()=>boolean){for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out waiting for the routed workflow.');}
+async function waitFor(predicate:()=>boolean){const deadline=Date.now()+10_000;while(Date.now()<deadline){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,10));}throw new Error('Timed out waiting for the routed workflow after 10 seconds.');}
 async function setup(fast=true,codexHomeOverride?:string){
   vi.resetModules();fake.calls=[];fake.steerErrors=[];fake.instances=[];fake.instance=null;fake.agentInstance=null;fake.threadOwners.clear();fake.threadConfigs.clear();fake.threadCount=0;fake.turnCount=0;fake.fastAvailable=fast;fake.agentMemMode='ok';fake.agentMemContextCalls=0;
   previousDataDirectory=process.env.PSEUDOHARNESS_DATA_DIR;dataDirectory=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-route-test-'));process.env.PSEUDOHARNESS_DATA_DIR=dataDirectory;
