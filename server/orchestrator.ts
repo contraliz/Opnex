@@ -444,9 +444,10 @@ async function startRecruitmentStage(taskId:string,passId:string,workerId:string
   const sourceBaseline=stage==='execute'&&isAgentMemEnabled(task.agentmemProjectId)?await captureTurnSourceFingerprint(workspace):undefined;if(sourceBaseline&&!sourceBaseline.available)throw new Error(`The assigned Git worktree could not be safely fingerprinted before execution. ${sourceBaseline.reason||'Verify the worktree.'}`);
   const response=await agentCodex.startTurn(record.threadId,`${prompt}${carried.text}`,'worker','gpt-6-luna',record.effort,workspace,writeRoots,approvalPolicy,schema,undefined,carried.images);
   const id=response.turn?.id||response.turnId;if(id&&sourceBaseline)sourceFingerprints.set(sourceFingerprintKey(taskId,passId,'worker',record.threadId,id),sourceBaseline);
+  let turnAccepted=false;
+  if(id)await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);const currentPassRow=current?.passes?.find(row=>row.id===passId);const teamNow=currentPassRow?.recruitmentTeam;const target=integration?teamNow?.integration:teamNow?.workers.find(row=>row.workerId===workerId);const activeStatuses=['context_plan','context_compose','running'];if(!current||current.currentPassId!==passId||current.phase==='cancelled'||!teamNow||teamNow.status==='cancelled'||!target||target.workerStage!==stage||!activeStatuses.includes(target.status))return;if(integration?teamNow.status!=='integrating':!['recruiting','running'].includes(teamNow.status))return;target.activeTurnId=id;turnAccepted=true;});
+  if(id&&!turnAccepted){try{await agentCodex.interrupt(record.threadId,id);}catch{}return;}
   if(id&&stage==='context_compose')await bindAgentMemAuditTurn(taskId,passId,'worker',record.threadId,id);
-  if(integration)team.integration.activeTurnId=id;else (record as RecruitmentWorker).activeTurnId=id;
-  if(id)await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);const currentPassRow=current?.passes?.find(row=>row.id===passId);const teamNow=currentPassRow?.recruitmentTeam;const target=integration?teamNow?.integration:teamNow?.workers.find(row=>row.workerId===workerId);if(target)target.activeTurnId=id;});
   if(id)await processDeferred(taskId,id);
 }
 async function processDeferred(taskId:string,turnId:string){const rows=deferredCompletions.get(taskId)||[];const i=rows.findIndex(x=>x.turn?.id===turnId);if(i<0)return;const [event]=rows.splice(i,1);await onTurnCompleted(event);}
