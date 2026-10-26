@@ -94,18 +94,18 @@ function agentMemModelCall(task:Task,role:WorkflowRole,threadId:string,turnId:st
   const server=String(item?.serverName??item?.server??'').toLowerCase();if(!server.includes('agentmem')||typeof item?.id!=='string')return false;
   const pass=task.passes?.find(row=>row.id===task.currentPassId);if(!pass)return false;const audit=pass.agentmemAudit??(pass.agentmemAudit={recorded:true,coverage:'from_first_recorded_call',selectedProjectId:task.agentmemProjectId||null,workspaceRoot:task.userRoot,identityStatus:task.agentmemProjectId?'unverified':'unknown',modelMcpStatus:'unknown',contexts:[],calls:[]});if(!audit.recorded)return false;
   let args:any=item.arguments??item.input;if(typeof args==='string'){try{args=JSON.parse(args)}catch{args=undefined;}}
-  const method=String(item.toolName??item.tool??'AgentMem tool').slice(0,100);const calledProject=typeof args?.project_id==='string'?args.project_id:audit.verifiedProjectId||audit.selectedProjectId||undefined;const key=`model:${threadId}:${turnId}:${item.id}`;const now=new Date().toISOString();
+  const method=String(item.toolName??item.tool??'AgentMem tool').slice(0,100);const calledProject=typeof args?.project_id==='string'?args.project_id:audit.selectedProjectId||undefined;const binding=audit.repositories?.find(row=>row.threadId===threadId);const key=`model:${threadId}:${turnId}:${item.id}`;const now=new Date().toISOString();
   const repositoryMethods=new Set(['repository_search','repository_retrieve','repository_status','repository_resync','repository_list','repository_register','repository_graph_query','repository_graph_status','repository_graph_summary','repository_graph_path','repository_graph_impact']);
   const service:AgentMemAuditCall['service']=repositoryMethods.has(method)?'repository_index':'knowledge';
   const writeMethod=method==='update_project_brief'||method==='index_project'||method==='repository_resync'||method==='repository_register'||method==='projects'&&args?.action==='register';
   const writeAction=method==='knowledge'&&['create','update'].includes(String(args?.action))||method==='decisions'&&args?.action==='create'||method==='requirements'&&['create','revise','fulfill'].includes(String(args?.action))||method==='lessons'&&['propose','review'].includes(String(args?.action));
   const readOnlyMethod=['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','repository_search','repository_retrieve','repository_status','repository_graph_query','repository_graph_status','repository_graph_summary','repository_graph_path','repository_graph_impact','check_project_changes'].includes(method);
   const operation:AgentMemAuditCall['operation']=writeMethod||writeAction?'write':readOnlyMethod?'read':'unknown';
-  const repositoryId=service==='repository_index'?audit.verifiedRepositoryId:undefined;
+  const repositoryId=service==='repository_index'?binding?.repositoryId||audit.verifiedRepositoryId:undefined;
   const resultSummary=status==='completed'?agentMemResultSummary(item):undefined;
   const record={id:key,source:'model' as const,role,method,status,startedAt:now,updatedAt:now,threadId,turnId,service,operation,...(calledProject?{projectId:calledProject}:{}),...(repositoryId?{repositoryId}:{}),...(resultSummary?{resultSummary}:{})};
   const index=audit.calls.findIndex(row=>row.id===key);if(index>=0){const previous=audit.calls[index];audit.calls[index]={...previous,...record,startedAt:previous.startedAt};}else audit.calls.push(record);
-  audit.modelMcpStatus='observed';if(calledProject&&audit.selectedProjectId&&calledProject!==audit.selectedProjectId||typeof args?.repository_id==='string'&&audit.verifiedRepositoryId&&args.repository_id!==audit.verifiedRepositoryId)audit.identityStatus='mismatch';
+  audit.modelMcpStatus='observed';if(calledProject&&audit.selectedProjectId&&calledProject!==audit.selectedProjectId||typeof args?.repository_id==='string'&&repositoryId&&args.repository_id!==repositoryId)audit.identityStatus='mismatch';
   return true;
 }
 function activityFor(task:Task,role:LiveActivity['role'],threadId:string,turnId:string,itemId:string){

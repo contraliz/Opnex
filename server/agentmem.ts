@@ -75,13 +75,19 @@ export class AgentMem {
     // Pseudoharness launcher rather than in Codex's MCP env table.
     for(const key of ['AGENTMEM_DATA_DIR','AGENTMEM_MEMORY_ROOT'])if(typeof process.env[key]==='string')this.env[key]=process.env[key]!;
   }
-  async modelMcpServerConfig(projectId:string,workspaceRoot:string){
+  async modelMcpServerConfig(projectId:string,workspaceRoot:string,repositoryRoot=workspaceRoot){
     if(!projectId||!workspaceRoot||!this.command)throw new Error('Choose an AgentMem project ID and project root before exposing project knowledge to a model.');
     const setupMode=await this.setupMode(projectId,workspaceRoot);
     let repository:any;
     if(setupMode!=='register'){
       const repositories=await this.call('repository_list',{project_id:projectId});const rows=Array.isArray(repositories?.repositories)?repositories.repositories:[];
-      repository=rows.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&rootKey(row.root)===rootKey(workspaceRoot));
+      repository=rows.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&rootKey(row.root)===rootKey(repositoryRoot));
+      if(!repository&&rootKey(repositoryRoot)!==rootKey(workspaceRoot)){
+        await this.call('repository_register',{project_id:projectId,repository_root:path.resolve(repositoryRoot)});
+        const refreshed=await this.call('repository_list',{project_id:projectId});const updated=Array.isArray(refreshed?.repositories)?refreshed.repositories:[];
+        repository=updated.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&rootKey(row.root)===rootKey(repositoryRoot));
+        if(!repository)throw new Error('AgentMem did not confirm the recruited worktree repository under the selected project ID. The canonical project registration was not changed.');
+      }
     }
     if(setupMode==='ready'&&!repository)throw new Error('The selected AgentMem project has no repository index registered for this exact workspace.');
     const modulePath=fileURLToPath(import.meta.url),launch=resolveMcpHelperLaunch({modulePath,helperFile:modulePath.endsWith('.ts')?'agentmem-mcp-gateway.ts':'agentmem-mcp-gateway.js'});
@@ -167,10 +173,10 @@ export class AgentMem {
   private async call(name:string,args:Record<string,unknown>) {
     for(let attempt=0;attempt<2;attempt++){
       let client:Client|undefined;const scope=this.auditScope.getStore();const callId=randomUUID();const startedAt=new Date().toISOString();let sent=false;let finalized=false;
-      const repositoryMethods=new Set(['repository_list','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync']);
+      const repositoryMethods=new Set(['repository_list','repository_register','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync']);
       const service:AgentMemCallAudit['service']=repositoryMethods.has(name)?'repository_index':'knowledge';
       const action=String(args.action||'');
-      const write= name==='repository_resync'||name==='update_project_brief'||name==='index_project'||name==='record_work'&&action==='receipt'||name==='record_work'&&action==='release'||name==='requirements'&&['create','revise','fulfill'].includes(action)||name==='decisions'&&action==='create'||name==='knowledge'&&['create','update'].includes(action)||name==='lessons'&&['propose','review'].includes(action);
+      const write= name==='repository_register'||name==='repository_resync'||name==='update_project_brief'||name==='index_project'||name==='record_work'&&action==='receipt'||name==='record_work'&&action==='release'||name==='requirements'&&['create','revise','fulfill'].includes(action)||name==='decisions'&&action==='create'||name==='knowledge'&&['create','update'].includes(action)||name==='lessons'&&['propose','review'].includes(action);
       const operation:AgentMemCallAudit['operation']=write?'write':'read';
       const audit=async(event:Partial<AgentMemCallAudit>)=>{if(scope)await this.auditObserver?.({...scope,callId,method:name,service,operation,status:'running',startedAt,updatedAt:new Date().toISOString(),...(typeof args.project_id==='string'?{projectId:args.project_id}:{}),...(typeof args.repository_id==='string'?{repositoryId:args.repository_id}:{}),...event});};
       try{
