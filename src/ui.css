@@ -895,7 +895,7 @@ body { min-width: 640px; min-height: 520px; }
 .document-tabs::-webkit-scrollbar { display: none; }
 .document-tab { position: relative; min-width: 126px; max-width: 210px; height: 39px; align-self: end; display: flex; align-items: center; gap: 1px; padding: 0 5px 0 8px; border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0; color: #999; }
 .document-tab.active { border-color: #373737; background: #262626; color: #ddd; }
-.document-tab > button:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; overflow: hidden; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; font-size: 12px; }
+.document-tab > button:first-child { min-width: 0; min-height: 24px; flex: 1; display: flex; align-items: center; gap: 7px; overflow: hidden; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; font-size: 12px; }
 .document-tab > button:first-child span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .document-tab > button:first-child svg { flex: 0 0 auto; }
 .tab-close,.new-tab { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; box-sizing: border-box; border: 0; border-radius: 4px; background: transparent; color: #888; cursor: pointer; }
@@ -1393,7 +1393,7 @@ body { min-width: 640px; min-height: 520px; }
 .project-expand:hover,.project-expand:focus-visible { background:#303030; color:#e0e0e0; }
 .project-expand > span { min-width:0; overflow:hidden; flex:1; text-overflow:ellipsis; white-space:nowrap; }
 .project-expand small { color:#777; font-size:9px; font-variant-numeric:tabular-nums; }
-.project-group-pin,.project-group-edit { width:22px; height:22px; display:grid; place-items:center; padding:0; border:0; border-radius:4px; background:transparent; color:#777; cursor:pointer; opacity:.45; }
+.project-group-pin,.project-group-edit { width:24px; height:24px; display:grid; place-items:center; padding:0; border:0; border-radius:4px; background:transparent; color:#777; cursor:pointer; opacity:.45; }
 .project-session-group:hover .project-group-pin,.project-session-group:hover .project-group-edit,.project-group-pin:focus-visible,.project-group-edit:focus-visible { opacity:1; }
 .project-group-pin:hover,.project-group-edit:hover { background:#383838; color:#ddd; }
 .project-session-rows { position:relative; margin-left:9px; padding-left:7px; border-left:1px solid #373737; }
