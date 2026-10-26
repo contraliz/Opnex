@@ -142,13 +142,6 @@ export async function prepareRecruitmentWorktrees(options: {
   integrationBranch: string;
 }): Promise<PreparedRecruitmentWorktrees> {
   const validated = await validateRecruitmentProject(options.canonicalRoot, options.baseRef);
-  if (!path.isAbsolute(options.taskRoot)) throw new RecruitmentGitError('Task root must be an absolute path.');
-  const taskRoot = path.resolve(options.taskRoot);
-  const parent = await canonicalDirectory(path.dirname(taskRoot), 'Task root parent');
-  if (path.dirname(taskRoot).toLowerCase() !== parent.toLowerCase() || !isWithin(parent, taskRoot)) {
-    throw new RecruitmentGitError('Task root must be a direct child of an existing task-owned parent directory.');
-  }
-  await assertPathAbsent(taskRoot);
   if (!Array.isArray(options.workers) || options.workers.length === 0 || options.workers.length > 16) {
     throw new RecruitmentGitError('Provide between 1 and 16 workers.');
   }
@@ -160,6 +153,17 @@ export async function prepareRecruitmentWorktrees(options: {
   const allBranches = [integrationBranch, ...workers.map((worker) => worker.branch)];
   if (new Set(allBranches).size !== allBranches.length) throw new RecruitmentGitError('Every worker and integration branch must be unique.');
   if (new Set(workers.map((worker) => worker.workerId)).size !== workers.length) throw new RecruitmentGitError('Worker IDs must be unique.');
+  if (!path.isAbsolute(options.taskRoot)) throw new RecruitmentGitError('Task root must be an absolute path.');
+  const requestedTaskRoot = path.resolve(options.taskRoot);
+  // Canonicalize the existing parent before checking containment. macOS commonly
+  // exposes /tmp through /private/tmp, and Windows can return a different spelling
+  // (for example a short name) from realpath. Those aliases are the same directory.
+  const parent = await canonicalDirectory(path.dirname(requestedTaskRoot), 'Task root parent');
+  const taskRoot = path.join(parent, path.basename(requestedTaskRoot));
+  if (!isWithin(parent, taskRoot)) {
+    throw new RecruitmentGitError('Task root must be a direct child of an existing task-owned parent directory.');
+  }
+  await assertPathAbsent(taskRoot);
   const plans = [
     { workerId: 'integration', branch: integrationBranch, worktreeRoot: path.join(taskRoot, 'integration') },
     ...workers.map((worker) => ({ ...worker, worktreeRoot: path.join(taskRoot, `worker-${worker.workerId}`) })),
