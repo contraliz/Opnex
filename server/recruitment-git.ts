@@ -256,6 +256,38 @@ export async function mergeRecruitmentCommits(options: {
   };
 }
 
+export async function verifyRecruitmentIntegration(options: {
+  canonicalRoot: string;
+  integrationRoot: string;
+  integrationBranch: string;
+  integrationBaseCommit: string;
+  workerCommits: Array<{ workerId: string; commit: string }>;
+}): Promise<{ headCommit: string }> {
+  const { projectRoot } = await validateRecruitmentProject(options.canonicalRoot, 'HEAD');
+  const integrationPath = await realpath(options.integrationRoot).catch((error) => { throw new RecruitmentGitError('Integration worktree path is missing or inaccessible.', { cause: error }); });
+  const integrationBranch = validateRecruitmentBranch(options.integrationBranch);
+  const taskRoot = await realpath(path.dirname(integrationPath));
+  if (path.basename(integrationPath).toLowerCase() !== 'integration') throw new RecruitmentGitError('Integration worktree must use the task-owned integration directory.');
+  const manifest = await readTaskManifest(projectRoot, taskRoot);
+  if (manifest.integration.branch !== integrationBranch || path.resolve(manifest.integration.worktreeRoot).toLowerCase() !== integrationPath.toLowerCase()) throw new RecruitmentGitError('Integration worktree does not match its task ownership record.');
+  await validateOwnedLocation(projectRoot, taskRoot, integrationPath, integrationBranch);
+  const headCommit = await commitAt(integrationPath);
+  const assertAncestor = async (commit: string, label: string) => {
+    if (!/^[0-9a-f]{40,64}$/i.test(commit)) throw new RecruitmentGitError(`${label} must be a full commit SHA.`);
+    try { await git(integrationPath, ['merge-base', '--is-ancestor', commit, headCommit]); }
+    catch (error) { throw new RecruitmentGitError(`${label} is not integrated in the recorded integration branch. Resolve the worker merge in the isolated integration worktree and retry verification.`, { cause: error }); }
+  };
+  await assertAncestor(options.integrationBaseCommit, 'The integration baseline');
+  const seen = new Set<string>();
+  for (const worker of options.workerCommits) {
+    const workerId = safeSegment(worker.workerId, 'Worker ID');
+    if (seen.has(workerId)) throw new RecruitmentGitError(`Worker ${workerId} appears more than once in integration verification.`);
+    seen.add(workerId);
+    await assertAncestor(worker.commit, `Worker ${workerId} commit`);
+  }
+  return { headCommit };
+}
+
 async function validateOwnedLocation(projectRoot: string, taskRoot: string, target: string, expectedBranch: string): Promise<string> {
   const candidate = await realpath(target).catch((error) => { throw new RecruitmentGitError('Worker worktree path is missing or inaccessible.', { cause: error }); });
   if (!isWithin(taskRoot, candidate)) throw new RecruitmentGitError('Worktree path escapes its task-owned root.');

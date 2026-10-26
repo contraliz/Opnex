@@ -26,7 +26,7 @@ describe('Codex approval and turn configuration',()=>{
   const verifiedRuntimeConfig={config:{mcp_servers:{agentmem:{command:'agentmem'}},plugins:{example:{enabled:true}}}};
   it('loads the app-owned delegation policy into orchestrator developer instructions',()=>{
     const instructions=buildOrchestratorDeveloperInstructions('ORCHESTRATOR POLICY COPY');
-    expect(instructions).toContain('ORCHESTRATOR POLICY COPY');expect(instructions).toContain('policy-bound orchestration model');
+    expect(instructions).toContain('ORCHESTRATOR POLICY COPY');expect(instructions).toContain('policy-bound orchestration model');expect(instructions).toContain('setup/tool-use stage');expect(instructions).toContain('do not create an assignment in that stage');
   });
   it('accepts only supported approval presets and keeps the safe default',()=>{
     const base={projectRoot:'D:/repo',agentmemProjectId:'demo',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low'};
@@ -36,6 +36,7 @@ describe('Codex approval and turn configuration',()=>{
     expect(settingsSchema.parse({...base,agentmemProjectId:''}).agentmemProjectId).toBe('');
     expect(settingsSchema.parse({...base,agentmemProjectId:'   '}).agentmemProjectId).toBe('');
     expect(settingsSchema.safeParse({...base,agentmemProjectId:'x'.repeat(129)}).success).toBe(false);
+    expect(settingsSchema.safeParse({...base,projectRoot:'',agentmemProjectId:'',agentmemAutoSetup:false}).success).toBe(true);
   });
   it('requests the most detailed supported summaries and available provider text for new and resumed role threads',()=>{
     const orchestrator=makeThreadParams({role:'orchestrator',root:'D:/repo',model:'gpt-6.1-sol',approvalPolicy:'on-request',ownedPolicy:'policy'});
@@ -75,6 +76,8 @@ describe('Codex approval and turn configuration',()=>{
     expect(simpleInstructions).toContain('Updating focused tests or docs needed to verify the requested behavior is an ordinary implementation decision');expect(simpleInstructions).toContain('never weaken or rewrite a test merely to hide a failure');
     expect(direct).not.toHaveProperty('serviceTierForTurn');expect(direct.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
     expect(simple).not.toHaveProperty('serviceTierForTurn');expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:false});
+    const toolFirst=makeTurnParams({threadId:'setup',input:'Use the setup tools first',role:'orchestrator',model:'gpt-6.1-sol',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:undefined});
+    expect(toolFirst).not.toHaveProperty('outputSchema');
     for(const role of ['router','direct','simple','orchestrator','worker'] as const){const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'});expect(thread.config).toMatchObject({projects:{'/tmp/project':{trust_level:'trusted'}}});expect(thread.baseInstructions).toBe(appAgentBaseInstructions('/tmp/project'));expect(thread.baseInstructions).toContain(`Host platform: ${process.platform}`);if(role==='router')expect(thread.config).toHaveProperty('project_doc_max_bytes',0);else{expect(thread.config).not.toHaveProperty('project_doc_fallback_filenames');expect(thread.config).not.toHaveProperty('project_root_markers');}}
   });
   it('serializes attachment image data through the app-server user-input adapter',()=>{

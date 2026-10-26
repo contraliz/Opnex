@@ -8,6 +8,7 @@ import SettingsDialog from './SettingsDialog';
 import { SessionDialog, SessionRow } from './SessionControls';
 import { HeadsUpPanel } from './HeadsUpPanel';
 import { PassGitDiff } from './PassGitDiff';
+import { RecruitmentTeamPanel } from './RecruitmentTeamPanel';
 import { EmbeddedWorkspace } from './EmbeddedWorkspace';
 import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitPane, type SessionPane } from './paneGroups';
 import { formatBrowserAnnotation } from './browser-annotation';
@@ -38,6 +39,7 @@ export default function App() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [pendingAttachments, setPendingAttachments] = useState<Record<string, TaskAttachment[]>>({});
+  const [recruitmentSteerTargets, setRecruitmentSteerTargets] = useState<Record<string,string>>({});
   const [panes, setPanes] = useState<SessionPane[]>([{ id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 }]);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabRegistry>({});
   const [focusedPaneId, setFocusedPaneId] = useState('pane:root');
@@ -404,7 +406,7 @@ export default function App() {
     setDrafts(current => ({ ...current, [tab]: '' }));
     try {
       if (task?.phase === 'escalated') await api('/api/tasks/' + task.id + '/escalation', { message, attachments: files });
-      else if (task) await api('/api/tasks/' + task.id + '/messages', { message, attachments: files });
+      else if (task) await api('/api/tasks/' + task.id + '/messages', { message, attachments: files, ...(recruitmentSteerTargets[task.id]?{recruitmentWorkerId:recruitmentSteerTargets[task.id]}:{}) });
       else {
         await contextSelectionQueue.current;
         const created = await api('/api/tasks', { message, attachments: files });
@@ -418,6 +420,7 @@ export default function App() {
         }
       }
       setPendingAttachments(current => { const next = { ...current }; delete next[tab]; return next; });
+      if(task)setRecruitmentSteerTargets(current=>{if(!current[task.id])return current;const next={...current};delete next[task.id];return next;});
       setDrafts(current => { const next = { ...current }; delete next[tab]; return next; });
       await refresh();
     } catch (cause) {
@@ -771,6 +774,7 @@ export default function App() {
       {task.messages.filter(message => !message.passId).map(message => <ConversationMessage key={message.id} message={message} />)}
       {task.passes?.map(pass => <PassPanel key={pass.id} pass={pass} messages={task.messages.filter(message => message.passId === pass.id)}
         active={pass.id === task.currentPassId} task={task}
+        selectedSteerWorkerId={pass.recruitmentTeam?recruitmentSteerTargets[task.id]:undefined} onSelectSteerWorker={workerId=>setRecruitmentSteerTargets(current=>({...current,[task.id]:workerId}))}
         assignmentExpanded={expanded['assignment:' + pass.id] ?? false} receiptExpanded={expanded['receipt:' + pass.id] ?? false}
         workerActivityExpanded={expanded['workerActivity:' + pass.id] ?? false} agentmemAuditExpanded={expanded['agentmemAudit:' + pass.id] ?? false} retrying={retryingPassId === pass.id}
         onRetryAgentMem={() => void retryAgentMemFor(task.id, pass.id)}
@@ -978,7 +982,7 @@ function ReasoningResponse({turn,summaries,activities,live,fallbackTime}:{turn:N
   </section>;
 }
 
-function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpanded,workerActivityExpanded,agentmemAuditExpanded,retrying,onRetryAgentMem,toggleAssignment,toggleReceipt,toggleWorkerActivity,toggleAgentMemAudit}:{pass:TaskPass;messages:Message[];active:boolean;task:Task;assignmentExpanded:boolean;receiptExpanded:boolean;workerActivityExpanded:boolean;agentmemAuditExpanded:boolean;retrying:boolean;onRetryAgentMem:()=>void;toggleAssignment:()=>void;toggleReceipt:()=>void;toggleWorkerActivity:()=>void;toggleAgentMemAudit:()=>void}){
+function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpanded,workerActivityExpanded,agentmemAuditExpanded,retrying,selectedSteerWorkerId,onRetryAgentMem,onSelectSteerWorker,toggleAssignment,toggleReceipt,toggleWorkerActivity,toggleAgentMemAudit}:{pass:TaskPass;messages:Message[];active:boolean;task:Task;assignmentExpanded:boolean;receiptExpanded:boolean;workerActivityExpanded:boolean;agentmemAuditExpanded:boolean;retrying:boolean;selectedSteerWorkerId?:string;onRetryAgentMem:()=>void;onSelectSteerWorker:(workerId:string)=>void;toggleAssignment:()=>void;toggleReceipt:()=>void;toggleWorkerActivity:()=>void;toggleAgentMemAudit:()=>void}){
   const live=active&&task.phase===p.phase&&['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(p.phase);
   const output=p.publicAnswer||p.receipt?.result||'';
   const visibleMessages=messages.filter(m=>!(m.role==='orchestrator'&&m.text==='Prepared a complete assignment.'&&(p.reasoningTurns||[]).some(turn=>turn.role==='orchestrator'))&&!(output&&m.role!=='user'&&m.text===output));
@@ -995,6 +999,7 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
     {visibleTimeline.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole===row.turn.role&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}
     {workerRows.length>0&&<div className="worker-activity"><Disclosure title={`Luna activity · ${live&&p.activeRole==='worker'?'live · ':''}${workerActivityCount} ${workerActivityCount===1?'item':'items'}`} icon={<Terminal size={15}/>} open={workerActivityExpanded} onToggle={toggleWorkerActivity}><div className="worker-activity-scroll">{workerRows.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole==='worker'&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}</div></Disclosure></div>}
     {p.simpleThreadId&&<div className="worker-status" role="status">{p.phase==='simple_running'?<div className="activity-spinner"/>:<Check size={17} className="worker-activity-icon"/>}<strong>{p.phase==='simple_running'?'Simple implementation is working':'Simple implementation complete'}</strong><span className="worker-model">GPT-6 Luna · xhigh</span><span className={`worker-state ${p.phase}`}>{p.phase==='simple_running'?'Verifying · no Sol review':'Self-verified · no Sol review'}</span></div>}{(p.assignment||p.workerThreadId||p.receipt)&&p.resolution!=='direct'&&p.resolution!=='simple'&&<div className="worker-status" role="status">{p.phase==='worker_running'?<div className="activity-spinner"/>:<Activity size={17} className="worker-activity-icon"/>}<strong>{p.phase==='worker_running'?'Worker is working':p.phase==='accepted'?'Worker review':'Worker task'}</strong><span className="worker-model">gpt-6-luna · high</span><span className={`worker-state ${p.phase}`}>{p.phase==='accepted'&&p.receipt?'Complete':p.phase==='worker_running'?p.workerStage==='context_plan'?'Composing scope context · orchestrator idle':p.workerStage==='context_compose'?`${p.workerContextStatus?.status==='retrieved'?'Reviewing retrieved context':p.workerContextStatus?.status==='disabled'?'AgentMem disabled · composing context':'AgentMem unavailable · composing context'} · orchestrator idle`:p.workerStage==='execute'?'Executing assignment · orchestrator idle':'Preparing worker · orchestrator idle':phaseText[p.phase]||p.phase}</span></div>}
+    {p.recruitmentTeam&&<RecruitmentTeamPanel team={{teamId:p.recruitmentTeam.teamId,status:p.recruitmentTeam.status,workers:p.recruitmentTeam.workers.map(worker=>({workerId:worker.workerId,name:worker.name,status:worker.status,canSteer:!!worker.activeTurnId,effort:worker.effort,branch:worker.branch,worktreePath:worker.worktreeRoot,assignment:worker.assignment,receipt:worker.receipt,error:worker.error})),integration:{status:p.recruitmentTeam.integration.status,canSteer:!!p.recruitmentTeam.integration.activeTurnId,branch:p.recruitmentTeam.integration.branch,worktreePath:p.recruitmentTeam.integration.worktreeRoot,receipt:p.recruitmentTeam.integration.receipt,error:p.recruitmentTeam.integration.error}}} selectedWorkerId={selectedSteerWorkerId} onSelectSteerWorker={active?onSelectSteerWorker:undefined}/>}
     {p.assignment&&<Disclosure title="Assignment" icon={<FileText size={15}/>} open={assignmentExpanded} onToggle={toggleAssignment}><AssignmentView assignment={p.assignment}/></Disclosure>}
     <Disclosure title={agentMemAuditTitle(p)} icon={<Database size={15}/>} open={agentmemAuditExpanded} onToggle={toggleAgentMemAudit}><AgentMemAuditView pass={p}/></Disclosure>
     {p.escalation&&<div className="escalation-card"><div className="escalation-head"><AlertCircle size={16}/><strong>Worker needs a decision</strong></div><p>{p.escalation.decision_needed}</p>{p.escalation.evidence?.map((x:string,i:number)=><div className="escalation-detail" key={i}>{x}</div>)}<div className="escalation-options">{p.escalation.options?.map((x:string,i:number)=><span key={i}>{x}</span>)}</div>{p.escalation.recommendation&&<p className="rec-line"><b>Recommendation:</b> {p.escalation.recommendation}</p>}</div>}

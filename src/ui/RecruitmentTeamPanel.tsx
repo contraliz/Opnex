@@ -23,6 +23,7 @@ export type RecruitmentWorker = {
   workerId: string;
   name: string;
   status: string;
+  canSteer?: boolean;
   effort: 'high' | 'xhigh' | 'max';
   branch: string;
   worktreePath: string;
@@ -33,6 +34,7 @@ export type RecruitmentWorker = {
 
 export type RecruitmentIntegration = {
   status: string;
+  canSteer?: boolean;
   branch: string;
   worktreePath: string;
   receipt?: RecruitmentReceipt;
@@ -48,6 +50,8 @@ export type RecruitmentTeam = {
 
 export type RecruitmentTeamPanelProps = {
   team?: RecruitmentTeam;
+  selectedWorkerId?: string;
+  onSelectSteerWorker?: (workerId: string) => void;
 };
 
 function ValueList({ label, values }: { label: string; values: string[] }) {
@@ -92,12 +96,13 @@ function ReceiptDetails({ receipt, label = 'Public receipt' }: { receipt: Recrui
   );
 }
 
-function WorkerCard({ worker }: { worker: RecruitmentWorker }) {
+function WorkerCard({ worker, selected, onSelectSteerWorker }: { worker: RecruitmentWorker; selected: boolean; onSelectSteerWorker?: (workerId: string) => void }) {
   return (
-    <li className="recruitment-team__card">
+    <li className="recruitment-team__card recruitment-team__worker-bar">
       <article aria-labelledby={`recruitment-worker-${worker.workerId}`}>
-        <header className="recruitment-team__card-heading">
+        <header className="recruitment-team__worker-bar-heading">
           <h3 id={`recruitment-worker-${worker.workerId}`}>{worker.name}</h3>
+          <span className="recruitment-team__worker-effort">{worker.effort}</span>
           <span className="recruitment-team__status" role="status">{worker.status}</span>
         </header>
         <dl className="recruitment-team__metadata">
@@ -106,6 +111,7 @@ function WorkerCard({ worker }: { worker: RecruitmentWorker }) {
           <div><dt>Worktree</dt><dd><code>{worker.worktreePath}</code></dd></div>
         </dl>
         {worker.error ? <p className="recruitment-team__error" role="alert">{worker.error}</p> : null}
+        {onSelectSteerWorker&&worker.canSteer&&<button type="button" className="recruitment-team__steer" aria-pressed={selected} onClick={()=>onSelectSteerWorker(worker.workerId)}>{selected?'Selected for next update':'Steer this worker'}</button>}
         <section className="recruitment-team__assignment" aria-label={`${worker.name} assignment`}>
           <h4>Assignment</h4>
           <p><strong>Outcome:</strong> {worker.assignment.outcome}</p>
@@ -124,7 +130,7 @@ function WorkerCard({ worker }: { worker: RecruitmentWorker }) {
   );
 }
 
-export function RecruitmentTeamPanel({ team }: RecruitmentTeamPanelProps) {
+export function RecruitmentTeamPanel({ team, selectedWorkerId, onSelectSteerWorker }: RecruitmentTeamPanelProps) {
   const headingId = useId();
   if (!team) return null;
 
@@ -135,10 +141,13 @@ export function RecruitmentTeamPanel({ team }: RecruitmentTeamPanelProps) {
           <h2 id={headingId}>Recruitment team</h2>
           <p>Team <code>{team.teamId}</code></p>
         </div>
-        <span className="recruitment-team__status" role="status">{team.status}</span>
+        <div className="recruitment-team__heading-status">
+          <span className="recruitment-team__worker-count" aria-label={`${team.workers.length} workers recruited`}>{team.workers.length} {team.workers.length===1?'worker':'workers'} recruited</span>
+          <span className="recruitment-team__status" role="status">{team.status}</span>
+        </div>
       </header>
-      <ul className="recruitment-team__roster" aria-label="Team workers">
-        {team.workers.map((worker) => <WorkerCard key={worker.workerId} worker={worker} />)}
+      <ul className="recruitment-team__roster" aria-label={`Recruited workers (${team.workers.length})`}>
+        {team.workers.map((worker) => <WorkerCard key={worker.workerId} worker={worker} selected={selectedWorkerId===worker.workerId} onSelectSteerWorker={onSelectSteerWorker} />)}
       </ul>
       {team.integration ? (
         <section className="recruitment-team__card" aria-labelledby={`${headingId}-integration`}>
@@ -151,6 +160,7 @@ export function RecruitmentTeamPanel({ team }: RecruitmentTeamPanelProps) {
             <div><dt>Worktree</dt><dd><code>{team.integration.worktreePath}</code></dd></div>
           </dl>
           {team.integration.error ? <p className="recruitment-team__error" role="alert">{team.integration.error}</p> : null}
+          {onSelectSteerWorker&&team.integration.canSteer&&<button type="button" className="recruitment-team__steer" aria-pressed={selectedWorkerId==='integration'} onClick={()=>onSelectSteerWorker('integration')}>{selectedWorkerId==='integration'?'Selected for next update':'Steer integration agent'}</button>}
           {team.integration.receipt ? <ReceiptDetails receipt={team.integration.receipt} /> : null}
         </section>
       ) : null}

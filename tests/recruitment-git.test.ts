@@ -10,6 +10,7 @@ import {
   removeRecruitmentWorktree,
   validateRecruitmentBranch,
   validateRecruitmentRoot,
+  verifyRecruitmentIntegration,
 } from '../server/recruitment-git';
 
 describe('bounded recruitment Git worktrees', () => {
@@ -136,6 +137,34 @@ describe('bounded recruitment Git worktrees', () => {
     expect(result.conflicts).toEqual([{ workerId: 'alpha', files: ['shared.txt'] }]);
     expect((await readFile(path.join(state.workers[0].worktreeRoot, 'shared.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('worker version\n');
     expect(run(state.integration.worktreeRoot, 'status', '--short')).toContain('UU shared.txt');
+  });
+
+  it('verifies the recorded integration branch contains its baseline and every worker commit', async () => {
+    const state = await prepare('verify-integration', ['alpha','beta']);
+    const commits = [] as Array<{ workerId: string; branch: string; headCommit: string }>;
+    for (const [index, worker] of state.workers.entries()) {
+      await writeFile(path.join(worker.worktreeRoot, `worker-${index}.txt`), `worker ${index}\n`);
+      run(worker.worktreeRoot, 'add', `worker-${index}.txt`);
+      run(worker.worktreeRoot, 'commit', '-m', `worker ${index}`);
+      commits.push({ workerId: worker.workerId, branch: worker.branch, headCommit: run(worker.worktreeRoot, 'rev-parse', 'HEAD') });
+    }
+    await mergeRecruitmentCommits({ canonicalRoot: repo, integrationRoot: state.integration.worktreeRoot, workers: [commits[0]] });
+    await expect(verifyRecruitmentIntegration({
+      canonicalRoot: repo,
+      integrationRoot: state.integration.worktreeRoot,
+      integrationBranch: state.integration.branch,
+      integrationBaseCommit: baseCommit,
+      workerCommits: commits.map(row => ({ workerId: row.workerId, commit: row.headCommit })),
+    })).rejects.toThrow(/not integrated/i);
+    const merged = await mergeRecruitmentCommits({ canonicalRoot: repo, integrationRoot: state.integration.worktreeRoot, workers: [commits[1]] });
+    const verified = await verifyRecruitmentIntegration({
+      canonicalRoot: repo,
+      integrationRoot: state.integration.worktreeRoot,
+      integrationBranch: state.integration.branch,
+      integrationBaseCommit: merged.integrationHead,
+      workerCommits: commits.map(row => ({ workerId: row.workerId, commit: row.headCommit })),
+    });
+    expect(verified.headCommit).toBe(merged.integrationHead);
   });
 
   it('refuses cleanup outside its task root and removes only a verified managed worktree', async () => {

@@ -20,6 +20,19 @@
   min-width: 0;
 }
 
+.recruitment-team__heading-status {
+  display: grid;
+  justify-items: end;
+  gap: 0.45rem;
+}
+
+.recruitment-team__worker-count {
+  color: var(--text-primary, #202124);
+  font-size: 0.95rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .recruitment-team__heading h2,
 .recruitment-team__card-heading h3,
 .recruitment-team__assignment h4 {
@@ -45,11 +58,42 @@
 
 .recruitment-team__roster {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.75rem;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.recruitment-team__worker-bar {
+  border-left: 4px solid var(--accent, #6652bb);
+  padding: 0;
+  overflow: hidden;
+}
+
+.recruitment-team__worker-bar article {
+  padding: 0.85rem 0.9rem;
+}
+
+.recruitment-team__worker-bar-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid var(--border-color, #d0d4d9);
+}
+
+.recruitment-team__worker-bar-heading h3 {
+  min-width: 0;
+  margin: 0 auto 0 0;
+  overflow-wrap: anywhere;
+}
+
+.recruitment-team__worker-effort {
+  color: var(--text-secondary, #555b63);
+  font-size: 0.8rem;
+  text-transform: uppercase;
 }
 
 .recruitment-team__card {
@@ -150,6 +194,22 @@
 .recruitment-team__decision {
   border-left: 3px solid var(--warning-color, #b66a00);
   padding-left: 0.6rem;
+}
+
+.recruitment-team__steer {
+  justify-self: start;
+  min-height: 32px;
+  border: 1px solid var(--border-strong, #787e86);
+  border-radius: 6px;
+  padding: 0.3rem 0.65rem;
+  background: var(--raised, #f7f8fa);
+  color: inherit;
+  cursor: pointer;
+}
+
+.recruitment-team__steer[aria-pressed="true"] {
+  border-color: var(--accent, #6652bb);
+  background: var(--accent-wash, #efecfa);
 }
 
 .recruitment-team__error {

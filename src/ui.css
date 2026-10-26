@@ -1071,6 +1071,7 @@ body { min-width: 640px; min-height: 520px; }
 .settings-select-row { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:10px 0 6px; color:var(--text); font-size:13px; }
 .settings-select-row .choice-popover { min-width:210px; justify-content:space-between; }
 .settings-help { display:block; margin:0 0 9px; color:var(--muted); font-size:11px; line-height:1.55; }
+.settings-dialog .settings-help > input[type="checkbox"] { width:16px; height:16px; margin:2px 0 0; padding:0; accent-color:var(--accent); }
 .session-row { position:relative; display:flex; align-items:center; border-radius:7px; }
 .session-row:hover,.session-row.selected { background:var(--raised-hover); }
 .session-row .task-nav { min-width:0; flex:1; padding-right:34px; }
