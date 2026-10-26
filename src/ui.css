@@ -873,7 +873,7 @@ body { min-width: 640px; min-height: 520px; }
 .session-row .task-nav::before { display: none; }
 .session-row .task-title { font-size: 12px; }
 .session-row .task-nav.selected { background: #393939; }
-.session-row .session-actions-trigger { top: 2px; right: 2px; width: 23px; height: 25px; padding: 0; box-sizing: border-box; }
+.session-row .session-actions-trigger { top: 2px; right: 2px; width: 24px; height: 25px; padding: 0; box-sizing: border-box; }
 .sidebar-bottom { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0,1fr); align-items: center; gap: 4px; border-top: 1px solid #333; }
 .project-mini { min-width: 0; min-height: 36px; gap: 8px; padding: 0 7px; border: 0; color: #aaa; }
 .project-mini-text { font-size: 11px; }

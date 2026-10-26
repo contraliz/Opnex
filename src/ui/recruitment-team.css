@@ -20,6 +20,15 @@
   min-width: 0;
 }
 
+.recruitment-team__heading {
+  color: var(--text);
+}
+
+.recruitment-team__heading .recruitment-team__status {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
 .recruitment-team__heading-status {
   display: grid;
   justify-items: end;
@@ -27,7 +36,7 @@
 }
 
 .recruitment-team__worker-count {
-  color: var(--text-primary, #202124);
+  color: var(--text);
   font-size: 0.95rem;
   font-weight: 700;
   white-space: nowrap;
