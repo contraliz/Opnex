@@ -21,11 +21,12 @@ function sameWorkspaceRoot(left:string|undefined,right:string|undefined){
 export function agentMemArtifactUsageGaps(audit:AgentMemAudit|undefined,pass:TaskPass,role:'simple'|'worker',threadId:string,turnId:string,receipt:Receipt){
   if(!audit||!audit.recorded)return ['This pass has no current AgentMem audit record.'];
   if(audit.identityStatus!=='verified'||audit.verifiedProjectId!==audit.selectedProjectId||!sameWorkspaceRoot(audit.verifiedRoot,audit.workspaceRoot))return ['The selected AgentMem project and workspace identity are not verified.'];
-  if(!audit.verifiedRepositoryId)return ['The selected workspace has no verified repository-index identity.'];
+  const repositoryId=audit.repositories?.find(row=>row.threadId===threadId)?.repositoryId||audit.verifiedRepositoryId;
+  if(!repositoryId)return ['The selected workspace has no verified repository-index identity.'];
   if(audit.modelMcpStatus==='unavailable'||audit.modelMcpStatus==='disabled')return ['The AgentMem MCP catalog was unavailable to this execution role.'];
   const calls=callsForTurn(audit,role,threadId,turnId);
   const knowledgeReads=calls.filter(call=>call.service==='knowledge'&&call.operation==='read'&&call.projectId===audit.verifiedProjectId);
-  const repositoryReads=calls.filter(call=>call.service==='repository_index'&&call.operation==='read'&&call.repositoryId===audit.verifiedRepositoryId&&['repository_search','repository_retrieve'].includes(call.method));
+  const repositoryReads=calls.filter(call=>call.service==='repository_index'&&call.operation==='read'&&call.repositoryId===repositoryId&&['repository_search','repository_retrieve'].includes(call.method));
   if(!knowledgeReads.length)return ['The model did not complete a knowledge-base read against the selected project during the artifact-producing turn.'];
   if(!repositoryReads.length)return ['The model did not search or retrieve code from the selected repository index during the artifact-producing turn.'];
   const kbWrite=hasOperation(calls,'knowledge','write');
@@ -34,7 +35,7 @@ export function agentMemArtifactUsageGaps(audit:AgentMemAudit|undefined,pass:Tas
   const sourceChange=pass.turnSourceChanges?.find(row=>row.role===role&&row.threadId===threadId&&row.turnId===turnId);
   if(!sourceChange||sourceChange.status!=='verified')return [`A complete before/after workspace snapshot is unavailable for this artifact-producing turn. ${sourceChange?.reason||'The selected workspace change state is unverified.'}`];
   const changed=sourceChange.changedPaths.length>0||sourceChange.repositoryRevisionChanged;
-  const resync=calls.find(call=>call.service==='repository_index'&&call.operation==='write'&&call.method==='repository_resync'&&call.repositoryId===audit.verifiedRepositoryId);
+  const resync=calls.find(call=>call.service==='repository_index'&&call.operation==='write'&&call.method==='repository_resync'&&call.repositoryId===repositoryId);
   if(changed){
     if(!resync)return ['Repository files changed or the change snapshot was truncated, but the model did not complete a repository-index resync in this turn.'];
     const mutationTimes=[...pass.liveActivity||[]].filter(item=>item.threadId===threadId&&item.turnId===turnId&&item.kind==='tool'&&item.status==='completed'&&['commandExecution','fileChange'].includes(item.itemType)).map(item=>Date.parse(item.updatedAt));

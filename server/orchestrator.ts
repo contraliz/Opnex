@@ -1,7 +1,7 @@
 import { AppServer, AppServerRequestError, approvalResponse, extractAssistantText, normalCodexSqliteHome, type Model } from './codex.js';
 import { AgentMem, agentMemFailureReleased, agentMemRecordFailure, agentMemRecordState, safeError, type AgentMemCallAudit } from './agentmem.js';
-import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, receiptSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerContextPlanJsonSchema, workerContextPlanSchema, workerContextSummaryJsonSchema, workerContextSummarySchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
-import { addMessage, beginPass, currentPass, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
+import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, receiptSchema, recruitmentToolSchema, recruitmentWorkersSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerContextPlanJsonSchema, workerContextPlanSchema, workerContextSummaryJsonSchema, workerContextSummarySchema, workerOutcomeFailureSummary, workerOutcomeJsonSchema, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
+import { addMessage, beginPass, cancelRecruitmentTeamState, claimRecruitmentCompletion, claimRecruitmentIntegration, currentPass, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, sealRecruitmentTeam, type RecruitmentIntegration, type RecruitmentTeam, type RecruitmentWorker, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
 import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
 import { applyCodexReasoningNotification, beginReasoningTurn } from './reasoning.js';
@@ -27,6 +27,8 @@ import { getSkill, getSkillRevision, recordedSkillLoads, recordedSkillSaves } fr
 import { skillLibraryMcpServerConfig } from './skill-library-mcp-config.js';
 import type { SavedSkillSnapshot } from './state.js';
 import { parseExplicitSkillCommands } from './skill-commands.js';
+import { mergeRecruitmentCommits, prepareRecruitmentWorktrees, readRecruitmentBranchHead, validateRecruitmentRoot, verifyRecruitmentIntegration } from './recruitment-git.js';
+import { rebaseRecruitmentAssignment } from './recruitment-scope.js';
 
 async function snapshotSelectedSkills(ids:string[]):Promise<SavedSkillSnapshot[]>{
   const unique=[...new Set(ids)];if(unique.length>12)throw new Error('Choose up to 12 saved skills for one pass.');
@@ -53,8 +55,11 @@ const attachedThreads=new Set<string>();
 const usageReadSequence=new Map<string,number>();
 const allowanceBaselines=new Map<string,AllowanceSnapshot|null>();
 const routerToolViolations=new Set<string>();
+const recruitmentTool=[{namespace:'pseudoharness',name:'recruit_workers',description:'Recruit one sealed team of 1–9 execution workers for this hard task. Each worker must receive a complete bounded assignment, reasoning effort high, xhigh, or max, and explicit skill references. The app validates scopes and creates isolated Git worktrees. Call once with the full team; do not delegate by text or start a single-worker assignment.',inputSchema:recruitmentToolSchema}];
+function recruitmentToolResponse(team:RecruitmentTeam){return {success:true,contentItems:[{type:'inputText',text:JSON.stringify({accepted:true,teamId:team.teamId,status:team.status,workerCount:team.workers.length,integratorQueued:true,canonicalProjectRoot:team.canonicalProjectRoot,agentmemProjectId:team.agentmemProjectId,workers:team.workers.map(worker=>({workerId:worker.workerId,name:worker.name,status:worker.status,effort:worker.effort,branch:worker.branch,worktreeRoot:worker.worktreeRoot}))})}]};}
 const workerWorkspaceTargets=new Map<string,{taskId:string;passId:string}>();
 const sourceFingerprints=new Map<string,TurnSourceFingerprint>();
+const recruitmentIntegrationClaims=new Set<string>();
 function sourceFingerprintKey(taskId:string,passId:string,role:'simple'|'worker',threadId:string,turnId:string){return `${taskId}:${passId}:${role}:${threadId}:${turnId}`;}
 async function recordTurnSourceChanges(taskId:string,passId:string,role:WorkflowRole,threadId:string,turnId:string){
   if(role!=='simple'&&role!=='worker')return;
@@ -68,7 +73,8 @@ async function recordTurnSourceChanges(taskId:string,passId:string,role:Workflow
 const effortList=(m:Model)=>((m as any).supportedReasoningEfforts||[]).map((x:any)=>typeof x==='string'?x:x.reasoningEffort);
 const serviceTierList=(m:Model)=>Array.isArray((m as any).serviceTiers)?(m as any).serviceTiers.map((x:any)=>x.id):[];
 function roleThreadId(task:Task,role:WorkflowRole){return task[`${role}ThreadId` as keyof Task] as string|undefined;}
-function roleForThread(task:Task,threadId:string):WorkflowRole|undefined{return (['router','direct','simple','orchestrator','worker'] as const).find(role=>roleThreadId(task,role)===threadId);}
+function roleForThread(task:Task,threadId:string):WorkflowRole|undefined{return (['router','direct','simple','orchestrator','worker'] as const).find(role=>roleThreadId(task,role)===threadId)||(recruitmentTarget(task,threadId)?'worker':undefined);}
+function recruitmentTarget(task:Task,threadId:string):{pass:TaskPass;team:RecruitmentTeam;record:RecruitmentWorker;integration:false}|{pass:TaskPass;team:RecruitmentTeam;record:RecruitmentIntegration;integration:true}|undefined{for(const pass of task.passes||[]){const team=pass.recruitmentTeam;if(!team)continue;const worker=team.workers.find(row=>row.threadId===threadId);if(worker)return {pass,team,record:worker,integration:false};if(team.integration.threadId===threadId)return {pass,team,record:team.integration,integration:true};}return undefined;}
 function appServerForRole(_role:WorkflowRole){return agentCodex;}
 function routedPassIsCurrent(taskId:string,passId:string){const task=getTask(taskId);return !!task&&task.phase!=='cancelled'&&task.currentPassId===passId;}
 function serializeComposerSubmission<T>(taskId:string,run:()=>Promise<T>):Promise<T>{const previous=composerSubmissionQueues.get(taskId)||Promise.resolve();const current=previous.catch(()=>undefined).then(run);composerSubmissionQueues.set(taskId,current);return current.finally(()=>{if(composerSubmissionQueues.get(taskId)===current)composerSubmissionQueues.delete(taskId);});}
@@ -163,9 +169,10 @@ async function withAgentMemPassScope<T>(task:Task,role:'direct'|'simple'|'orches
   });
 }
 function agentMemBootstrapPending(pass:TaskPass){return !!pass.agentmemAudit?.contexts.some(context=>context.status==='pending'&&/no KB is registered yet/i.test(context.resultSummary||''));}
-function requireAuditedAgentMemBootstrap(task:Task,pass:TaskPass,role:'simple'|'orchestrator',threadId:string,turnId:string){
+function requireAuditedAgentMemBootstrap(task:Task,pass:TaskPass,role:'simple'|'orchestrator',threadId:string,turnId:string,mode:'register'|'repository'='register'){
   const methods=new Set((pass.agentmemAudit?.calls||[]).filter(call=>call.source==='model'&&call.role===role&&call.threadId===threadId&&call.turnId===turnId&&call.status==='completed').map(call=>call.method));
-  const missing=['projects','repository_register','index_project','attach_project','repository_search'].filter(method=>!methods.has(method));
+  const required=mode==='register'?['projects','repository_register','index_project','attach_project','repository_search']:['repository_register','index_project','repository_search'];
+  const missing=required.filter(method=>!methods.has(method));
   if(missing.length)throw new Error(`AgentMem setup for this folder is not complete. The execution agent must make audited model calls for: ${missing.join(', ')}. No app-side registration or task-ledger bootstrap was performed.`);
 }
 async function verifyAgentMemRepositoryAfterSetup(task:Task,passId:string,role:'simple'|'orchestrator'){
@@ -175,9 +182,9 @@ async function verifyAgentMemRepositoryAfterSetup(task:Task,passId:string,role:'
     await mutate(state=>{const audit=state.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(!audit)return;audit.identityStatus='verified';audit.verifiedProjectId=task.agentmemProjectId;audit.verifiedRoot=task.userRoot;audit.verifiedRepositoryId=repo.repository_id;for(const call of audit.calls)if(call.source==='model'&&call.service==='repository_index'&&!call.repositoryId)call.repositoryId=repo.repository_id;});
   },passId);
 }
-async function agentMemModelConfig(task:Task,role:'direct'|'simple'|'orchestrator'|'worker',passId:string){
+async function agentMemModelConfig(task:Task,role:'direct'|'simple'|'orchestrator'|'worker',passId:string,repositoryRoot=task.userRoot){
   if(!isAgentMemEnabled(task.agentmemProjectId))return undefined;
-  try{const mode=await agentmem.setupMode(task.agentmemProjectId,task.userRoot);if(role==='direct'&&mode!=='ready')return undefined;const run=()=>agentmem.modelMcpServerConfig(task.agentmemProjectId,task.userRoot);const pass=task.passes?.find(row=>row.id===passId);const config=mode==='register'&&pass?await agentmem.withAuditScope({taskId:task.id,passId,role,purpose:'model_agentmem_mcp_identity',projectId:task.agentmemProjectId,workspaceRoot:task.userRoot,contextId:randomUUID()},run):await withAgentMemPassScope(task,role,'model_agentmem_mcp_identity',run,passId);if(!config)return undefined;const repositoryId=config.env.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID;await mutate(state=>{const audit=state.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit&&typeof repositoryId==='string'&&repositoryId)audit.verifiedRepositoryId=repositoryId;});return config;}
+  try{const mode=await agentmem.setupMode(task.agentmemProjectId,task.userRoot);if(role==='direct'&&mode!=='ready')return undefined;const run=()=>agentmem.modelMcpServerConfig(task.agentmemProjectId,task.userRoot,repositoryRoot);const pass=task.passes?.find(row=>row.id===passId);const purpose=path.resolve(repositoryRoot)===path.resolve(task.userRoot)?'model_agentmem_mcp_identity':'model_agentmem_worktree_repository';const config=mode==='register'&&pass?await agentmem.withAuditScope({taskId:task.id,passId,role,purpose,projectId:task.agentmemProjectId,workspaceRoot:task.userRoot,contextId:randomUUID()},run):await withAgentMemPassScope(task,role,purpose,run,passId);if(!config)return undefined;const repositoryId=config.env.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID;await mutate(state=>{const audit=state.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit&&typeof repositoryId==='string'&&repositoryId)audit.verifiedRepositoryId=repositoryId;});return config;}
   catch(error){
     const message=safeError(error),identityMismatch=/root does not match|not registered|cannot be verified/i.test(message);
     await mutate(state=>{const audit=state.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit)audit.identityStatus=identityMismatch?'mismatch':'unavailable';});
@@ -192,6 +199,7 @@ async function recordAgentMemMcpAvailability(taskId:string,passId:string,role:Wo
   await mutate(state=>{const audit=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit&&audit.modelMcpStatus!=='observed')audit.modelMcpStatus=status;});
   if(status==='unavailable')throw new Error("The selected project's AgentMem knowledge and repository-index read/write tools are not available in this execution thread. Refresh the Codex MCP catalog or choose a verified project with both registered services; no work was reported complete.");
 }
+async function bindAgentMemRepository(taskId:string,passId:string,threadId:string,root:string,repositoryId:string,purpose:string){await mutate(state=>{const audit=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(!audit||!repositoryId)return;const bindings=audit.repositories??(audit.repositories=[]);const existing=bindings.find(row=>row.threadId===threadId);const record={root,repositoryId,threadId,purpose,registeredAt:new Date().toISOString()};if(existing)Object.assign(existing,record);else bindings.push(record);});}
 async function verifySkillMcpAvailability(threadId:string){const rows=await agentCodex.mcpServerStatus(threadId);const server=rows.find((row:any)=>String(row?.name||row?.serverName||'').toLowerCase()==='pseudoharness_skills');const tools=server?.tools;const names=Array.isArray(tools)?tools.map((tool:any)=>String(tool?.name||'')):Object.keys(tools||{});if(!['skills_list','skills_search','skills_load','skills_read_file','skills_save'].every(name=>names.includes(name)))throw new Error('The Pseudoharness saved-skills library tools are not available in this execution thread. Refresh the app-server MCP catalog; no execution turn was started.');}
 function directContextForPrompt(value:any,query:string){
   const latinWords=(query.toLocaleLowerCase().match(/[a-z0-9]{3,}/g)||[]).filter(word=>!['what','which','that','this','with','from','about','does','have','into','tell','show','explain','project'].includes(word));
@@ -296,7 +304,7 @@ async function startHardRoute(task:Task,reason?:string){
   const detail=reason||escalation?`\n\nROUTE ESCALATION / CONSERVATIVE FALLBACK:\n${reason||escalation?.reason}\nCOMPLETED ACTIONS (preserve; do not repeat):\n${JSON.stringify(escalation?.completedActions||[])}\nEVIDENCE:\n${JSON.stringify(escalation?.evidence||[])}`:'';
   await beginAssignment(task,undefined,`${request}${detail}`);
 }
-async function startOrchestrator(task:Task,payload:string,action:'assignment'|'review',allowDirectResponse=false) {
+async function startOrchestrator(task:Task,payload:string,action:'assignment'|'review'|'agentmem_setup',allowDirectResponse=false) {
   const state=getState(); const modelId=state.settings.orchestratorModel; requireModel(modelId,state.settings.orchestratorEffort);
   await ensureAgentAuth();
   const pass=currentPass(task);if(pass?.agentContextVersion!==1)throw new Error('This pass predates the current Pseudoharness role configuration. Send a follow-up to start a fresh pass.');
@@ -305,20 +313,21 @@ async function startOrchestrator(task:Task,payload:string,action:'assignment'|'r
   const input=buildOrchestratorInput(policy,payload);
   const mcpConfig=pass?await agentMemModelConfig(task,'orchestrator',pass.id):undefined;
   const skillsConfig=skillLibraryMcpServerConfig({taskId:task.id,role:'orchestrator'});
-  if(!task.orchestratorThreadId) task.orchestratorThreadId=await agentCodex.startThread('orchestrator',task.userRoot,modelId,state.settings.orchestratorEffort,approvalPolicy,policy,undefined,mcpConfig,skillsConfig);
-  else if(!attachedThreads.has(task.orchestratorThreadId)) await agentCodex.resumeThread(task.orchestratorThreadId,approvalPolicy,'orchestrator',task.userRoot,policy,mcpConfig,skillsConfig);
+  const recruitmentEnabled=action==='assignment'&&!allowDirectResponse;
+  if(!task.orchestratorThreadId) task.orchestratorThreadId=await agentCodex.startThread('orchestrator',task.userRoot,modelId,state.settings.orchestratorEffort,approvalPolicy,policy,recruitmentEnabled?recruitmentTool:undefined,mcpConfig,skillsConfig);
+  else if(!attachedThreads.has(task.orchestratorThreadId)) await agentCodex.resumeThread(task.orchestratorThreadId,approvalPolicy,'orchestrator',task.userRoot,policy,mcpConfig,skillsConfig,recruitmentEnabled?recruitmentTool:undefined);
   attachedThreads.add(task.orchestratorThreadId);
   await verifySkillMcpAvailability(task.orchestratorThreadId);
   if(pass)await recordAgentMemMcpAvailability(task.id,pass.id,'orchestrator',task.orchestratorThreadId);
-  task.phase=action==='assignment'?'planning':'reviewing'; task.activeRole='orchestrator'; task.activeModelId=modelId;task.activeEffort=state.settings.orchestratorEffort;task.activeTurnId=undefined; task.error=undefined;task.allowDirectResponse=action==='assignment'&&allowDirectResponse;
+  task.phase=action==='review'?'reviewing':'planning'; task.activeRole='orchestrator'; task.activeModelId=modelId;task.activeEffort=state.settings.orchestratorEffort;task.activeTurnId=undefined; task.error=undefined;task.allowDirectResponse=action==='assignment'&&allowDirectResponse;
   await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
   allowanceBaselines.set(task.orchestratorThreadId!,await readAllowanceSnapshot());
   const carried=attachmentUserInput(pass?.attachments||[]);const selected=pass?.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (explicitly authorized for this pass; immutable snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';const enrichedInput=`${input}${selected}${carried.text}`;
   const response=action==='review'
     ? await agentCodex.reviewTurn(task.orchestratorThreadId,enrichedInput,modelId,state.settings.orchestratorEffort,approvalPolicy,carried.images)
-    : await agentCodex.startTurn(task.orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],approvalPolicy,allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,undefined,carried.images);
+    : await agentCodex.startTurn(task.orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],approvalPolicy,action==='agentmem_setup'||recruitmentEnabled?null:allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,undefined,carried.images);
   const live=getTask(task.id); if(live&&live.phase==='cancelled')return;
-  const responseTurnId=response.turn?.id||response.turnId;if(responseTurnId)await bindAgentMemAuditTurn(task.id,pass.id,'orchestrator',task.orchestratorThreadId!,responseTurnId);
+  const responseTurnId=response.turn?.id||response.turnId;if(responseTurnId){await bindAgentMemAuditTurn(task.id,pass.id,'orchestrator',task.orchestratorThreadId!,responseTurnId);if(action==='agentmem_setup')await mutate(s=>{const current=s.tasks.find(x=>x.id===task.id)?.passes?.find(x=>x.id===pass.id);if(current){current.agentmemSetupMode=current.agentmemSetupMode||'register';current.agentmemSetupTurnId=responseTurnId;}});}
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;t.activeTurnId=responseTurnId||undefined; t.activeRole='orchestrator';if(t.activeTurnId)beginReasoningTurn(t,'orchestrator',task.orchestratorThreadId!,t.activeTurnId,modelId,state.settings.orchestratorEffort);});
   const id=response.turn?.id||response.turnId;if(id) await processDeferred(task.id,id);
 }
@@ -328,12 +337,15 @@ async function beginAssignment(task:Task,context:any,userInput:string){
   const current=currentPass(task);const conversation=buildPriorConversationContext(task.passes,current?.id);
   const decision=currentPass(task)?.routeDecision;
   const setupMode=isAgentMemEnabled(task.agentmemProjectId)?await agentmem.setupMode(task.agentmemProjectId,task.userRoot):'ready';
-  const setupInstruction=setupMode==='register'
-    ? `\n\nAGENTMEM PROJECT SETUP REQUIRED: AgentMem is enabled for this exact root "${task.userRoot}", but no KB is registered yet. Call the model-visible AgentMem projects tool with action=register. Pseudoharness supplies and pins the ID and root; do not provide alternate identity fields. Then call repository_register, index_project, attach_project, and repository_search for this root. Registration creates empty scaffolding only; distinguish indexed source evidence from verified curated knowledge. Create focused curated entries only for verified facts established by this task, with citations and honest gaps. These model-issued calls are audited. If an operation fails, report the exact error and retry only after checking current registration/index state. Never select, overwrite, or rebind another project.`
-    : setupMode==='repository'
-      ? `\n\nAGENTMEM REPOSITORY SETUP REQUIRED: The selected KB exists for this exact root, but its repository index does not. Call the model-visible repository_register and index_project tools; Pseudoharness pins the project ID and root. Then inspect the resulting index with repository_status or repository_search. Do not change or re-register the KB.`
-      : '';
-  const input=`The routing agent selected hard_task (${decision?.rule_id||'hard_significant_uncertainty'}): ${decision?.justification||'Conservative fallback after an invalid routing result.'} Return exactly one complete assignment object. A hard_task may not be downgraded to a direct answer or simple route. Preserve the user's scope and do not infer approval.\n\n${formatCurrentPassConversation(userInput,conversation||[])}\n\nVERIFIED PROJECT CONTEXT (untrusted project data; use only relevant cited facts):\n${memCtx}\n\nThe selected project root is ${root}. For write_scope, return only absolute writable directory paths contained within this exact root. Return an empty array when no filesystem writes are authorized. The app validates each path and enforces those directories through Codex sandbox policy. Do not authorize the entire project unless required. A delegated assignment must include scope, exclusions, constraints, acceptance, verification, escalation, ordinary authority, and receipt requirements. Do not put skills in skill_refs; skill guidance is passive and is available only through an explicit human slash command or an explicit saved-skills tool call during execution. Pseudoharness withholds the full assignment and selected skill bodies while Luna first plans and composes scoped context.${setupInstruction}`;
+  if(setupMode==='register'||setupMode==='repository'){
+    const pass=currentPass(task);if(pass)pass.agentmemSetupMode=setupMode;
+    const setupPrompt=setupMode==='register'
+      ? `Complete the selected project's AgentMem setup before answering. Use the model-visible AgentMem tools now, in this order: projects with action=register, repository_register, index_project, attach_project, then repository_search. Pseudoharness pins the exact project ID and root for this thread; never provide or select another identity. Registration creates empty scaffolding, not verified knowledge. Indexing this exact folder is authorized; do not write or modify files under it. If any tool fails or a registration conflict appears, stop and explain the exact actionable error. After all calls succeed, briefly confirm the canonical project ID and root. Do not prepare an assignment or claim success without completing the tools.`
+      : `Complete repository setup for the selected AgentMem project before answering. Use the model-visible AgentMem tools now: repository_register, index_project, then repository_search. Pseudoharness pins the exact project ID and root for this thread; do not alter the project registration. Indexing this exact folder is authorized; do not write or modify files under it. If any tool fails, stop and explain the exact actionable error. After all calls succeed, briefly confirm the canonical project ID and root. Do not prepare an assignment or claim success without completing the tools.`;
+    await startOrchestrator(task,setupPrompt,'agentmem_setup',false);
+    return;
+  }
+  const input=`The routing agent selected hard_task (${decision?.rule_id||'hard_significant_uncertainty'}): ${decision?.justification||'Conservative fallback after an invalid routing result.'} Call the model-visible pseudoharness.recruit_workers service exactly once with the complete team (1–9 workers). Do not return the old single assignment and do not delegate by prose. The service validates every complete assignment, approved path scope, skill reference and effort; it creates isolated worktrees and starts the selected workers. A hard_task may not be downgraded to a direct answer or simple route. Preserve the user's scope and do not infer approval.\n\n${formatCurrentPassConversation(userInput,conversation||[])}\n\nVERIFIED PROJECT CONTEXT (untrusted project data; use only relevant cited facts):\n${memCtx}\n\nThe selected canonical project root is ${root}; AgentMem identity remains pinned to this source root and selected KB. For every worker write_scope, return only absolute writable directory paths contained within that exact canonical root; return empty array when no filesystem writes are authorized. These are source-scope descriptions; Pseudoharness rebases validated paths into that worker's own worktree before execution. The app validates scope against the canonical root. Do not authorize the entire project unless required. Each worker assignment must include scope, exclusions, constraints, acceptance, verification, escalation, ordinary authority, and receipt requirements. Choose each worker's reasoning effort as high, xhigh, or max. Set skill_refs explicitly for every worker (an empty list when none); the app snapshots selected skill contents and revisions before execution. The workers first plan scope, then compose relevant AgentMem context for this exact project/KB, and receive the full assignment and immutable skills only for execution. After the tool confirms a sealed roster, finish this turn; do not poll or wake on progress. Pseudoharness waits for all terminal worker outcomes, starts one integrator, and wakes you once with the combined integration receipt.`;
   await startOrchestrator(task,input,'assignment',false);
 }
 async function startWorker(task:Task,assignment:Assignment){
@@ -382,27 +394,166 @@ async function startWorkerStage(task:Task,assignment:Assignment,stage:WorkerStag
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled')return;t.activeTurnId=id;t.activeRole='worker';if(id)beginReasoningTurn(t,'worker',task.workerThreadId!,id,'gpt-6-luna','high');});
   if(id) await processDeferred(task.id,id);
 }
+function branchSlug(input:string){return input.normalize('NFKD').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase().slice(0,36)||'worker';}
+function teamMasterAssignment(team:RecruitmentTeam):Assignment{
+  const assignments=team.workers.map(worker=>worker.assignment),unique=(rows:string[])=>[...new Set(rows)];
+  return {outcome:`Coordinate and integrate ${team.workers.length} authorized worker contributions for the original user request.`,deliverable:assignments.map((row,index)=>`${team.workers[index].name}: ${row.deliverable}`).join('\n'),read_scope:unique(assignments.flatMap(row=>row.read_scope)),write_scope:unique(assignments.flatMap(row=>row.write_scope)),exclusions:unique(assignments.flatMap(row=>row.exclusions)),constraints:unique(assignments.flatMap(row=>row.constraints)),context_refs:unique(assignments.flatMap(row=>row.context_refs)),acceptance:unique(assignments.flatMap(row=>row.acceptance)),verification:unique(assignments.flatMap(row=>row.verification)),ordinary_authority:unique(assignments.flatMap(row=>row.ordinary_authority)),escalation_conditions:unique(assignments.flatMap(row=>row.escalation_conditions)),receipt_requirements:unique(assignments.flatMap(row=>row.receipt_requirements))};
+}
+function workerReceiptFromStatus(worker:RecruitmentWorker):Receipt{
+  const failed=worker.status==='failed',cancelled=worker.status==='cancelled';
+  return {status:failed?'failed':cancelled?'blocked':'incomplete',result:worker.error||`Worker ${worker.name} ended as ${worker.status} before returning a validated execution receipt.`,changes:[],acceptance:{met:[],unmet:[...worker.assignment.acceptance]},verification:[{check:'Worker execution receipt',result:'failed',evidence:`Terminal status: ${worker.status}.` }],risks:[worker.error||`No verified worker receipt was produced (${worker.status}).`],knowledge:{consulted:[],updated:[]},decision_required:null};
+}
+function integrationReceiptFromError(error:string):Receipt{return {status:'failed',result:`Integration could not proceed: ${error}`,changes:[],acceptance:{met:[],unmet:['Integrate and verify every selected worker contribution.']},verification:[{check:'Worker branch merge and integration',result:'failed',evidence:error}],risks:[error],knowledge:{consulted:[],updated:[]},decision_required:null};}
+async function recruitWorkers(taskId:string,raw:unknown,toolCallId:string){
+  const task=getTask(taskId),pass=task&&currentPass(task);if(!task||!pass||task.phase!=='planning'||!task.orchestratorThreadId)throw new Error('Recruitment is available only to the active hard-task orchestrator turn.');
+  const prior=pass.recruitmentTeam;if(prior){if(prior.toolCallIds.includes(toolCallId))return prior;if(prior.sealed){await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam;if(current&&!current.toolCallIds.includes(toolCallId))current.toolCallIds.push(toolCallId);});return getTask(taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam||prior;}}
+  const plan=recruitmentWorkersSchema.parse(raw);const names=new Set<string>();
+  const base=task.userRoot;await validateRecruitmentRoot(base,'HEAD');
+  const teamId=randomUUID(),passId=pass.id,workspaceParent=path.join(stateDirectory(),'recruitment-workspaces',task.id,pass.id),workers:RecruitmentWorker[]=[];await mkdir(path.dirname(workspaceParent),{recursive:true});
+  for(const selected of plan.workers){const key=selected.name.trim().toLocaleLowerCase();if(names.has(key))throw new Error('Worker names must be unique within a team.');names.add(key);assignmentWriteRoots(selected.assignment,base);const skills=await snapshotSelectedSkills(selected.skill_refs);const workerId=randomUUID();workers.push({workerId,name:selected.name.trim(),assignment:structuredClone({...selected.assignment,skill_refs:undefined}),effort:selected.effort||'high',skills,branch:`recruitment/${branchSlug(task.title)}-${branchSlug(selected.name)}-${workerId.slice(0,8)}`,worktreeRoot:'',status:'queued'});}
+  const integrationId=randomUUID(),integrationBranch=`recruitment/${branchSlug(task.title)}-integration-${integrationId.slice(0,8)}`;
+  const prepared=await prepareRecruitmentWorktrees({canonicalRoot:base,taskRoot:workspaceParent,baseRef:'HEAD',workers:workers.map(worker=>({workerId:worker.workerId,branch:worker.branch})),integrationBranch});
+  for(const worker of workers){const actual=prepared.workers.find(row=>row.workerId===worker.workerId);if(!actual)throw new Error(`Git worktree preparation omitted worker ${worker.workerId}; no worker turns were started.`);worker.worktreeRoot=actual.worktreeRoot;}
+  const team:RecruitmentTeam={teamId,passId,createdAt:new Date().toISOString(),canonicalProjectRoot:base,agentmemProjectId:task.agentmemProjectId,workspaceParent,baseRef:'HEAD',baseCommit:prepared.baseCommit,status:'recruiting',sealed:false,workers,integration:{status:'queued',branch:integrationBranch,worktreeRoot:prepared.integration.worktreeRoot,assignment:{outcome:'Integrate the complete worker team for the original user request.',deliverable:'Review every worker receipt and integrate their verified commits in the isolated integration worktree.',read_scope:workers.flatMap(row=>row.assignment.read_scope),write_scope:workers.flatMap(row=>row.assignment.write_scope),exclusions:workers.flatMap(row=>row.assignment.exclusions),constraints:workers.flatMap(row=>row.assignment.constraints),context_refs:workers.flatMap(row=>row.assignment.context_refs),acceptance:workers.flatMap(row=>row.assignment.acceptance),verification:workers.flatMap(row=>row.assignment.verification),ordinary_authority:['Resolve only conflicts within the assigned integration worktree and validated team scopes.'],escalation_conditions:['Escalate when a conflict or missing artifact cannot be safely resolved within the assigned scope.'],receipt_requirements:['Report an honest complete integration receipt with verification and remaining risks.']},effort:'high',skills:[...new Map(workers.flatMap(row=>row.skills).map(skill=>[`${skill.id}@${skill.revision}`,skill])).values()]},toolCallIds:[toolCallId],completionWakeSent:false};
+  const master=teamMasterAssignment(team);const roots=assignmentWriteRoots(master,base);const work=isAgentMemEnabled(task.agentmemProjectId)?(task.agentmemTaskId&&task.agentmemLease?{taskId:task.agentmemTaskId,lease:task.agentmemLease}:await withAgentMemPassScope(task,'orchestrator','recruitment_work_lease',()=>agentmem.createWork(task.agentmemProjectId,titleFor(task),master.outcome,roots.map(x=>path.relative(base,x)||'.'),master.acceptance),passId)):undefined;
+  sealRecruitmentTeam(team);
+  await mutate(state=>{const live=state.tasks.find(row=>row.id===taskId),current=live?.passes?.find(row=>row.id===passId);if(!live||!current||live.phase!=='planning')throw new Error('The hard-task pass changed before recruitment could be sealed.');current.recruitmentTeam=team;live.assignment=master;live.resolution='delegated';live.allowDirectResponse=false;live.phase='worker_running';live.activeRole=undefined;live.activeTurnId=undefined;if(work){live.agentmemTaskId=work.taskId;live.agentmemLease=work.lease;}addMessage(live,'orchestrator',`Recruitment team sealed with ${workers.length} worker${workers.length===1?'':'s'}.`);});
+  await Promise.all(workers.map(async worker=>{try{await startRecruitmentStage(taskId,passId,worker.workerId,'context_plan');}catch(error){const detail=safeError(error);await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam;const row=current?.workers.find(item=>item.workerId===worker.workerId);if(!current||!row)return;row.status='failed';row.error=detail;row.receipt=workerReceiptFromStatus(row);});}}));
+  void maybeStartRecruitmentIntegration(taskId,passId);
+  return getTask(taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam||team;
+}
+async function startRecruitmentStage(taskId:string,passId:string,workerId:string,stage:WorkerStage,context?:{status?:WorkerContextStatus;summary?:string},integration=false){
+  const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam;if(!task||!pass||!team||team.passId!==passId||!team.sealed||task.phase==='cancelled')return;
+  const record=integration?team.integration:team.workers.find(row=>row.workerId===workerId);if(!record||integration&&team.status!=='integrating'||!integration&&!['running','recruiting'].includes(team.status))return;
+  requireModel('gpt-6-luna',record.effort);
+  const canonical=team.canonicalProjectRoot,workspace=record.worktreeRoot,assignment=record.assignment,localAssignment=rebaseRecruitmentAssignment(assignment,canonical,workspace),writeRoots=stage==='execute'?assignmentWriteRoots(localAssignment,workspace):[];
+  let prompt:string,schema:unknown;
+  if(stage==='context_plan'){prompt=workerContextPlanPrompt(assignment,canonical);schema=workerContextPlanJsonSchema;}
+  else if(stage==='context_compose'){prompt=workerContextComposePrompt(workerScopeSummary(assignment,canonical),context?.status||{status:'unavailable',detail:'No composed context was returned.'});schema=workerContextSummaryJsonSchema;}
+  else{const receipts=integration?JSON.stringify(team.workers.map(row=>({workerId:row.workerId,name:row.name,status:row.status,branch:row.branch,headCommit:row.headCommit,receipt:row.receipt||workerReceiptFromStatus(row),error:row.error})),null,2):'';const selected=record.skills.length?`\n\nEXPLICITLY SELECTED IMMUTABLE SKILL SNAPSHOTS:\n${skillSnapshotsText(record.skills)}`:'';const composed=context?.summary||record.contextSummary||'No composed project context was provided.';prompt=integration?`STAGE 3 OF 3 — INTEGRATE. The app composed scoped AgentMem context for the canonical selected project/KB and now provides the complete integration assignment, every worker's terminal outcome and receipt, and immutable selected skills. Review all contributions and their branches already merged into this isolated integration worktree. Resolve conflicts only within the validated write scope. Run relevant verification; commit the final integrated changes on this integration branch. Do not push, open or merge a remote pull request, modify the user's canonical checkout, or claim unverified work. Report a complete structured receipt, or an honest blocked/failed receipt if integration cannot be safely completed.\n\nCOMPOSED CONTEXT:\n${composed}\n\nASSIGNMENT:\n${JSON.stringify(localAssignment,null,2)}\n\nWORKER RECEIPTS (complete roster):\n${receipts}\n\nSKILLS:\n${selected||'No skills were explicitly selected.'}\n\nUse Pseudoharness's passive Skills library only via explicit search/load calls and pin any chosen revisions in the receipt. Return one strict worker outcome.`:workerExecutePrompt(localAssignment,composed,selected);schema=workerOutcomeJsonSchema;}
+  const approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;await ensureAgentAuth();
+  const mcpConfig=await agentMemModelConfig(task,'worker',passId,workspace);const skillsConfig=skillLibraryMcpServerConfig({taskId,role:'worker'});
+  if(!record.threadId)record.threadId=await agentCodex.startThread('worker',workspace,'gpt-6-luna',record.effort,approvalPolicy,undefined,workerWorkspaceTool,mcpConfig,skillsConfig);
+  else if(!attachedThreads.has(record.threadId))await agentCodex.resumeThread(record.threadId,approvalPolicy,'worker',workspace,undefined,mcpConfig,skillsConfig,workerWorkspaceTool);
+  attachedThreads.add(record.threadId);await verifySkillMcpAvailability(record.threadId);await recordAgentMemMcpAvailability(taskId,passId,'worker',record.threadId,!!mcpConfig);if(typeof mcpConfig?.env?.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID==='string')await bindAgentMemRepository(taskId,passId,record.threadId,workspace,mcpConfig.env.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID,integration?'recruitment_integration':'recruitment_worker');workerWorkspaceTargets.set(record.threadId,{taskId,passId});
+  if(integration){team.integration.workerStage=stage;team.integration.status=stage==='execute'?'running':stage; if(context?.status)team.integration.contextStatus=context.status;if(context?.summary)team.integration.contextSummary=context.summary;team.status='integrating';}
+  else{(record as RecruitmentWorker).workerStage=stage;(record as RecruitmentWorker).status=stage==='execute'?'running':stage; if(context?.status)(record as RecruitmentWorker).contextStatus=context.status;if(context?.summary)(record as RecruitmentWorker).contextSummary=context.summary;}
+  await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);if(!current||current.currentPassId!==passId||current.phase==='cancelled')return;current.phase='worker_running';current.activeRole=undefined;current.activeTurnId=undefined;});
+  allowanceBaselines.set(record.threadId,await readAllowanceSnapshot());
+  const carried=stage==='execute'&&!integration?attachmentUserInput(pass.attachments||[]):{images:[],text:''};
+  const sourceBaseline=stage==='execute'&&isAgentMemEnabled(task.agentmemProjectId)?await captureTurnSourceFingerprint(workspace):undefined;if(sourceBaseline&&!sourceBaseline.available)throw new Error(`The assigned Git worktree could not be safely fingerprinted before execution. ${sourceBaseline.reason||'Verify the worktree.'}`);
+  const response=await agentCodex.startTurn(record.threadId,`${prompt}${carried.text}`,'worker','gpt-6-luna',record.effort,workspace,writeRoots,approvalPolicy,schema,undefined,carried.images);
+  const id=response.turn?.id||response.turnId;if(id&&sourceBaseline)sourceFingerprints.set(sourceFingerprintKey(taskId,passId,'worker',record.threadId,id),sourceBaseline);
+  if(id&&stage==='context_compose')await bindAgentMemAuditTurn(taskId,passId,'worker',record.threadId,id);
+  if(integration)team.integration.activeTurnId=id;else (record as RecruitmentWorker).activeTurnId=id;
+  if(id)await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);const currentPassRow=current?.passes?.find(row=>row.id===passId);const teamNow=currentPassRow?.recruitmentTeam;const target=integration?teamNow?.integration:teamNow?.workers.find(row=>row.workerId===workerId);if(target)target.activeTurnId=id;});
+  if(id)await processDeferred(taskId,id);
+}
 async function processDeferred(taskId:string,turnId:string){const rows=deferredCompletions.get(taskId)||[];const i=rows.findIndex(x=>x.turn?.id===turnId);if(i<0)return;const [event]=rows.splice(i,1);await onTurnCompleted(event);}
+async function onRecruitmentTurnCompleted(taskId:string,passId:string,threadId:string,turnId:string,status:string,turn:any){
+  const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam,target=task&&recruitmentTarget(task,threadId);if(!task||!pass||!team||!target)return;
+  await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);const currentPassRow=current?.passes?.find(row=>row.id===passId);if(!current||!currentPassRow)return;if(!current.processedTurns.includes(turnId))current.processedTurns.push(turnId);const record=currentPassRow.recruitmentTeam?.workers.find(row=>row.threadId===threadId)||currentPassRow.recruitmentTeam?.integration.threadId===threadId&&currentPassRow.recruitmentTeam.integration;if(record)record.activeTurnId=undefined;});
+  if(status!=='completed'){
+    const error=status==='interrupted'?'The worker turn was interrupted. Its branch and prior changes are preserved for inspection.':turn?.error?.message||'The worker turn failed before returning a receipt.';
+    await mutate(state=>{const saved=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam;if(!saved)return;if(target.integration){saved.integration.status='failed';saved.integration.error=error;saved.integration.receipt=integrationReceiptFromError(error);}else{const worker=saved.workers.find(row=>row.workerId===target.record.workerId);if(!worker)return;worker.status='failed';worker.error=error;worker.receipt=workerReceiptFromStatus(worker);}});
+    if(!target.integration)await maybeStartRecruitmentIntegration(taskId,passId);else await finishRecruitmentIntegration(taskId,passId,threadId,turnId,integrationReceiptFromError(error));return;
+  }
+  if(!target.integration)try{await refreshLoadedSkills(taskId,passId);}catch{}
+  await recordTurnSourceChanges(taskId,passId,'worker',threadId,turnId);
+  const latest=getTask(taskId),latestPass=latest?.passes?.find(row=>row.id===passId),latestTeam=latestPass?.recruitmentTeam;if(!latest||!latestPass||!latestTeam||latest.phase==='cancelled')return;
+  try{
+    const record=target.integration?latestTeam.integration:latestTeam.workers.find(row=>row.threadId===threadId);if(!record)throw new Error('The worker assignment no longer belongs to this recruitment team.');
+    if(record.workerStage==='context_plan'){
+      const plan=workerContextPlanSchema.parse(jsonFromTurn(turn));const contextStatus=await loadWorkerAgentContext(latest,plan,record.assignment);
+      if(contextStatus.status==='unavailable')throw new Error(`AgentMem retrieval was unavailable for the assigned worker: ${contextStatus.detail}`);
+      await startRecruitmentStage(taskId,passId,target.integration?'integration':target.record.workerId,'context_compose',{status:contextStatus},target.integration);return;
+    }
+    if(record.workerStage==='context_compose'){
+      const composed=workerContextSummarySchema.parse(jsonFromTurn(turn));await startRecruitmentStage(taskId,passId,target.integration?'integration':target.record.workerId,'execute',{summary:composed.summary},target.integration);return;
+    }
+    const outcome=workerOutcomeSchema.parse(jsonFromTurn(turn));
+    if(outcome.type==='escalation'){
+    const receipt:Receipt={status:'blocked',result:`Worker requested a consequential decision: ${outcome.decision_needed}`,changes:[],acceptance:{met:[],unmet:[...record.assignment.acceptance]},verification:[{check:'Worker escalation',result:'not_run',evidence:JSON.stringify({decision_needed:outcome.decision_needed,evidence:outcome.evidence,options:outcome.options,recommendation:outcome.recommendation,consequences:outcome.consequences}).slice(0,4000)}],risks:outcome.consequences,knowledge:{consulted:[],updated:[]},decision_required:outcome.decision_needed||null};
+      if(target.integration){await finishRecruitmentIntegration(taskId,passId,threadId,turnId,receipt);return;}
+      await mutate(state=>{const saved=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam;const worker=saved?.workers.find(row=>row.threadId===threadId);if(!saved||!worker)return;worker.status='escalated';worker.receipt=receipt;worker.error=outcome.decision_needed||'Worker requested a consequential decision.';recordAgentReceipt(latestPass,'worker',threadId,turnId,receipt);});
+      await maybeStartRecruitmentIntegration(taskId,passId);return;
+    }
+    let receipt=receiptSchema.parse(outcome.receipt);
+    if(isAgentMemEnabled(latest.agentmemProjectId)){const gaps=agentMemArtifactUsageGaps(latestPass.agentmemAudit,latestPass,'worker',threadId,turnId,receipt);if(gaps.length)throw new Error(`The worker receipt is incomplete because required project-service evidence is missing: ${gaps.join(' ')}`);}
+    if(target.integration){
+      try{
+        const integration=latestTeam.integration;if(!integration.headCommit)throw new Error('The integration baseline commit is missing from saved team state.');
+        const workerCommits=latestTeam.workers.map(worker=>{if(!worker.headCommit)throw new Error(`Worker ${worker.name} has no recorded branch commit for integration verification.`);return {workerId:worker.workerId,commit:worker.headCommit};});
+        const verified=await verifyRecruitmentIntegration({canonicalRoot:latestTeam.canonicalProjectRoot,integrationRoot:integration.worktreeRoot,integrationBranch:integration.branch,integrationBaseCommit:integration.headCommit,workerCommits});
+        receipt={...receipt,verification:[...receipt.verification,{check:'All sealed worker commits are present on the task-owned integration branch',result:'passed' as const,evidence:`Verified ${workerCommits.length} worker commit(s); integration HEAD ${verified.headCommit}.`}].slice(0,40)};
+      }catch(error){const detail=safeError(error);receipt={...receipt,status:'failed',result:`Integration branch verification failed: ${detail}`,acceptance:{met:receipt.acceptance.met,unmet:[...new Set([...receipt.acceptance.unmet,'Every sealed worker commit is present on the task-owned integration branch.'])].slice(0,30)},verification:[...receipt.verification,{check:'All sealed worker commits are present on the task-owned integration branch',result:'failed' as const,evidence:detail}].slice(0,40),risks:[...new Set([...receipt.risks,detail])].slice(0,40)};}
+      await finishRecruitmentIntegration(taskId,passId,threadId,turnId,receipt);return;
+    }
+    const worker=latestTeam.workers.find(row=>row.threadId===threadId);if(!worker)throw new Error('The completed worker is not in the sealed team.');
+    const head=await readRecruitmentBranchHead(latestTeam.canonicalProjectRoot,worker.branch);
+    await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId);const saved=current?.recruitmentTeam;const row=saved?.workers.find(item=>item.workerId===worker.workerId);if(!current||!saved||!row)return;row.headCommit=head;row.receipt=receipt;row.status='complete';recordAgentReceipt(current,'worker',threadId,turnId,receipt);});
+    await maybeStartRecruitmentIntegration(taskId,passId);
+  }catch(error){
+    const detail=safeError(error);if(target.integration){await finishRecruitmentIntegration(taskId,passId,threadId,turnId,integrationReceiptFromError(detail));return;}
+    await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId);const teamNow=current?.recruitmentTeam;const worker=teamNow?.workers.find(row=>row.threadId===threadId);if(!current||!teamNow||!worker)return;worker.status='failed';worker.error=detail;worker.receipt=workerReceiptFromStatus(worker);});await maybeStartRecruitmentIntegration(taskId,passId);
+  }
+}
+async function maybeStartRecruitmentIntegration(taskId:string,passId:string){
+  const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam;if(!task||!pass||!team||!team.sealed||task.phase==='cancelled'||team.status!=='running'||team.workers.some(worker=>!['complete','failed','escalated','cancelled'].includes(worker.status)))return;
+  const claimKey=`${taskId}:${passId}`;if(recruitmentIntegrationClaims.has(claimKey))return;recruitmentIntegrationClaims.add(claimKey);
+  try{
+  let integrationClaimed=false;await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam;if(current)integrationClaimed=claimRecruitmentIntegration(current);});
+  const current=getTask(taskId),currentTeam=current?.passes?.find(row=>row.id===passId)?.recruitmentTeam;if(!integrationClaimed||!current||!currentTeam||currentTeam.status!=='integrating'||currentTeam.integration.status!=='preparing')return;
+  try{
+    const mergeWorkers=[] as {workerId:string;branch:string;headCommit:string}[];
+    for(const worker of currentTeam.workers){const head=await readRecruitmentBranchHead(currentTeam.canonicalProjectRoot,worker.branch);const latest=getTask(taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam?.workers.find(row=>row.workerId===worker.workerId);if(latest){latest.headCommit=head;if(head.toLowerCase()!==currentTeam.baseCommit.toLowerCase())mergeWorkers.push({workerId:worker.workerId,branch:worker.branch,headCommit:head});}}
+    const merged=await mergeRecruitmentCommits({canonicalRoot:currentTeam.canonicalProjectRoot,integrationRoot:currentTeam.integration.worktreeRoot,workers:mergeWorkers});
+    const conflictText=merged.conflicts.length?`Merge conflicts require resolution by the integrator: ${merged.conflicts.map(row=>`${row.workerId}: ${row.files.join(', ')}`).join('; ')}`:'';
+    await mutate(state=>{const teamNow=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam;if(teamNow){teamNow.status='integrating';teamNow.integration.status='queued';teamNow.integration.headCommit=merged.integrationHead;teamNow.integration.error=conflictText;}});
+    await startRecruitmentStage(taskId,passId,'integration','context_plan',undefined,true);
+  }catch(error){
+    const detail=safeError(error);await mutate(state=>{const teamNow=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam;if(teamNow){teamNow.status='needs_attention';teamNow.integration.status='failed';teamNow.integration.error=detail;teamNow.integration.receipt=integrationReceiptFromError(detail);}});await finishRecruitmentIntegration(taskId,passId,'app','git-merge',integrationReceiptFromError(detail));
+  }
+  }finally{recruitmentIntegrationClaims.delete(claimKey);}
+}
+async function finishRecruitmentIntegration(taskId:string,passId:string,threadId:string,turnId:string,integrationReceipt:Receipt){
+  let shouldWake=false;
+  await mutate(state=>{const task=state.tasks.find(row=>row.id===taskId),pass=task?.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam;if(!task||!pass||!team||task.phase==='cancelled'||!claimRecruitmentCompletion(team))return;
+    team.integration.receipt=integrationReceipt;team.integration.status=integrationReceipt.status==='complete'?'complete':'failed';team.integration.error=integrationReceipt.status==='complete'?undefined:integrationReceipt.result;
+    if(threadId!=='app'&&turnId!=='git-merge')recordAgentReceipt(pass,'worker',threadId,turnId,integrationReceipt);
+    const workerReceipts=team.workers.map(worker=>worker.receipt||workerReceiptFromStatus(worker));const allWorkersComplete=team.workers.every(worker=>worker.status==='complete');const validIntegration=integrationReceipt.status==='complete'&&simpleReceiptVerified(integrationReceipt);
+    const allWorkerChanges=[...new Set(workerReceipts.flatMap(receipt=>receipt.changes))];
+    const result=`${integrationReceipt.result}\n\nWorker outcomes:\n${team.workers.map((worker,index)=>`- ${worker.name} (${worker.status}, ${worker.branch}): ${workerReceipts[index].result}`).join('\n')}`;
+    const combined:Receipt={status:validIntegration&&allWorkersComplete?'complete':integrationReceipt.status==='failed'?'failed':'incomplete',result:result.slice(0,12000),changes:[...new Set([...allWorkerChanges,...integrationReceipt.changes])].slice(0,40),acceptance:{met:[...new Set([...workerReceipts.flatMap(receipt=>receipt.acceptance.met),...integrationReceipt.acceptance.met])].slice(0,30),unmet:[...new Set([...workerReceipts.flatMap(receipt=>receipt.acceptance.unmet),...integrationReceipt.acceptance.unmet])].slice(0,30)},verification:[...workerReceipts.flatMap(receipt=>receipt.verification),...integrationReceipt.verification].slice(0,40),risks:[...new Set([...workerReceipts.flatMap(receipt=>receipt.risks),...integrationReceipt.risks])].slice(0,40),knowledge:{consulted:[...new Set([...workerReceipts.flatMap(receipt=>receipt.knowledge.consulted),...integrationReceipt.knowledge.consulted])].slice(0,40),updated:[...new Set([...workerReceipts.flatMap(receipt=>receipt.knowledge.updated),...integrationReceipt.knowledge.updated])].slice(0,40)},decision_required:integrationReceipt.decision_required||team.workers.find(worker=>worker.status==='escalated')?.receipt?.decision_required||null};
+    team.combinedReceipt=combined;team.status=combined.status==='complete'?'complete':combined.status==='failed'?'failed':'needs_attention';task.assignment=teamMasterAssignment(team);task.receipt=combined;task.phase='reviewing';task.activeRole=undefined;task.activeTurnId=undefined;task.activeModelId=undefined;task.activeEffort=undefined;addMessage(task,'worker',combined.result);shouldWake=true;
+  });
+  if(!shouldWake)return;
+  const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam;if(!task||!pass||!team)return;
+  if(!shouldWakeOrchestrator('final_worker_receipt'))return;
+  try{const context=await taskContext(task,`${task.title} complete worker team integration receipt review`, 'orchestrator','recruitment_combined_receipt_review');const input=`Review exactly one combined integration receipt against the complete sealed team assignment and original user request. Every selected worker outcome is included below, including failures and cancellations; no worker transcript is available or should be requested. Accept only if the integration receipt and every worker receipt show successful, verified outcomes and all required artifacts are integrated. Otherwise return a truthful incomplete, blocked, or failed disposition with an actionable decision_required. Do not assume local branch changes have been published or merged to the canonical checkout.\n\nTEAM ASSIGNMENT:\n${JSON.stringify(task.assignment)}\n\nCOMBINED RECEIPT:\n${JSON.stringify(team.combinedReceipt)}\n\nWORKER ROSTER AND RECEIPTS:\n${JSON.stringify(team.workers.map(worker=>({workerId:worker.workerId,name:worker.name,status:worker.status,effort:worker.effort,branch:worker.branch,worktreeRoot:worker.worktreeRoot,receipt:worker.receipt||workerReceiptFromStatus(worker),error:worker.error})),null,2)}\n\nINTEGRATION RECEIPT:\n${JSON.stringify(team.integration.receipt)}\n\nRELEVANT PROJECT KNOWLEDGE:\n${JSON.stringify(context).slice(0,10000)}`;await startOrchestrator(task,input,'review');}
+  catch(error){await mutate(state=>{const row=state.tasks.find(item=>item.id===taskId);if(row){row.phase='needs_attention';row.error=`The combined integration receipt was saved, but the single orchestrator review wake could not start: ${safeError(error)}`;addMessage(row,'system',row.error);}});}
+}
 function passProjection(task:Task,pass:TaskPass,threadId:string,turnId?:string):Task{
   const role=passThreadRole(pass,threadId);
   return {...task,currentPassId:pass.id,phase:pass.phase,routeDecision:pass.routeDecision,executionEscalation:pass.executionEscalation,assignment:pass.assignment,receipt:pass.receipt,reviewNote:pass.reviewNote,resolution:pass.resolution,routingNote:pass.routingNote,error:pass.error,escalation:pass.escalation,workerStage:pass.workerStage,workerContextStatus:pass.workerContextStatus,workerContextSummary:pass.workerContextSummary,reasoningSummaries:pass.reasoningSummaries||[],reasoningTurns:pass.reasoningTurns||[],liveActivity:pass.liveActivity||[],correctionCount:pass.correctionCount,routerThreadId:pass.routerThreadId,directThreadId:pass.directThreadId,simpleThreadId:pass.simpleThreadId,orchestratorThreadId:pass.orchestratorThreadId,workerThreadId:pass.workerThreadId,activeTurnId:turnId??pass.activeTurnId,activeRole:role??pass.activeRole,processedTurns:pass.processedTurns,agentmemTaskId:pass.agentmemTaskId,agentmemLease:pass.agentmemLease,agentmemRecordStatus:pass.agentmemRecordStatus,agentmemRecordError:pass.agentmemRecordError,agentmemReceiptId:pass.agentmemReceiptId} as Task;
 }
 function savePassProjection(pass:TaskPass,projection:Task){pass.reasoningSummaries=projection.reasoningSummaries;pass.reasoningTurns=projection.reasoningTurns;pass.liveActivity=projection.liveActivity;}
 function passRole(pass:TaskPass,threadId:string){return passThreadRole(pass,threadId);}
-async function onTurnStarted(params:any){const threadId=params?.threadId;const turnId=params?.turn?.id;if(!threadId||!turnId)return;void mutate(s=>{const t=s.tasks.find(x=>isCurrentPassThread(x,threadId));if(t){const role=roleForThread(t,threadId);if(role&&!t.activeTurnId&&t.phase!=='cancelled'){t.activeTurnId=turnId;t.activeRole=role;if(role!=='router')beginReasoningTurn(t,role,threadId,turnId);}}else{const owner=s.tasks.find(x=>passForThread(x,threadId));const pass=owner?.passes?.find(x=>[x.routerThreadId,x.directThreadId,x.simpleThreadId,x.orchestratorThreadId,x.workerThreadId].includes(threadId));const role=pass&&passRole(pass,threadId);if(owner&&pass&&role&&!pass.activeTurnId){pass.activeRole=role;pass.activeTurnId=turnId;if(role!=='router'){const projection=passProjection(owner,pass,threadId,turnId);beginReasoningTurn(projection,role,threadId,turnId);savePassProjection(pass,projection);}}}});}
-async function onTurnDiffUpdated(params:any){void mutate(s=>{const task=s.tasks.find(row=>row.currentPassId&&row.activeTurnId===params?.turnId&&row.activeRole&&row[`${row.activeRole}ThreadId` as keyof Task]===params?.threadId);if(task){applyPassGitDiffUpdate(task,params);return;}if(typeof params?.threadId!=='string')return;const owner=s.tasks.find(row=>passForThread(row,params.threadId));const pass=owner?.passes?.find(row=>[row.routerThreadId,row.directThreadId,row.simpleThreadId,row.orchestratorThreadId,row.workerThreadId].includes(params.threadId));if(!owner||!pass||pass.activeTurnId!==params.turnId)return;const projection=passProjection(owner,pass,params.threadId,params.turnId);applyPassGitDiffUpdate(projection,params);});}
+async function onTurnStarted(params:any){const threadId=params?.threadId;const turnId=params?.turn?.id;if(!threadId||!turnId)return;void mutate(s=>{const t=s.tasks.find(x=>isCurrentPassThread(x,threadId));if(t){const target=recruitmentTarget(t,threadId);if(target){const team=t.passes?.find(row=>row.id===target.pass.id)?.recruitmentTeam;if(t.phase!=='cancelled'&&team&&['running','context_plan','context_compose'].includes(target.record.status)){const record=team.workers.find(row=>row.threadId===threadId)||team.integration.threadId===threadId&&team.integration;if(record)record.activeTurnId=turnId;beginReasoningTurn(t,'worker',threadId,turnId,'gpt-6-luna',target.record.effort);}return;}const role=roleForThread(t,threadId);if(role&&!t.activeTurnId&&t.phase!=='cancelled'){t.activeTurnId=turnId;t.activeRole=role;if(role!=='router')beginReasoningTurn(t,role,threadId,turnId);}}else{const owner=s.tasks.find(x=>passForThread(x,threadId));const pass=owner?.passes?.find(x=>[x.routerThreadId,x.directThreadId,x.simpleThreadId,x.orchestratorThreadId,x.workerThreadId].includes(threadId));const role=pass&&passRole(pass,threadId);if(owner&&pass&&role&&!pass.activeTurnId){pass.activeRole=role;pass.activeTurnId=turnId;if(role!=='router'){const projection=passProjection(owner,pass,threadId,turnId);beginReasoningTurn(projection,role,threadId,turnId);savePassProjection(pass,projection);}}}});}
+async function onTurnDiffUpdated(params:any){void mutate(s=>{const task=s.tasks.find(row=>row.currentPassId&&row.activeTurnId===params?.turnId&&row.activeRole&&row[`${row.activeRole}ThreadId` as keyof Task]===params?.threadId);if(task){applyPassGitDiffUpdate(task,params);return;}if(typeof params?.threadId!=='string')return;const owner=s.tasks.find(row=>passForThread(row,params.threadId));const pass=owner?.passes?.find(row=>passThreadRole(row,params.threadId));if(!owner||!pass)return;const recruited=recruitmentTarget(owner,params.threadId);if(recruited?.record.activeTurnId!==params.turnId)return;const projection=passProjection(owner,pass,params.threadId,params.turnId);projection.workerThreadId=params.threadId;applyPassGitDiffUpdate(projection,params);pass.gitDiff=projection.gitDiff;});}
 function noteRouterToolInvocation(params:any){const threadId=params?.threadId;const item=params?.item||{};const t=typeof threadId==='string'?getState().tasks.find(x=>isCurrentPassThread(x,threadId)):undefined;if(t&&t.routerThreadId===threadId&&['commandExecution','fileChange','mcpToolCall','webSearchCall','dynamicToolCall','collabAgentToolCall'].includes(item.type))routerToolViolations.add(threadId);}
 async function onReasoningSummary(method:string,params:any){
   const threadId=params?.threadId;if(!threadId)return;
   const task=getState().tasks.find(x=>passForThread(x,threadId));if(!task)return;
   if(task.phase==='cancelled'&&isCurrentPassThread(task,threadId))return;
-  void mutate(s=>{const current=s.tasks.find(x=>x.id===task.id);const pass=current?.passes?.find(x=>[x.routerThreadId,x.directThreadId,x.simpleThreadId,x.orchestratorThreadId,x.workerThreadId].includes(threadId));if(!current||!pass)return;if(pass.id===current.currentPassId){applyCodexReasoningNotification(current,method,params);return;}const projection=passProjection(current,pass,threadId,params?.turnId);applyCodexReasoningNotification(projection,method,params);savePassProjection(pass,projection);});
+  void mutate(s=>{const current=s.tasks.find(x=>x.id===task.id);const pass=current?.passes?.find(row=>passThreadRole(row,threadId));if(!current||!pass)return;const recruited=!!recruitmentTarget(current,threadId);if(pass.id===current.currentPassId&&!recruited){applyCodexReasoningNotification(current,method,params);return;}const projection=passProjection(current,pass,threadId,params?.turnId);if(recruited)projection.workerThreadId=threadId;applyCodexReasoningNotification(projection,method,params);savePassProjection(pass,projection);});
 }
 function usageTarget(threadId:unknown){
   if(typeof threadId!=='string'||!threadId)return;
   for(const task of getState().tasks)for(const pass of task.passes||[]){
     const role=(['router','direct','simple','orchestrator','worker'] as const).find(key=>pass[`${key}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId'|'orchestratorThreadId'|'workerThreadId']===threadId);
     if(role)return {taskId:task.id,passId:pass.id,role,threadId};
+    if(pass.recruitmentTeam?.workers.some(worker=>worker.threadId===threadId)||pass.recruitmentTeam?.integration.threadId===threadId)return {taskId:task.id,passId:pass.id,role:'worker' as const,threadId};
   }
 }
 async function onThreadTokenUsageUpdated(params:any){
@@ -512,6 +663,7 @@ async function onTurnCompleted(params:any){
   const t=getState().tasks.find(x=>passForThread(x,params.threadId));
   if(!t)return;
   const owningPass=passForThread(t,params.threadId);if(!owningPass)return;
+  const recruited=recruitmentTarget(t,params.threadId);if(recruited){if(owningPass.id!==t.currentPassId){await recordLatePassTurn(t,owningPass,params);return;}if(recruited.record.activeTurnId&&recruited.record.activeTurnId!==params.turn.id)return;if(!claimCompletion(t.id,params.turn.id,t.processedTurns))return;await onRecruitmentTurnCompleted(t.id,owningPass.id,params.threadId,params.turn.id,params.turn.status,params.turn);return;}
   if(owningPass.id!==t.currentPassId){await recordLatePassTurn(t,owningPass,params);return;}
   if(!t.activeTurnId){const arr=deferredCompletions.get(t.id)||[];arr.push(params);deferredCompletions.set(t.id,arr);return;}
   if(params.turn.id!==t.activeTurnId)return;
@@ -549,11 +701,23 @@ async function onTurnCompleted(params:any){
     await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!; if(x.phase==='cancelled')return;x.phase='needs_attention';x.error=endedStatus==='interrupted'?'Turn interrupted. Inspect the existing thread before resuming.':(params.turn.error?.message||'Codex turn failed.');});return;
   }
   try {
+    if(role==='orchestrator'&&passId){
+      const pass=getTask(taskId)?.passes?.find(row=>row.id===passId);
+      if(pass&&pass.agentmemSetupTurnId===params.turn.id){
+        const mode=pass.agentmemSetupMode||'register';
+        requireAuditedAgentMemBootstrap(live,pass,'orchestrator',params.threadId,params.turn.id,mode);
+        if(await agentmem.setupMode(live.agentmemProjectId,live.userRoot)!=='ready')throw new Error('The model-issued AgentMem setup did not register the exact selected project and repository index. No assignment was started.');
+        await verifyAgentMemRepositoryAfterSetup(live,passId,'orchestrator');
+        const confirmation=extractAssistantText(params.turn)||`AgentMem setup completed for ${live.agentmemProjectId} at ${live.userRoot}.`;
+        await mutate(s=>{const owner=s.tasks.find(x=>x.id===taskId);const current=owner?.passes?.find(row=>row.id===passId);if(!owner||!current)return;current.agentmemSetupTurnId=undefined;current.agentmemSetupMode=undefined;current.phase='accepted';current.resolution='direct';current.publicAnswer=confirmation;current.reviewNote='AgentMem setup completed after the required audited model-issued calls and exact-root verification. No worker assignment was required.';owner.phase='accepted';owner.resolution='direct';owner.activeRole=undefined;owner.activeTurnId=undefined;owner.activeModelId=undefined;owner.activeEffort=undefined;owner.reviewNote=current.reviewNote;for(const context of current.agentmemAudit?.contexts||[])if(context.status==='pending'&&context.purpose==='assignment_context'){context.status='supplied';context.threadId=params.threadId;context.turnId=params.turn.id;context.updatedAt=new Date().toISOString();context.resultSummary='The selected AgentMem project and exact-root repository index were set up through audited model-issued tool calls.';}addMessage(owner,'orchestrator',confirmation,undefined,passId);});return;
+      }
+    }
     if(role==='router'){
       let routerValue:unknown;
       try{routerValue=jsonFromTurn(params.turn);}catch(e){await applyRouteDecision(live,null,`The router did not return valid structured output: ${safeError(e)}`);return;}
       await dispatchRouteOutput(routerValue,reason=>applyRouteDecision(live,null,reason),decision=>applyRouteDecision(live,decision));return;
     }
+    if(role==='orchestrator'&&['planning','worker_running'].includes(live.phase)&&currentPass(live)?.recruitmentTeam?.sealed){await mutate(state=>{const row=state.tasks.find(item=>item.id===taskId);const current=row?.passes?.find(item=>item.id===passId);if(!row||!current)return;row.activeRole=undefined;row.activeTurnId=undefined;row.activeModelId=undefined;row.activeEffort=undefined;addMessage(row,'orchestrator','Recruitment is sealed. The orchestrator is idle while the selected workers execute; one integrator will start after all workers finish.');});return;}
     const parsed=jsonFromTurn(params.turn);
     if(role==='direct'){
       await completeRoutedDirect(live,jsonFromTurn(params.turn));
@@ -561,10 +725,8 @@ async function onTurnCompleted(params:any){
       await completeSimpleExecution(live,jsonFromTurn(params.turn),params.threadId,params.turn.id);
     } else if(role==='orchestrator') {
       if(live.phase==='planning') {
-        await dispatchIntakeOutcome(parsed,live.allowDirectResponse===true,{
-          direct:outcome=>completeDirectAnswer(live,outcome.answer,outcome.policy_basis),
-          delegate:assignment=>completeDelegatedAssignment(live,assignment,params.threadId,params.turn.id),
-        });
+        if(live.allowDirectResponse!==true)throw new Error('The hard-task orchestrator finished without calling the recruitment service. No single-worker fallback was started; retry planning to recruit a complete team.');
+        else await dispatchIntakeOutcome(parsed,true,{direct:outcome=>completeDirectAnswer(live,outcome.answer,outcome.policy_basis),delegate:assignment=>completeDelegatedAssignment(live,assignment,params.threadId,params.turn.id)});
       }
       else if(live.phase==='reviewing') {const review=reviewSchema.parse(parsed);await applyReview(live,review);}
     } else if(role==='worker'&&live.workerStage==='context_plan') {
@@ -618,9 +780,9 @@ async function recordLatePassTurn(task:Task,pass:TaskPass,params:any){
     }catch{/* Historical output that cannot be safely parsed remains in the Codex thread and is not reassigned. */}
   });
 }
-async function loadWorkerAgentContext(task:Task,plan:WorkerContextPlan):Promise<WorkerContextStatus>{
+async function loadWorkerAgentContext(task:Task,plan:WorkerContextPlan,assignmentOverride:Assignment|undefined=task.assignment):Promise<WorkerContextStatus>{
   if(!isAgentMemEnabled(task.agentmemProjectId))return {status:'disabled',detail:'AgentMem is disabled for this task; no project-context request was sent.'};
-  const assignment=task.assignment;
+  const assignment=assignmentOverride;
   const queries=[...plan.queries,...(assignment?.context_refs||[])].slice(0,12);
   const query=[plan.scope_summary,...queries].join('\n').slice(0,5000);
   try{
@@ -657,6 +819,15 @@ function structuredFailure(error:unknown,role:WorkflowRole){
 
 async function onServerRequest(id:string|number,method:string,params:any,client:AppServer=agentCodex){
   if(client===agentCodex&&method==='item/tool/call'){
+    if(params?.namespace==='pseudoharness'&&params?.tool==='recruit_workers'){
+      const threadId=typeof params?.threadId==='string'?params.threadId:'';const callId=String(id);const state=getState();const task=state.tasks.find(row=>row.orchestratorThreadId===threadId);const existingTeam=task&&currentPass(task)?.recruitmentTeam;const activeTask=state.tasks.find(row=>row.orchestratorThreadId===threadId&&row.phase==='planning');
+      try{
+        if(task&&existingTeam?.sealed){await mutate(state=>{const current=state.tasks.find(row=>row.id===task.id);const existing=current&&currentPass(current)?.recruitmentTeam;if(existing&&!existing.toolCallIds.includes(callId))existing.toolCallIds.push(callId);});const team=getTask(task.id)&&currentPass(getTask(task.id)!)?.recruitmentTeam;if(team){client.respondServerRequest(id,recruitmentToolResponse(team));return;}}
+        const prior=state.tasks.flatMap(row=>row.passes||[]).find(pass=>pass.recruitmentTeam?.toolCallIds.includes(callId)&&pass.orchestratorThreadId===threadId)?.recruitmentTeam;if(prior){client.respondServerRequest(id,recruitmentToolResponse(prior));return;}
+        const callTurn=String(params?.turnId||'');if(!activeTask||!callTurn||!isCurrentPassThread(activeTask,threadId)||activeTask.activeRole!=='orchestrator'||activeTask.activeTurnId&&activeTask.activeTurnId!==callTurn)throw new Error('Recruitment call was not issued by the active hard-task orchestrator turn.');if(!activeTask.activeTurnId)await mutate(state=>{const current=state.tasks.find(row=>row.id===activeTask.id);if(current?.phase==='planning'&&current.orchestratorThreadId===threadId){current.activeTurnId=callTurn;current.activeRole='orchestrator';}});const team=await recruitWorkers(activeTask.id,params?.arguments,callId);client.respondServerRequest(id,recruitmentToolResponse(team));}
+      catch(error){try{client.respondServerRequest(id,{success:false,contentItems:[{type:'inputText',text:safeError(error)}]});}catch{}}
+      return;
+    }
     const threadId=typeof params?.threadId==='string'?params.threadId:'';const target=workerWorkspaceTargets.get(threadId);const task=target?getTask(target.taskId):undefined;const pass=task?.passes?.find(row=>row.id===target?.passId);const args=params?.arguments||{};const action=args.action;
     const fail=(message:string)=>{try{client.respondServerRequest(id,{success:false,contentItems:[{type:'inputText',text:message}]});}catch{}};
     if(params?.namespace!=='pseudoharness'||params?.tool!=='workspace'||!authorizesWorkerWorkspaceTool(task,pass,target,threadId)||!task||!pass||!target){fail('Workspace action rejected: this tool is limited to the active task’s execution stage. No workspace action was applied.');return;}
@@ -755,11 +926,15 @@ export async function retryAgentMemCompletion(taskId:string,passId:string){
 }
 
 type ComposerTarget={passId:string;role:WorkflowRole;threadId:string;turnId:string};
-function activeComposerTarget(task:Task):ComposerTarget|undefined{
-  if(!task.activeRole||!task.activeTurnId||!['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(task.phase))return;
-  const pass=currentPass(task),threadId=roleThreadId(task,task.activeRole);
-  if(!pass||!threadId||passThreadRole(pass,threadId)!==task.activeRole)return;
-  return {passId:pass.id,role:task.activeRole,threadId,turnId:task.activeTurnId};
+function activeComposerTarget(task:Task,preferredWorkerId?:string):ComposerTarget|undefined{
+  if(!['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(task.phase))return;
+  const pass=currentPass(task);
+  if(preferredWorkerId){const team=pass?.recruitmentTeam;if(!team?.sealed)throw new Error('This session has no active recruited team to steer.');const selected=preferredWorkerId==='integration'?team.integration:team.workers.find(worker=>worker.workerId===preferredWorkerId);if(!selected||!selected.threadId||!selected.activeTurnId||!['running','context_plan','context_compose'].includes(selected.status))throw new Error('The selected worker is not in an active execution turn. Select a running worker and retry.');return {passId:pass!.id,role:'worker',threadId:selected.threadId,turnId:selected.activeTurnId};}
+  if(task.activeRole&&task.activeTurnId){const threadId=roleThreadId(task,task.activeRole);if(pass&&threadId&&passThreadRole(pass,threadId)===task.activeRole)return {passId:pass.id,role:task.activeRole,threadId,turnId:task.activeTurnId};}
+  const team=pass?.recruitmentTeam;if(!team||!team.sealed)return;
+  const active=[...team.workers.filter(worker=>['running','context_plan','context_compose'].includes(worker.status)&&worker.activeTurnId&&worker.threadId).map(worker=>({passId:pass!.id,role:'worker' as const,threadId:worker.threadId!,turnId:worker.activeTurnId!})),...(['running','context_plan','context_compose'].includes(team.integration.status)&&team.integration.activeTurnId&&team.integration.threadId?[{passId:pass.id,role:'worker' as const,threadId:team.integration.threadId,turnId:team.integration.activeTurnId}]:[])];
+  if(active.length>1)throw new Error('More than one recruited worker is active. Select the worker you want to steer in the team panel, then send your update.');
+  return active[0];
 }
 function steerRace(error:unknown):{kind:'missing'}|{kind:'mismatch';actualTurnId:string}|undefined{
   if(!(error instanceof AppServerRequestError)||error.method!=='turn/steer')return;
@@ -796,19 +971,20 @@ async function startComposerFollowupPass(taskId:string,message:string,attachment
   await startRoutingSafely(()=>beginRouting(row),async e=>{await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId);if(!x||x.phase==='cancelled'||x.currentPassId!==passId)return;x.phase='needs_attention';x.error=`Routing could not start: ${safeError(e)}`;addMessage(x,'system',x.error);});});
   return getTask(taskId)!;
 }
-async function submitExistingTaskMessage(taskId:string,message:string,attachments:ReturnType<typeof validateAttachments>,settings:ReturnType<typeof getState>['settings'],selectedSkills:SavedSkillSnapshot[]){
+async function submitExistingTaskMessage(taskId:string,message:string,attachments:ReturnType<typeof validateAttachments>,settings:ReturnType<typeof getState>['settings'],selectedSkills:SavedSkillSnapshot[],preferredWorkerId?:string){
   const task=getTask(taskId);if(!task)throw new Error('Task not found.');
-  const target=activeComposerTarget(task);
+  const target=activeComposerTarget(task,preferredWorkerId);
   if(target){const messageId=randomUUID();const steered=await steerCurrentTurn(taskId,target,message,attachments,messageId,selectedSkills);if(steered)return steered;return startComposerFollowupPass(taskId,message,attachments,settings,selectedSkills,messageId);}
+  if(task.phase==='worker_running'&&currentPass(task)?.recruitmentTeam?.sealed)throw new Error('The recruited team is between execution stages. Wait for the worker turn to resume before sending a steering update.');
   return startComposerFollowupPass(taskId,message,attachments,settings,selectedSkills);
 }
-export async function submitTask(message:string,existingTaskId?:string,rawAttachments:unknown=[],_legacySkillIds:string[]=[],projectId?:string|null){
+export async function submitTask(message:string,existingTaskId?:string,rawAttachments:unknown=[],_legacySkillIds:string[]=[],projectId?:string|null,recruitmentWorkerId?:string){
   const attachments=validateAttachments(rawAttachments);if(!message.trim()&&!attachments.length)throw new Error('Add a message or attach at least one supported file.');
   const state=getState();
   if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
   if(!shouldWakeOrchestrator('explicit_user_input'))throw new Error('Orchestrator wake policy rejected explicit input.');
   const selectedSkills=await snapshotSelectedSkills(parseExplicitSkillCommands(message));
-  if(existingTaskId)return serializeComposerSubmission(existingTaskId,()=>submitExistingTaskMessage(existingTaskId,message,attachments,state.settings,selectedSkills));
+  if(existingTaskId)return serializeComposerSubmission(existingTaskId,()=>submitExistingTaskMessage(existingTaskId,message,attachments,state.settings,selectedSkills,recruitmentWorkerId));
   const created=await (await import('./state.js')).createTaskForProject(message,projectId,attachments,selectedSkills);
   const createdPassId=currentPass(getTask(created.id)!)?.id;
   await startRoutingSafely(()=>beginRouting(getTask(created.id)!),async e=>{await mutate(s=>{const x=s.tasks.find(a=>a.id===created.id);if(!x||x.phase==='cancelled'||x.currentPassId!==createdPassId)return;x.phase='needs_attention';x.error=`Routing could not start: ${safeError(e)}`;addMessage(x,'system',x.error);});});
@@ -823,9 +999,25 @@ export async function submitEscalationDecision(taskId:string,message:string,rawA
   const fresh=getTask(taskId)!;const payload=`Resolve only this worker's explicit consequential decision using the human decision below. Then return a structured disposition: correction assignment (and correction count must remain at most one) or blocked/incomplete outcome.\n\nOriginal assignment: ${JSON.stringify(fresh.assignment)}\nEscalation: ${JSON.stringify(fresh.escalation)}\nHuman decision: ${message}`;
   await startOrchestrator(fresh,payload,'review');return getTask(taskId)!;
 }
-export async function cancelTask(taskId:string){const task=getTask(taskId);if(!task)throw new Error('Task not found.');const role=task.activeRole,turn=task.activeTurnId,thread=role?roleThreadId(task,role):undefined;const passId=currentPass(task)?.id;const allowanceStart=thread?allowanceBaselines.get(thread)||null:null;if(thread)allowanceBaselines.delete(thread);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;const pass=x.passes?.find(row=>row.id===passId);for(const call of pass?.agentmemAudit?.calls||[])if(call.source==='model'&&call.status==='running'&&call.threadId===thread&&call.turnId===turn){call.status='interrupted';call.updatedAt=new Date().toISOString();}x.phase='cancelled';x.activeRole=undefined;x.activeTurnId=undefined;x.error=undefined;addMessage(x,'system','Task cancelled. Late Codex events will be ignored.');});if(role&&turn&&thread)try{await appServerForRole(role).interrupt(thread,turn);}catch{}if(role&&thread&&passId){const allowanceEnd=await readAllowanceSnapshot();await mutate(s=>{const pass=s.tasks.find(x=>x.id===taskId)?.passes?.find(x=>x.id===passId);if(pass){markThreadTokenUsageUnavailable(pass,role,thread);applyAllowanceDelta(pass,role,thread,allowanceStart,allowanceEnd);}});void refreshThreadUsage(taskId,passId,role,thread);}if(task.agentmemTaskId&&task.agentmemLease)try{const auditRole=role==='worker'||role==='direct'||role==='simple'?role:'orchestrator';await withAgentMemPassScope(task,auditRole,'release_lease_after_cancellation',()=>agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId!,task.agentmemLease!));await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus='released';x.agentmemRecordError=undefined;x.agentmemLease=undefined;});}catch(e){const record=agentMemRecordFailure(e);await mutate(s=>{const x=s.tasks.find(a=>a.id===taskId)!;x.agentmemRecordStatus=record.status;x.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(e)}`;});}return getTask(taskId)!;}
+export async function cancelTask(taskId:string){
+  const task=getTask(taskId);if(!task)throw new Error('Task not found.');
+  const role=task.activeRole,turn=task.activeTurnId,thread=role?roleThreadId(task,role):undefined,passId=currentPass(task)?.id;
+  const activeTeamThreads=(currentPass(task)?.recruitmentTeam?.workers||[]).filter(row=>row.activeTurnId&&row.threadId).map(row=>({threadId:row.threadId!,turnId:row.activeTurnId!}));
+  const integration=currentPass(task)?.recruitmentTeam?.integration;if(integration?.activeTurnId&&integration.threadId)activeTeamThreads.push({threadId:integration.threadId,turnId:integration.activeTurnId});
+  const allTurns=[...(thread&&turn?[{threadId:thread,turnId:turn}]:[]),...activeTeamThreads];
+  for(const item of allTurns)allowanceBaselines.delete(item.threadId);
+  await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)!;const pass=current.passes?.find(row=>row.id===passId);const now=new Date().toISOString();for(const call of pass?.agentmemAudit?.calls||[])if(call.source==='model'&&call.status==='running'&&allTurns.some(item=>item.threadId===call.threadId&&item.turnId===call.turnId)){call.status='interrupted';call.updatedAt=now;}
+    const team=pass?.recruitmentTeam;if(team){cancelRecruitmentTeamState(team);team.integration.error='The task was cancelled by the user. The integration worktree is preserved.';team.integration.receipt=integrationReceiptFromError(team.integration.error);for(const worker of team.workers)if(worker.status==='cancelled'&&!worker.receipt){worker.error='The task was cancelled by the user. The worker worktree is preserved.';worker.receipt=workerReceiptFromStatus(worker);}}
+    current.phase='cancelled';current.activeRole=undefined;current.activeTurnId=undefined;current.error=undefined;addMessage(current,'system','Task cancelled. Recruited workers were interrupted and their task-owned worktrees are preserved. Late Codex events will be ignored.');
+  });
+  for(const item of allTurns)try{await agentCodex.interrupt(item.threadId,item.turnId);}catch{}
+  for(const approval of task.approvalRequests||[])try{agentCodex.respondServerRequest(approval.requestId,approvalResponse(approval.method,approval.mode||(approval as any).permissionRequest,'cancel'));}catch{}
+  if(role&&thread&&passId){const allowanceEnd=await readAllowanceSnapshot();await mutate(state=>{const pass=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId);if(pass){markThreadTokenUsageUnavailable(pass,role,thread);applyAllowanceDelta(pass,role,thread,allowanceBaselines.get(thread)||null,allowanceEnd);}});void refreshThreadUsage(taskId,passId,role,thread);}
+  if(task.agentmemTaskId&&task.agentmemLease)try{const auditRole=role==='worker'||role==='direct'||role==='simple'?role:'orchestrator';await withAgentMemPassScope(task,auditRole,'release_lease_after_cancellation',()=>agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId!,task.agentmemLease!));await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)!;current.agentmemRecordStatus='released';current.agentmemRecordError=undefined;current.agentmemLease=undefined;});}catch(error){const record=agentMemRecordFailure(error);await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)!;current.agentmemRecordStatus=record.status;current.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(error)}`;});}
+  return getTask(taskId)!;
+}
 export async function saveSettings(input:any){
-  const {settingsSchema}=await import('./contracts.js');const {resolveProjectDirectory}=await import('./directories.js');const v=settingsSchema.parse(input);const resolved=await resolveProjectDirectory(v.projectRoot);
+  const {settingsSchema}=await import('./contracts.js');const {resolveProjectDirectory}=await import('./directories.js');const v=settingsSchema.parse(input);if(!v.projectRoot.trim()&&(v.agentmemProjectId.trim()||v.agentmemAutoSetup))throw new Error('Choose a project root before enabling AgentMem.');const resolved=v.projectRoot.trim()?await resolveProjectDirectory(v.projectRoot):'';
   let projectId=v.agentmemProjectId.trim();
   if(v.agentmemAutoSetup){
     const registered=await agentmem.registeredProjectForRoot(resolved);

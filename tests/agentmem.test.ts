@@ -21,6 +21,16 @@ describe('AgentMem receipt boundary',()=>{
     const retry=await adapter.modelMcpServerConfig('fixture','D:/fixture');expect(retry.env.PSEUDOHARNESS_AGENTMEM_SETUP_MODE).toBe('repository');expect(retry.enabled_tools).toContain('repository_register');expect(retry.enabled_tools).not.toContain('projects');
     await expect(adapter.modelMcpServerConfig('fixture','D:/different-workspace')).rejects.toThrow(/root does not match/i);
   });
+  it('keeps the canonical AgentMem project root while binding the model repository index to its recruited worktree',async()=>{
+    const adapter=new AgentMem();(adapter as any).command='node';(adapter as any).args=[];
+    const canonical=path.resolve('D:/projects/pseudoharness'),worktree=path.resolve('D:/app-state/worktrees/task/worker-a');
+    let listed=[{repository_id:'repo-canonical',root:canonical}];
+    const calls:any[]=[];(adapter as any).call=vi.fn(async(name:string,args:any)=>{calls.push({name,args});if(name==='projects')return {projects:[{id:'pseudoharness',root:canonical,memory_root:'D:/data/projects/pseudoharness'}]};if(name==='repository_list')return {repositories:listed};if(name==='repository_register'){listed=[...listed,{repository_id:'repo-worker',root:worktree}];return {repository_id:'repo-worker'};}return {};});
+    const config=await adapter.modelMcpServerConfig('pseudoharness',canonical,worktree);
+    expect(config.env).toMatchObject({PSEUDOHARNESS_AGENTMEM_PROJECT_ID:'pseudoharness',PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:canonical,PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:'repo-worker',PSEUDOHARNESS_AGENTMEM_SETUP_MODE:'ready'});
+    expect(calls).toContainEqual({name:'repository_register',args:{project_id:'pseudoharness',repository_root:worktree}});
+    expect(listed).toContainEqual({repository_id:'repo-canonical',root:canonical});
+  });
   it('offers model-visible registration for a missing project without guessing identity',async()=>{
     const adapter=new AgentMem();(adapter as any).command='node';(adapter as any).args=[];
     const call=vi.fn(async(name:string)=>name==='projects'?{projects:[]}:{});(adapter as any).call=call;
