@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -54,7 +54,7 @@ describe('bounded recruitment Git worktrees', () => {
 
   it('validates a Git root and selected commit ref, with clear non-Git and missing-root errors', async () => {
     const validated = await validateRecruitmentRoot(repo, 'main');
-    expect(validated.canonicalRoot).toBe(repo);
+    expect(validated.canonicalRoot).toBe(await realpath(repo));
     expect(validated.baseCommit).toBe(baseCommit);
     await expect(validateRecruitmentRoot(fixture, 'main')).rejects.toThrow(/not a Git worktree/i);
     await expect(validateRecruitmentRoot(path.join(fixture, 'missing'), 'main')).rejects.toThrow(/does not exist/i);
