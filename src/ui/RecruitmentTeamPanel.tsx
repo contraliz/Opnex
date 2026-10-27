@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import type { DeepSeekExecutionProfile, DeepSeekRuntimeInfo } from '../types';
 import './recruitment-team.css';
 
 export type RecruitmentReceipt = {
@@ -30,6 +31,8 @@ export type RecruitmentWorker = {
   assignment: RecruitmentAssignment;
   receipt?: RecruitmentReceipt;
   error?: string;
+  deepSeekExecution?: DeepSeekExecutionProfile;
+  deepSeekRuntime?: DeepSeekRuntimeInfo;
 };
 
 export type RecruitmentIntegration = {
@@ -39,6 +42,8 @@ export type RecruitmentIntegration = {
   worktreePath: string;
   receipt?: RecruitmentReceipt;
   error?: string;
+  deepSeekExecution?: DeepSeekExecutionProfile;
+  deepSeekRuntime?: DeepSeekRuntimeInfo;
 };
 
 export type RecruitmentTeam = {
@@ -96,18 +101,38 @@ function ReceiptDetails({ receipt, label = 'Public receipt' }: { receipt: Recrui
   );
 }
 
+function ProviderDetails({ execution, runtime }: { execution?: DeepSeekExecutionProfile; runtime?: DeepSeekRuntimeInfo }) {
+  if (!execution && !runtime) return null;
+  const provider = runtime?.provider || execution?.provider || 'DeepSeek Harness';
+  const model = runtime?.model || execution?.model || 'Not recorded';
+  const effort = runtime?.requestedReasoningEffort || execution?.nativeReasoningEffort;
+  return (
+    <div className="recruitment-team__provider" aria-label="Execution provider">
+      <strong>DeepSeek Harness SDK</strong>
+      <span>{provider} · {model}</span>
+      <small>{effort ? `Requested native effort: ${effort}. Effective native effort is not reported.` : 'Effective native effort is not reported.'}</small>
+      {runtime ? <>
+        <small>SDK {runtime.serverInfo.version}{runtime.harnessVersion ? ` · Harness ${runtime.harnessVersion}` : ''} · {runtime.permissionMode}</small>
+        <small>{runtime.filesystemScope === 'assignment-instruction-only' ? 'Write scope is an assignment instruction; runtime access is unrestricted.' : 'Read-only runtime preset.'}</small>
+        <small>Approvals and steering are unsupported. Cancellation terminates the process tree.</small>
+      </> : <small>Waiting for the local SDK to connect.</small>}
+    </div>
+  );
+}
+
 function WorkerCard({ worker, selected, onSelectSteerWorker }: { worker: RecruitmentWorker; selected: boolean; onSelectSteerWorker?: (workerId: string) => void }) {
   return (
     <li className="recruitment-team__card recruitment-team__worker-bar">
       <article aria-labelledby={`recruitment-worker-${worker.workerId}`}>
         <header className="recruitment-team__worker-bar-heading">
           <h3 id={`recruitment-worker-${worker.workerId}`}>{worker.name}</h3>
-          <span className="recruitment-team__worker-effort">{worker.effort}</span>
+          {!worker.deepSeekExecution && <span className="recruitment-team__worker-effort">{worker.effort}</span>}
           <span className="recruitment-team__status" role="status">{worker.status}</span>
         </header>
         <dl className="recruitment-team__metadata">
           <div><dt>Branch</dt><dd><code>{worker.branch}</code></dd></div>
         </dl>
+        <ProviderDetails execution={worker.deepSeekExecution} runtime={worker.deepSeekRuntime}/>
         <details className="recruitment-team__disclosure recruitment-team__worktree">
           <summary>Full worktree path</summary>
           <code>{worker.worktreePath}</code>
@@ -160,6 +185,7 @@ export function RecruitmentTeamPanel({ team, selectedWorkerId, onSelectSteerWork
           <dl className="recruitment-team__metadata">
             <div><dt>Branch</dt><dd><code>{team.integration.branch}</code></dd></div>
           </dl>
+          <ProviderDetails execution={team.integration.deepSeekExecution} runtime={team.integration.deepSeekRuntime}/>
           <details className="recruitment-team__disclosure recruitment-team__worktree">
             <summary>Full worktree path</summary>
             <code>{team.integration.worktreePath}</code>

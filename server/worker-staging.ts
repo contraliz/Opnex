@@ -17,7 +17,8 @@ export function workerContextPlanPrompt(assignment:Assignment,root:string){
 }
 
 export function workerContextComposePrompt(scope:unknown,status:WorkerContextStatus){
-  return `STAGE 2 OF 3 — COMPOSE CONTEXT. The app has asked AgentMem for project context based on the broad scope. Assignment details and skill contents are still withheld. Extract only relevant, cited facts, existing decisions, constraints, and unresolved gaps that would help you carry out the broad scope. Do not begin implementation, inspect files, or claim retrieval succeeded when unavailable. Return exactly the context_ready schema with a concise factual summary; distinguish verified context from missing information.\n\nBROAD SCOPE:\n${JSON.stringify(scope)}\n\nAGENTMEM RETRIEVAL (${status.status}):\n${JSON.stringify(status)}`;
+  const retrieval=status.status==='retrieved'?'The app retrieved AgentMem project context based on the broad scope.':status.status==='disabled'?'AgentMem is disabled for this task; no project-context request was sent.':'The app could not retrieve AgentMem project context for this task.';
+  return `STAGE 2 OF 3 — COMPOSE CONTEXT. ${retrieval} Assignment details and skill contents are still withheld. Extract only relevant, cited facts, existing decisions, constraints, and unresolved gaps that would help you carry out the broad scope. Do not begin implementation, inspect files, or claim retrieval succeeded when unavailable. Return exactly the context_ready schema with a concise factual summary; distinguish verified context from missing information.\n\nBROAD SCOPE:\n${JSON.stringify(scope)}\n\nAGENTMEM RETRIEVAL (${status.status}):\n${JSON.stringify(status)}`;
 }
 
 export function workerExecutePrompt(assignment:Assignment,contextSummary:string,skills:string){

@@ -15,12 +15,12 @@ function roleForThread(task:Task,threadId:unknown):ReasoningTurn['role']|undefin
 
 function activePassId(task:Task){return task.currentPassId;}
 
-export function beginReasoningTurn(task:Task,role:ReasoningTurn['role'],threadId:string,turnId:string,requestedModel=task.activeModelId||'unknown',requestedEffort=task.activeEffort||'unknown'){
+export function beginReasoningTurn(task:Task,role:ReasoningTurn['role'],threadId:string,turnId:string,requestedModel=task.activeModelId||'unknown',requestedEffort=task.activeEffort||'unknown',provider?:string){
   if(!turnId||roleForThread(task,threadId)!==role||task.phase==='cancelled')return false;
   const now=new Date().toISOString();const turns=task.reasoningTurns||[];
   const previous=turns.find(x=>x.threadId===threadId&&x.turnId===turnId);
-  if(previous){previous.status='streaming';previous.requestedModel=requestedModel;previous.requestedEffort=requestedEffort;previous.startedAt??=now;}
-  else task.reasoningTurns=[...turns.slice(-(MAX_SECTIONS-1)),{role,threadId,turnId,requestedModel,requestedEffort,startedAt:now,status:'streaming'}];
+  if(previous){previous.status='streaming';previous.requestedModel=requestedModel;previous.requestedEffort=requestedEffort;if(provider)previous.provider=provider;previous.startedAt??=now;}
+  else task.reasoningTurns=[...turns.slice(-(MAX_SECTIONS-1)),{role,threadId,turnId,requestedModel,requestedEffort,...(provider?{provider}:{}),startedAt:now,status:'streaming'}];
   task.updatedAt=now;
   return true;
 }
@@ -38,14 +38,14 @@ function upsertSection(task:Task,role:ReasoningTurn['role'],threadId:string,turn
   const rows=task.reasoningSummaries||[];
   const section=rows.find(x=>x.role===role&&x.threadId===threadId&&x.turnId===turnId&&x.itemId===itemId&&x.summaryIndex===summaryIndex);
   if(mode==='boundary'){
-      if(!section){const next:ReasoningSummary={role,threadId,turnId,itemId,summaryIndex,text:'',passId:activePassId(task),requestedModel:turn.requestedModel,requestedEffort:turn.requestedEffort,effectiveModel:turn.effectiveModel,updatedAt:new Date().toISOString()};task.reasoningSummaries=[...rows.slice(-(MAX_SECTIONS-1)),next];}
+      if(!section){const next:ReasoningSummary={role,threadId,turnId,itemId,summaryIndex,text:'',passId:activePassId(task),provider:turn.provider,requestedModel:turn.requestedModel,requestedEffort:turn.requestedEffort,effectiveModel:turn.effectiveModel,updatedAt:new Date().toISOString()};task.reasoningSummaries=[...rows.slice(-(MAX_SECTIONS-1)),next];}
   }else if(mode==='final'){
     const bounded=text.slice(0,MAX_SECTION_CHARS);
     if(section){section.text=bounded;section.updatedAt=new Date().toISOString();}
-    else{const next:ReasoningSummary={role,threadId,turnId,itemId,summaryIndex,text:bounded,passId:activePassId(task),requestedModel:turn.requestedModel,requestedEffort:turn.requestedEffort,effectiveModel:turn.effectiveModel,updatedAt:new Date().toISOString()};task.reasoningSummaries=[...rows.slice(-(MAX_SECTIONS-1)),next];}
+    else{const next:ReasoningSummary={role,threadId,turnId,itemId,summaryIndex,text:bounded,passId:activePassId(task),provider:turn.provider,requestedModel:turn.requestedModel,requestedEffort:turn.requestedEffort,effectiveModel:turn.effectiveModel,updatedAt:new Date().toISOString()};task.reasoningSummaries=[...rows.slice(-(MAX_SECTIONS-1)),next];}
   }else if(text){
     if(section){const remaining=MAX_SECTION_CHARS-section.text.length;if(remaining>0)section.text+=text.slice(0,remaining);section.updatedAt=new Date().toISOString();}
-    else{const next:ReasoningSummary={role,threadId,turnId,itemId,summaryIndex,text:text.slice(0,MAX_SECTION_CHARS),passId:activePassId(task),requestedModel:turn.requestedModel,requestedEffort:turn.requestedEffort,effectiveModel:turn.effectiveModel,updatedAt:new Date().toISOString()};task.reasoningSummaries=[...rows.slice(-(MAX_SECTIONS-1)),next];}
+    else{const next:ReasoningSummary={role,threadId,turnId,itemId,summaryIndex,text:text.slice(0,MAX_SECTION_CHARS),passId:activePassId(task),provider:turn.provider,requestedModel:turn.requestedModel,requestedEffort:turn.requestedEffort,effectiveModel:turn.effectiveModel,updatedAt:new Date().toISOString()};task.reasoningSummaries=[...rows.slice(-(MAX_SECTIONS-1)),next];}
   }
   task.updatedAt=new Date().toISOString();return true;
 }

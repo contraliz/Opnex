@@ -87,6 +87,14 @@ function lastReasoningTurn(pass: TaskPass | undefined, role: 'orchestrator' | 'w
     .at(-1);
 }
 
+function reasoningTurnLabel(turn: ReasoningTurn) {
+  if (turn.provider) return `DeepSeek Harness (${turn.provider}) · ${turn.requestedModel} · requested native effort ${turn.requestedEffort} · effective effort unknown`;
+  const model = turn.effectiveModel && turn.effectiveModel !== turn.requestedModel
+    ? `${turn.effectiveModel} (requested ${turn.requestedModel})`
+    : turn.requestedModel;
+  return [model, turn.requestedEffort].filter(Boolean).join(' · ');
+}
+
 function modelForThread(task: Task | null, pass: TaskPass | undefined, role: WorkflowRole, threadId: string) {
   if (role === 'router') {
     const decision = pass?.routeDecision || task?.routeDecision;
@@ -95,12 +103,7 @@ function modelForThread(task: Task | null, pass: TaskPass | undefined, role: Wor
 
   if (role === 'orchestrator' || role === 'worker') {
     const turn = lastReasoningTurn(pass, role, threadId);
-    if (turn) {
-      const model = turn.effectiveModel && turn.effectiveModel !== turn.requestedModel
-        ? `${turn.effectiveModel} (requested ${turn.requestedModel})`
-        : turn.requestedModel;
-      return [model, turn.requestedEffort].filter(Boolean).join(' · ');
-    }
+    if (turn) return reasoningTurnLabel(turn);
   }
 
   if (task?.activeRole === role && readThreadId(pass, task, role) === threadId && task.activeModelId) {
@@ -425,7 +428,7 @@ export function HeadsUpPanel({ task, settings, runtime, open, onClose, onOpenSet
             <SettingRow label="AgentMem" value={task.agentmemProjectId || 'Disabled'}/>
             <SettingRow label="Approval" value={pass?.approvalPolicy ? policyLabel[pass.approvalPolicy] || pass.approvalPolicy : 'Not recorded'}/>
             <SettingRow label="Orchestrator" value={actualOrchestrator ? `${actualOrchestrator.effectiveModel && actualOrchestrator.effectiveModel !== actualOrchestrator.requestedModel ? `${actualOrchestrator.effectiveModel} (requested ${actualOrchestrator.requestedModel})` : actualOrchestrator.requestedModel} · ${actualOrchestrator.requestedEffort}` : 'Not recorded'}/>
-            <SettingRow label="Worker" value={actualWorker ? `${actualWorker.effectiveModel && actualWorker.effectiveModel !== actualWorker.requestedModel ? `${actualWorker.effectiveModel} (requested ${actualWorker.requestedModel})` : actualWorker.requestedModel} · ${actualWorker.requestedEffort}` : pass?.workerThreadId || task.workerThreadId ? 'Not recorded' : 'Not used'}/>
+            <SettingRow label="Worker" value={actualWorker ? reasoningTurnLabel(actualWorker) : pass?.workerThreadId || task.workerThreadId ? 'Not recorded' : 'Not used'}/>
             {decision?.justification && <SettingRow label="Route reason" value={decision.justification}/>}
             {escalation && <SettingRow label="Escalation" value={`${routeName(escalation.from)} → ${routeName(escalation.to)} · ${escalation.reason}`}/>}
             {(pass?.agentmemRecordStatus || task.agentmemRecordStatus) && <SettingRow label="AgentMem record" value={pass?.agentmemRecordStatus || task.agentmemRecordStatus || 'Not recorded'}/>}
