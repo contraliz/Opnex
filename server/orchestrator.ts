@@ -1,6 +1,6 @@
 import { AppServer, AppServerRequestError, approvalResponse, extractAssistantText, normalCodexSqliteHome, type Model } from './codex.js';
 import { AgentMem, agentMemFailureReleased, agentMemRecordFailure, agentMemRecordState, safeError, type AgentMemCallAudit } from './agentmem.js';
-import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, receiptSchema, recruitmentToolSchema, recruitmentWorkersSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerContextPlanJsonSchema, workerContextPlanSchema, workerContextSummaryJsonSchema, workerContextSummarySchema, workerOutcomeFailureSummary, workerOutcomeJsonSchema, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
+import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, receiptSchema, recruitmentToolSchema, recruitmentWorkersSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerContextPlanJsonSchema, workerContextPlanSchema, workerContextSummaryJsonSchema, workerContextSummarySchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
 import { addMessage, beginPass, cancelRecruitmentTeamState, claimRecruitmentCompletion, claimRecruitmentIntegration, currentPass, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, sealRecruitmentTeam, type RecruitmentIntegration, type RecruitmentTeam, type RecruitmentWorker, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
 import { assignmentWriteRoots, canRetryAcceptedAgentMemPass, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
@@ -27,8 +27,9 @@ import { getSkill, getSkillRevision, recordedSkillLoads, recordedSkillSaves } fr
 import { skillLibraryMcpServerConfig } from './skill-library-mcp-config.js';
 import type { SavedSkillSnapshot } from './state.js';
 import { parseExplicitSkillCommands } from './skill-commands.js';
-import { mergeRecruitmentCommits, prepareRecruitmentWorktrees, readRecruitmentBranchHead, recruitmentGitWritableRoots, recruitmentWorkspaceRoot, validateRecruitmentRoot, verifyRecruitmentIntegration } from './recruitment-git.js';
+import { mergeRecruitmentCommits, prepareRecruitmentWorktrees, readRecruitmentBranchHead, recruitmentWorkspaceRoot, validateRecruitmentRoot, verifyRecruitmentIntegration } from './recruitment-git.js';
 import { integrationReadScope, rebaseRecruitmentAssignment } from './recruitment-scope.js';
+import { DeepSeekHarnessError, DeepSeekHarnessSdkRuntime, discoverWindowsDeepSeekHarnessSdkLaunch, resolveDeepSeekHarnessPermission, type DeepSeekHarnessNotification, type DeepSeekHarnessSdkLaunch } from './deepseek-harness.js';
 
 async function snapshotSelectedSkills(ids:string[]):Promise<SavedSkillSnapshot[]>{
   const unique=[...new Set(ids)];if(unique.length>12)throw new Error('Choose up to 12 saved skills for one pass.');
@@ -60,6 +61,10 @@ function recruitmentToolResponse(team:RecruitmentTeam){return {success:true,cont
 const workerWorkspaceTargets=new Map<string,{taskId:string;passId:string}>();
 const sourceFingerprints=new Map<string,TurnSourceFingerprint>();
 const recruitmentIntegrationClaims=new Set<string>();
+type DeepSeekRecruitmentRun={taskId:string;passId:string;threadId:string;turnId:string;stage:WorkerStage;baselineTurn:number;endedTurn?:number;idleAfterEnd:boolean;messages:{turn:number;step:number;text:string}[];failure?:string;finished:boolean};
+type DeepSeekRecruitmentSession={runtime:DeepSeekHarnessSdkRuntime;taskId:string;passId:string;workerId:string;integration:boolean;latestTurn:number;active?:DeepSeekRecruitmentRun};
+const deepSeekRecruitmentSessions=new Map<string,DeepSeekRecruitmentSession>();
+let deepSeekSdkLaunch:DeepSeekHarnessSdkLaunch|undefined;
 function sourceFingerprintKey(taskId:string,passId:string,role:'simple'|'worker',threadId:string,turnId:string){return `${taskId}:${passId}:${role}:${threadId}:${turnId}`;}
 async function recordTurnSourceChanges(taskId:string,passId:string,role:WorkflowRole,threadId:string,turnId:string){
   if(role!=='simple'&&role!=='worker')return;
@@ -199,7 +204,6 @@ async function recordAgentMemMcpAvailability(taskId:string,passId:string,role:Wo
   await mutate(state=>{const audit=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(audit&&audit.modelMcpStatus!=='observed')audit.modelMcpStatus=status;});
   if(status==='unavailable')throw new Error("The selected project's AgentMem knowledge and repository-index read/write tools are not available in this execution thread. Refresh the Codex MCP catalog or choose a verified project with both registered services; no work was reported complete.");
 }
-async function bindAgentMemRepository(taskId:string,passId:string,threadId:string,root:string,repositoryId:string,purpose:string){await mutate(state=>{const audit=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.agentmemAudit;if(!audit||!repositoryId)return;const bindings=audit.repositories??(audit.repositories=[]);const existing=bindings.find(row=>row.threadId===threadId);const record={root,repositoryId,threadId,purpose,registeredAt:new Date().toISOString()};if(existing)Object.assign(existing,record);else bindings.push(record);});}
 async function verifySkillMcpAvailability(threadId:string){const rows=await agentCodex.mcpServerStatus(threadId,'pseudoharness_skills');const server=rows.find((row:any)=>String(row?.name||row?.serverName||'').toLowerCase()==='pseudoharness_skills');const tools=server?.tools;const names=Array.isArray(tools)?tools.map((tool:any)=>String(tool?.name||'')):Object.keys(tools||{});if(!['skills_list','skills_search','skills_load','skills_read_file','skills_save'].every(name=>names.includes(name))){const additional=await agentCodex.mcpServerStatus(threadId,'agentmem');const catalog=[...rows,...additional].map((row:any)=>{const rowTools=row?.tools;const count=Array.isArray(rowTools)?rowTools.length:Object.keys(rowTools||{}).length;const state=JSON.stringify(row?.runtimeStatus??row?.status??'status unavailable').replace(/[A-Za-z]:\\[^\s"']+/g,'<path>').slice(0,160);const error=String(row?.toolsError||'').replace(/[A-Za-z]:\\[^\s"']+/g,'<path>').slice(0,160);return `${String(row?.name||row?.serverName||'unknown')} (runtime ${state}, ${count} tools${error?`, ${error}`:''})`;}).join(', ')||'no MCP servers were reported';throw new Error(`The Pseudoharness saved-skills library tools are not available in this execution thread. Refresh the app-server MCP catalog; no execution turn was started. MCP catalog: ${catalog}.`);}}
 function directContextForPrompt(value:any,query:string){
   const latinWords=(query.toLocaleLowerCase().match(/[a-z0-9]{3,}/g)||[]).filter(word=>!['what','which','that','this','with','from','about','does','have','into','tell','show','explain','project'].includes(word));
@@ -408,18 +412,33 @@ function workerReceiptFromStatus(worker:RecruitmentWorker):Receipt{
   return {status:failed?'failed':cancelled?'blocked':'incomplete',result:worker.error||`Worker ${worker.name} ended as ${worker.status} before returning a validated execution receipt.`,changes:[],acceptance:{met:[],unmet:[...worker.assignment.acceptance]},verification:[{check:'Worker execution receipt',result:'failed',evidence:`Terminal status: ${worker.status}.` }],risks:[worker.error||`No verified worker receipt was produced (${worker.status}).`],knowledge:{consulted:[],updated:[]},decision_required:null};
 }
 function integrationReceiptFromError(error:string):Receipt{return {status:'failed',result:`Integration could not proceed: ${error}`,changes:[],acceptance:{met:[],unmet:['Integrate and verify every selected worker contribution.']},verification:[{check:'Worker branch merge and integration',result:'failed',evidence:error}],risks:[error],knowledge:{consulted:[],updated:[]},decision_required:null};}
+function preflightDeepSeekRecruitment(task:Task,pass:TaskPass,plan:ReturnType<typeof recruitmentWorkersSchema.parse>,base:string){
+  const profile=pass.deepSeekExecution;
+  if(!profile||profile.kind!=='deepseek-harness-sdk')throw new DeepSeekHarnessError('configuration','This pass has no persisted DeepSeek Harness worker profile. The selected provider was not changed and no Codex worker fallback was started.');
+  if(!pass.approvalPolicy)throw new DeepSeekHarnessError('configuration','This pass has no persisted approval policy. DeepSeek Harness recruitment cannot infer or change permissions.');
+  if(isAgentMemEnabled(task.agentmemProjectId))throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness workers cannot currently access the model-visible AgentMem tools required by this project’s artifact audit. No worker or integrator was started; disable AgentMem for a new pass or use a provider with the audited tools.');
+  if((pass.selectedSkills||[]).length||plan.workers.some(worker=>(worker.skill_refs||[]).length))throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness workers cannot currently access the saved-skills tools. This pass or assignment selected one or more skills, so no worker or integrator was started. Use a provider with the required skill tools or make a new pass without selected skills.');
+  deepSeekSdkLaunch??=discoverWindowsDeepSeekHarnessSdkLaunch();
+  for(const worker of plan.workers){
+    const writeScope=assignmentWriteRoots(worker.assignment,base);
+    resolveDeepSeekHarnessPermission({approvalPolicy:pass.approvalPolicy,selectedForTask:true,workspaceRoot:base,writeScope,requiresFilesystemConfinement:false});
+  }
+  const integrationWriteScope=[...new Set(plan.workers.flatMap(worker=>assignmentWriteRoots(worker.assignment,base)))];
+  resolveDeepSeekHarnessPermission({approvalPolicy:pass.approvalPolicy,selectedForTask:true,workspaceRoot:base,writeScope:integrationWriteScope,requiresFilesystemConfinement:false});
+  return {profile:structuredClone(profile),launch:deepSeekSdkLaunch};
+}
 async function recruitWorkers(taskId:string,raw:unknown,toolCallId:string){
   const task=getTask(taskId),pass=task&&currentPass(task);if(!task||!pass||task.phase!=='planning'||!task.orchestratorThreadId)throw new Error('Recruitment is available only to the active hard-task orchestrator turn.');
   const prior=pass.recruitmentTeam;if(prior){if(prior.toolCallIds.includes(toolCallId))return prior;if(prior.sealed){await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam;if(current&&!current.toolCallIds.includes(toolCallId))current.toolCallIds.push(toolCallId);});return getTask(taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam||prior;}}
   const plan=recruitmentWorkersSchema.parse(raw);const names=new Set<string>();
-  const base=task.userRoot;await validateRecruitmentRoot(base,'HEAD');
+  const base=task.userRoot;await validateRecruitmentRoot(base,'HEAD');const provider=preflightDeepSeekRecruitment(task,pass,plan,base);
   const teamId=randomUUID(),passId=pass.id,workspaceParent=recruitmentWorkspaceRoot(stateDirectory(),task.id,pass.id),workers:RecruitmentWorker[]=[];await mkdir(path.dirname(workspaceParent),{recursive:true});
   const taskBranchScope=branchSlug(task.title);
-  for(const selected of plan.workers){const key=selected.name.trim().toLocaleLowerCase();if(names.has(key))throw new Error('Worker names must be unique within a team.');names.add(key);assignmentWriteRoots(selected.assignment,base);const skills=await snapshotSelectedSkills(selected.skill_refs);const workerId=randomUUID();workers.push({workerId,name:selected.name.trim(),assignment:structuredClone({...selected.assignment,skill_refs:undefined}),effort:selected.effort||'high',skills,branch:`recruitment/${taskBranchScope}/${workerId}/${branchSlug(selected.name)}`,worktreeRoot:'',status:'queued'});}
+  for(const selected of plan.workers){const key=selected.name.trim().toLocaleLowerCase();if(names.has(key))throw new Error('Worker names must be unique within a team.');names.add(key);assignmentWriteRoots(selected.assignment,base);const skills=await snapshotSelectedSkills(selected.skill_refs);const workerId=randomUUID();workers.push({workerId,name:selected.name.trim(),assignment:structuredClone({...selected.assignment,skill_refs:undefined}),effort:selected.effort||'high',skills,deepSeekExecution:structuredClone(provider.profile),branch:`recruitment/${taskBranchScope}/${workerId}/${branchSlug(selected.name)}`,worktreeRoot:'',status:'queued'});}
   const integrationId=randomUUID(),integrationBranch=`recruitment/${taskBranchScope}/${integrationId}/integration`;
   const prepared=await prepareRecruitmentWorktrees({canonicalRoot:base,taskRoot:workspaceParent,baseRef:'HEAD',workers:workers.map(worker=>({workerId:worker.workerId,branch:worker.branch})),integrationBranch});
   for(const worker of workers){const actual=prepared.workers.find(row=>row.workerId===worker.workerId);if(!actual)throw new Error(`Git worktree preparation omitted worker ${worker.workerId}; no worker turns were started.`);worker.worktreeRoot=actual.worktreeRoot;}
-  const team:RecruitmentTeam={teamId,passId,createdAt:new Date().toISOString(),canonicalProjectRoot:base,agentmemProjectId:task.agentmemProjectId,workspaceParent,baseRef:'HEAD',baseCommit:prepared.baseCommit,status:'recruiting',sealed:false,workers,integration:{status:'queued',branch:integrationBranch,worktreeRoot:prepared.integration.worktreeRoot,assignment:integrationAssignment(workers),effort:'high',skills:[...new Map(workers.flatMap(row=>row.skills).map(skill=>[`${skill.id}@${skill.revision}`,skill])).values()]},toolCallIds:[toolCallId],completionWakeSent:false};
+  const team:RecruitmentTeam={teamId,passId,createdAt:new Date().toISOString(),canonicalProjectRoot:base,agentmemProjectId:task.agentmemProjectId,workspaceParent,baseRef:'HEAD',baseCommit:prepared.baseCommit,status:'recruiting',sealed:false,workers,integration:{status:'queued',branch:integrationBranch,worktreeRoot:prepared.integration.worktreeRoot,assignment:integrationAssignment(workers),effort:'high',skills:[...new Map(workers.flatMap(row=>row.skills).map(skill=>[`${skill.id}@${skill.revision}`,skill])).values()],deepSeekExecution:structuredClone(provider.profile)},toolCallIds:[toolCallId],completionWakeSent:false};
   const master=teamMasterAssignment(team);const roots=assignmentWriteRoots(master,base);const work=isAgentMemEnabled(task.agentmemProjectId)?(task.agentmemTaskId&&task.agentmemLease?{taskId:task.agentmemTaskId,lease:task.agentmemLease}:await withAgentMemPassScope(task,'orchestrator','recruitment_work_lease',()=>agentmem.createWork(task.agentmemProjectId,titleFor(task),master.outcome,roots.map(x=>path.relative(base,x)||'.'),master.acceptance),passId)):undefined;
   sealRecruitmentTeam(team);
   await mutate(state=>{const live=state.tasks.find(row=>row.id===taskId),current=live?.passes?.find(row=>row.id===passId);if(!live||!current||live.phase!=='planning')throw new Error('The hard-task pass changed before recruitment could be sealed.');current.recruitmentTeam=team;live.assignment=master;live.resolution='delegated';live.allowDirectResponse=false;live.phase='worker_running';live.activeRole=undefined;live.activeTurnId=undefined;if(work){live.agentmemTaskId=work.taskId;live.agentmemLease=work.lease;}addMessage(live,'orchestrator',`Recruitment team sealed with ${workers.length} worker${workers.length===1?'':'s'}.`);});
@@ -427,34 +446,105 @@ async function recruitWorkers(taskId:string,raw:unknown,toolCallId:string){
   void maybeStartRecruitmentIntegration(taskId,passId);
   return getTask(taskId)?.passes?.find(row=>row.id===passId)?.recruitmentTeam||team;
 }
+function assistantMessageText(event:any){
+  const message=event?.data?.message;if(message?.role!=='assistant'||!Array.isArray(message.content))return '';
+  return message.content.filter((block:any)=>block&&block.type==='text'&&typeof block.text==='string').map((block:any)=>block.text).join('').trim().slice(0,128*1024);
+}
+function onDeepSeekNotification(session:DeepSeekRecruitmentSession,notification:DeepSeekHarnessNotification){
+  const params=notification.params as any;if(!params||typeof params!=='object'||params.sessionId!==session.runtime.sessionId)return;
+  const run=session.active;
+  if(notification.method==='session.status'){
+    if(run&&run.endedTurn!==undefined&&params.status==='idle'){run.idleAfterEnd=true;}
+    return;
+  }
+  if(notification.method!=='session.event')return;
+  const event=params.event;if(!event||typeof event.type!=='string')return;
+  const data=event.data&&typeof event.data==='object'?event.data:{};
+  const eventTurn=Number(data.turn);
+  if(Number.isSafeInteger(eventTurn)&&eventTurn>session.latestTurn)session.latestTurn=eventTurn;
+  if(!run||!Number.isSafeInteger(eventTurn)||eventTurn<=run.baselineTurn)return;
+  if(event.type==='turn/end')run.endedTurn=eventTurn;
+  if(event.type==='assistant/message'){
+    const text=assistantMessageText(event);if(text)run.messages.push({turn:eventTurn,step:Number.isSafeInteger(Number(data.step))?Number(data.step):0,text});
+  }
+}
+function validatedDeepSeekOutput(session:DeepSeekRecruitmentSession,run:DeepSeekRecruitmentRun){
+  if(run.failure)throw new DeepSeekHarnessError('protocol-error',run.failure);
+  if(run.endedTurn===undefined||!run.idleAfterEnd)throw new DeepSeekHarnessError('protocol-error','DeepSeek Harness wait returned without both a turn-end event and an idle session status. The empty wait result was not treated as completion.');
+  const message=run.messages.filter(row=>row.turn===run.endedTurn).sort((a,b)=>a.step-b.step).at(-1)?.text;
+  if(!message)throw new DeepSeekHarnessError('protocol-error','DeepSeek Harness ended the turn without a nonempty assistant message. No worker receipt was accepted.');
+  session.latestTurn=Math.max(session.latestTurn,run.endedTurn);
+  return message;
+}
+async function setDeepSeekTurnStatus(taskId:string,passId:string,threadId:string,turnId:string,status:'completed'|'interrupted'|'failed'){
+  await mutate(state=>{const task=state.tasks.find(row=>row.id===taskId);const pass=task?.passes?.find(row=>row.id===passId);if(!pass)return;const projection=passProjection(task!,pass,threadId,turnId);projection.workerThreadId=threadId;const turn=projection.reasoningTurns?.find(row=>row.threadId===threadId&&row.turnId===turnId);if(turn)turn.status=status;savePassProjection(pass,projection);});
+}
+function attachDeepSeekRuntime(session:DeepSeekRecruitmentSession){
+  const runtime=session.runtime;
+  runtime.on('notification',(notification:DeepSeekHarnessNotification)=>onDeepSeekNotification(session,notification));
+  runtime.on('approvalRequired',(event:any)=>{if(session.active)session.active.failure=typeof event?.message==='string'?event.message:'DeepSeek Harness requested an approval that Pseudoharness cannot answer.';});
+  runtime.on('unsupportedServerRequest',(event:any)=>{if(session.active)session.active.failure=`DeepSeek Harness requested unsupported SDK method ${String(event?.method||'unknown')}.`;});
+  runtime.on('protocolError',(error:unknown)=>{if(session.active)session.active.failure=safeError(error);});
+  runtime.on('disconnected',(error:unknown)=>{if(session.active)session.active.failure=safeError(error);});
+}
 async function startRecruitmentStage(taskId:string,passId:string,workerId:string,stage:WorkerStage,context?:{status?:WorkerContextStatus;summary?:string},integration=false){
   const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam;if(!task||!pass||!team||team.passId!==passId||!team.sealed||task.phase==='cancelled')return;
   const record=integration?team.integration:team.workers.find(row=>row.workerId===workerId);if(!record||integration&&team.status!=='integrating'||!integration&&!['running','recruiting'].includes(team.status))return;
-  requireModel('gpt-6-luna',record.effort);
-  const canonical=team.canonicalProjectRoot,workspace=record.worktreeRoot,assignment=record.assignment,localAssignment=rebaseRecruitmentAssignment(assignment,canonical,workspace),writeRoots=stage==='execute'?[...assignmentWriteRoots(localAssignment,workspace),...await recruitmentGitWritableRoots(canonical,workspace,record.branch)]:[];
-  let prompt:string,schema:unknown;
-  if(stage==='context_plan'){prompt=workerContextPlanPrompt(assignment,canonical);schema=workerContextPlanJsonSchema;}
-  else if(stage==='context_compose'){prompt=workerContextComposePrompt(workerScopeSummary(assignment,canonical),context?.status||{status:'unavailable',detail:'No composed context was returned.'});schema=workerContextSummaryJsonSchema;}
-  else{const receipts=integration?JSON.stringify(team.workers.map(row=>({workerId:row.workerId,name:row.name,status:row.status,branch:row.branch,headCommit:row.headCommit,receipt:row.receipt||workerReceiptFromStatus(row),error:row.error})),null,2):'';const selected=record.skills.length?`\n\nEXPLICITLY SELECTED IMMUTABLE SKILL SNAPSHOTS:\n${skillSnapshotsText(record.skills)}`:'';const composed=context?.summary||record.contextSummary||'No composed project context was provided.';prompt=integration?`STAGE 3 OF 3 — INTEGRATE. The app composed scoped AgentMem context for the canonical selected project/KB and now provides the complete integration assignment, every worker's terminal outcome and receipt, and immutable selected skills. Review all contributions and their branches already merged into this isolated integration worktree. Resolve conflicts only within the validated write scope. Run relevant verification; commit the final integrated changes on this integration branch. Do not push, open or merge a remote pull request, modify the user's canonical checkout, or claim unverified work. Report a complete structured receipt, or an honest blocked/failed receipt if integration cannot be safely completed.\n\nCOMPOSED CONTEXT:\n${composed}\n\nASSIGNMENT:\n${JSON.stringify(localAssignment,null,2)}\n\nWORKER RECEIPTS (complete roster):\n${receipts}\n\nSKILLS:\n${selected||'No skills were explicitly selected.'}\n\nUse Pseudoharness's passive Skills library only via explicit search/load calls and pin any chosen revisions in the receipt. Return one strict worker outcome.`:workerExecutePrompt(localAssignment,composed,selected);schema=workerOutcomeJsonSchema;}
-  if(integration){const requests=pass.userInputs?.length?pass.userInputs:[pass.userInput];prompt+=`\n\nORIGINAL USER REQUEST AND FOLLOW-UP INSTRUCTIONS (authoritative task requirements):\n${requests.map((request,index)=>`${index+1}. ${request}`).join('\n')}`;}
-  const approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;await ensureAgentAuth();
-  const mcpConfig=await agentMemModelConfig(task,'worker',passId,workspace);const skillsConfig=skillLibraryMcpServerConfig({taskId,role:'worker'});
-  if(!record.threadId)record.threadId=await agentCodex.startThread('worker',workspace,'gpt-6-luna',record.effort,approvalPolicy,undefined,workerWorkspaceTool,mcpConfig,skillsConfig);
-  else if(!attachedThreads.has(record.threadId))await agentCodex.resumeThread(record.threadId,approvalPolicy,'worker',workspace,undefined,mcpConfig,skillsConfig,workerWorkspaceTool);
-  attachedThreads.add(record.threadId);await verifySkillMcpAvailability(record.threadId);await recordAgentMemMcpAvailability(taskId,passId,'worker',record.threadId,!!mcpConfig);if(typeof mcpConfig?.env?.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID==='string')await bindAgentMemRepository(taskId,passId,record.threadId,workspace,mcpConfig.env.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID,integration?'recruitment_integration':'recruitment_worker');workerWorkspaceTargets.set(record.threadId,{taskId,passId});
-  if(integration){team.integration.workerStage=stage;team.integration.status=stage==='execute'?'running':stage; if(context?.status)team.integration.contextStatus=context.status;if(context?.summary)team.integration.contextSummary=context.summary;team.status='integrating';}
-  else{(record as RecruitmentWorker).workerStage=stage;(record as RecruitmentWorker).status=stage==='execute'?'running':stage; if(context?.status)(record as RecruitmentWorker).contextStatus=context.status;if(context?.summary)(record as RecruitmentWorker).contextSummary=context.summary;}
-  await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);if(!current||current.currentPassId!==passId||current.phase==='cancelled')return;current.phase='worker_running';current.activeRole=undefined;current.activeTurnId=undefined;});
-  allowanceBaselines.set(record.threadId,await readAllowanceSnapshot());
+  if(record.activeTurnId&&record.workerStage===stage)return;
+  const profile=record.deepSeekExecution||pass.deepSeekExecution;if(!profile)throw new DeepSeekHarnessError('configuration','The recruited role has no saved DeepSeek Harness profile. No Codex worker fallback was started.');
+  if(isAgentMemEnabled(task.agentmemProjectId))throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness cannot currently satisfy the selected AgentMem audit tools. No worker turn was started.');
+  if(record.skills.length||(pass.selectedSkills||[]).length)throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness cannot currently access the saved-skills tools selected for this pass. No worker turn was started.');
+  const canonical=team.canonicalProjectRoot,workspace=record.worktreeRoot,assignment=record.assignment,localAssignment=rebaseRecruitmentAssignment(assignment,canonical,workspace),writeScope=assignmentWriteRoots(localAssignment,workspace);
+  const approvalPolicy=pass.approvalPolicy;if(!approvalPolicy)throw new DeepSeekHarnessError('configuration','This pass has no saved approval policy. DeepSeek Harness will not infer permissions.');
+  const permission=resolveDeepSeekHarnessPermission({approvalPolicy,selectedForTask:true,workspaceRoot:workspace,writeScope,requiresFilesystemConfinement:false});
+  let prompt:string;
+  if(stage==='context_plan')prompt=workerContextPlanPrompt(localAssignment,workspace);
+  else if(stage==='context_compose')prompt=workerContextComposePrompt(workerScopeSummary(localAssignment,workspace),context?.status||{status:'unavailable',detail:'No composed project context was returned.'});
+  else{
+    const receipts=integration?JSON.stringify(team.workers.map(row=>({workerId:row.workerId,name:row.name,status:row.status,branch:row.branch,headCommit:row.headCommit,receipt:row.receipt||workerReceiptFromStatus(row),error:row.error})),null,2):'';
+    const composed=context?.summary||record.contextSummary||'No composed project context was provided.';
+    if(integration)prompt=`STAGE 3 OF 3 — INTEGRATE. The app provides the complete integration assignment and every worker terminal outcome and receipt. Review all contributions already merged into this isolated integration worktree. Resolve conflicts only within the validated write scope. Run relevant verification; commit the final integrated changes on this integration branch. Do not push, open or merge a remote pull request, modify the user’s canonical checkout, or claim unverified work. Report a complete structured receipt, or an honest blocked/failed receipt if integration cannot be safely completed.\n\nCOMPOSED CONTEXT:\n${composed}\n\nASSIGNMENT:\n${JSON.stringify(localAssignment,null,2)}\n\nWORKER RECEIPTS (complete roster):\n${receipts}\n\nReturn one strict worker outcome. No saved-skills or AgentMem model tools are available in this DSH session.`;
+    else prompt=workerExecutePrompt(localAssignment,composed,'').replace('the runtime independently enforces the write roots.','DeepSeek Harness does not enforce narrower assignment paths in Full Access mode. Keep changes within the listed paths as an assignment constraint and report any limit honestly. No saved-skills or AgentMem model tools are available in this DSH session.');
+  }
+  if(integration&&stage==='execute'){const requests=pass.userInputs?.length?pass.userInputs:[pass.userInput];prompt+=`\n\nORIGINAL USER REQUEST AND FOLLOW-UP INSTRUCTIONS (authoritative task requirements):\n${requests.map((request,index)=>`${index+1}. ${request}`).join('\n')}`;}
   const carried=stage==='execute'&&!integration?attachmentUserInput(pass.attachments||[]):{images:[],text:''};
-  const sourceBaseline=stage==='execute'&&isAgentMemEnabled(task.agentmemProjectId)?await captureTurnSourceFingerprint(workspace):undefined;if(sourceBaseline&&!sourceBaseline.available)throw new Error(`The assigned Git worktree could not be safely fingerprinted before execution. ${sourceBaseline.reason||'Verify the worktree.'}`);
-  const response=await agentCodex.startTurn(record.threadId,`${prompt}${carried.text}`,'worker','gpt-6-luna',record.effort,workspace,writeRoots,approvalPolicy,schema,undefined,carried.images);
-  const id=response.turn?.id||response.turnId;if(id&&sourceBaseline)sourceFingerprints.set(sourceFingerprintKey(taskId,passId,'worker',record.threadId,id),sourceBaseline);
-  let turnAccepted=false;
-  if(id)await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);const currentPassRow=current?.passes?.find(row=>row.id===passId);const teamNow=currentPassRow?.recruitmentTeam;const target=integration?teamNow?.integration:teamNow?.workers.find(row=>row.workerId===workerId);const activeStatuses=['context_plan','context_compose','running'];if(!current||current.currentPassId!==passId||current.phase==='cancelled'||!teamNow||teamNow.status==='cancelled'||!target||target.workerStage!==stage||!activeStatuses.includes(target.status))return;if(integration?teamNow.status!=='integrating':!['recruiting','running'].includes(teamNow.status))return;target.activeTurnId=id;turnAccepted=true;});
-  if(id&&!turnAccepted){try{await agentCodex.interrupt(record.threadId,id);}catch{}return;}
-  if(id&&stage==='context_compose')await bindAgentMemAuditTurn(taskId,passId,'worker',record.threadId,id);
-  if(id)await processDeferred(taskId,id);
+  if(carried.images.length)throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness image attachments have not been verified by the installed SDK. No worker turn was started; use a provider that supports the selected attachment type.');
+  const launch=deepSeekSdkLaunch??discoverWindowsDeepSeekHarnessSdkLaunch();deepSeekSdkLaunch=launch;
+  let session=record.threadId?deepSeekRecruitmentSessions.get(record.threadId):undefined;
+  if(record.threadId&&!session)throw new DeepSeekHarnessError('interrupted','This DeepSeek Harness session is not attached to the current kernel process. It was not resumed automatically; start a fresh task after checking the saved paused session.');
+  if(!session){
+    const runtime=new DeepSeekHarnessSdkRuntime({launch,cwd:workspace,provider:profile.provider,model:profile.model,reasoningEffort:profile.nativeReasoningEffort,permission,...(record.threadId?{sessionId:record.threadId}:{})});
+    session={runtime,taskId,passId,workerId,integration,latestTurn:0};record.threadId=runtime.sessionId;deepSeekRecruitmentSessions.set(runtime.sessionId,session);attachDeepSeekRuntime(session);
+  }
+  const runtime=session.runtime;const threadId=runtime.sessionId;const turnId=randomUUID();const run:DeepSeekRecruitmentRun={taskId,passId,threadId,turnId,stage,baselineTurn:session.latestTurn,idleAfterEnd:false,messages:[],finished:false};session.active=run;
+  if(integration){team.integration.workerStage=stage;team.integration.status=stage==='execute'?'running':stage;if(context?.status)team.integration.contextStatus=context.status;if(context?.summary)team.integration.contextSummary=context.summary;team.status='integrating';}
+  else{(record as RecruitmentWorker).workerStage=stage;(record as RecruitmentWorker).status=stage==='execute'?'running':stage;if(context?.status)(record as RecruitmentWorker).contextStatus=context.status;if(context?.summary)(record as RecruitmentWorker).contextSummary=context.summary;}
+  await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);const currentPass=current?.passes?.find(row=>row.id===passId);const currentTeam=currentPass?.recruitmentTeam;const target=integration?currentTeam?.integration:currentTeam?.workers.find(row=>row.workerId===workerId);if(!current||!currentPass||!currentTeam||current.currentPassId!==passId||current.phase==='cancelled'||!target)return;current.phase='worker_running';current.activeRole=undefined;current.activeTurnId=undefined;target.threadId=threadId;target.activeTurnId=turnId;target.workerStage=stage;target.status=stage==='execute'?'running':stage;if(integration){currentTeam.status='integrating';}const projection=passProjection(current,currentPass,threadId,turnId);projection.workerThreadId=threadId;beginReasoningTurn(projection,'worker',threadId,turnId,profile.model,profile.nativeReasoningEffort,'DeepSeek Harness SDK');savePassProjection(currentPass,projection);});
+  try{
+    const info=await runtime.connect();
+    if(path.resolve(await runtime.getWorkingDirectory())!==path.resolve(workspace))await runtime.setWorkingDirectory(workspace);
+    record.deepSeekRuntime=info;
+    await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId);const currentTeam=current?.passes?.find(row=>row.id===passId)?.recruitmentTeam;const target=integration?currentTeam?.integration:currentTeam?.workers.find(row=>row.workerId===workerId);if(target&&target.threadId===threadId)target.deepSeekRuntime=info;});
+    await runtime.startSession([{type:'text',text:`${prompt}${carried.text}`}]);
+    // The SDK currently returns an empty object from session/wait. Only its
+    // validated turn/end + idle notifications + assistant message complete a stage.
+    await runtime.waitSession(threadId);
+    const text=validatedDeepSeekOutput(session,run);const latestBeforeCompletion=getTask(taskId);if(!latestBeforeCompletion||latestBeforeCompletion.currentPassId!==passId||!claimCompletion(taskId,turnId,latestBeforeCompletion.processedTurns)){run.finished=true;session.active=undefined;return;}run.finished=true;session.active=undefined;
+    await onRecruitmentTurnCompleted(taskId,passId,threadId,turnId,'completed',{id:turnId,status:'completed',items:[{type:'agentMessage',text}]});
+    await setDeepSeekTurnStatus(taskId,passId,threadId,turnId,'completed');
+    const latest=getTask(taskId),latestTarget=latest&&recruitmentTarget(latest,threadId);
+    if(stage==='execute'||!latestTarget||['complete','failed','escalated','cancelled'].includes(latestTarget.record.status)){
+      deepSeekRecruitmentSessions.delete(threadId);try{await runtime.shutdown();}catch{}
+    }
+  }catch(error){
+    const latest=getTask(taskId);const currentTarget=latest&&recruitmentTarget(latest,threadId);
+    if(!run.finished&&latest&&latest.phase!=='cancelled'&&latest.currentPassId===passId&&currentTarget?.record.activeTurnId===turnId&&claimCompletion(taskId,turnId,latest.processedTurns)){
+      const detail=run.failure||safeError(error);run.finished=true;session.active=undefined;
+      await onRecruitmentTurnCompleted(taskId,passId,threadId,turnId,'failed',{id:turnId,status:'failed',error:{message:detail}});
+      await setDeepSeekTurnStatus(taskId,passId,threadId,turnId,'failed');
+    }
+    deepSeekRecruitmentSessions.delete(threadId);try{await runtime.cancel();}catch{}
+  }
 }
 async function processDeferred(taskId:string,turnId:string){const rows=deferredCompletions.get(taskId)||[];const i=rows.findIndex(x=>x.turn?.id===turnId);if(i<0)return;const [event]=rows.splice(i,1);await onTurnCompleted(event);}
 async function onRecruitmentTurnCompleted(taskId:string,passId:string,threadId:string,turnId:string,status:string,turn:any){
@@ -1021,12 +1111,15 @@ export async function cancelTask(taskId:string){
   const activeTeamThreads=(currentPass(task)?.recruitmentTeam?.workers||[]).filter(row=>row.activeTurnId&&row.threadId).map(row=>({threadId:row.threadId!,turnId:row.activeTurnId!}));
   const integration=currentPass(task)?.recruitmentTeam?.integration;if(integration?.activeTurnId&&integration.threadId)activeTeamThreads.push({threadId:integration.threadId,turnId:integration.activeTurnId});
   const allTurns=[...(thread&&turn?[{threadId:thread,turnId:turn}]:[]),...activeTeamThreads];
+  const deepSeekSessionsToCancel=[...deepSeekRecruitmentSessions.entries()].filter(([,session])=>session.taskId===taskId&&session.passId===passId);
+  const deepSeekThreadIds=new Set(deepSeekSessionsToCancel.map(([threadId])=>threadId));
   for(const item of allTurns)allowanceBaselines.delete(item.threadId);
   await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)!;const pass=current.passes?.find(row=>row.id===passId);const now=new Date().toISOString();for(const call of pass?.agentmemAudit?.calls||[])if(call.source==='model'&&call.status==='running'&&allTurns.some(item=>item.threadId===call.threadId&&item.turnId===call.turnId)){call.status='interrupted';call.updatedAt=now;}
     const team=pass?.recruitmentTeam;if(team){cancelRecruitmentTeamState(team);team.integration.error='The task was cancelled by the user. The integration worktree is preserved.';team.integration.receipt=integrationReceiptFromError(team.integration.error);for(const worker of team.workers)if(worker.status==='cancelled'&&!worker.receipt){worker.error='The task was cancelled by the user. The worker worktree is preserved.';worker.receipt=workerReceiptFromStatus(worker);}}
     current.phase='cancelled';current.activeRole=undefined;current.activeTurnId=undefined;current.error=undefined;addMessage(current,'system','Task cancelled. Recruited workers were interrupted and their task-owned worktrees are preserved. Late Codex events will be ignored.');
   });
-  for(const item of allTurns)try{await agentCodex.interrupt(item.threadId,item.turnId);}catch{}
+  for(const [threadId,session] of deepSeekSessionsToCancel){deepSeekRecruitmentSessions.delete(threadId);try{await session.runtime.cancel();}catch{}}
+  for(const item of allTurns)if(!deepSeekThreadIds.has(item.threadId))try{await agentCodex.interrupt(item.threadId,item.turnId);}catch{}
   for(const approval of task.approvalRequests||[])try{agentCodex.respondServerRequest(approval.requestId,approvalResponse(approval.method,approval.mode||(approval as any).permissionRequest,'cancel'));}catch{}
   if(role&&thread&&passId){const allowanceEnd=await readAllowanceSnapshot();await mutate(state=>{const pass=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId);if(pass){markThreadTokenUsageUnavailable(pass,role,thread);applyAllowanceDelta(pass,role,thread,allowanceBaselines.get(thread)||null,allowanceEnd);}});void refreshThreadUsage(taskId,passId,role,thread);}
   if(task.agentmemTaskId&&task.agentmemLease)try{const auditRole=role==='worker'||role==='direct'||role==='simple'?role:'orchestrator';await withAgentMemPassScope(task,auditRole,'release_lease_after_cancellation',()=>agentmem.releaseWork(task.agentmemProjectId,task.agentmemTaskId!,task.agentmemLease!));await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)!;current.agentmemRecordStatus='released';current.agentmemRecordError=undefined;current.agentmemLease=undefined;});}catch(error){const record=agentMemRecordFailure(error);await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId)!;current.agentmemRecordStatus=record.status;current.agentmemRecordError=`Cancellation is saved, but AgentMem ownership release failed: ${safeError(error)}`;});}
@@ -1047,4 +1140,8 @@ export async function saveSettings(input:any){
 export function getRuntimeStatus(){return runtimeStatus();}
 export async function listAgentMemProjects(){return agentmem.listProjects();}
 export async function refreshConnections(){try{await codex.connect();await refreshModels();}catch(e){codexState='disconnected';codexError=safeError(e);}const s=getState();if(s.settings.agentmemProjectId&&s.settings.projectRoot)try{await agentmem.prepareProject(s.settings.agentmemProjectId,s.settings.projectRoot);}catch{}else agentmem.status={connected:false,projectVerified:false,detail:s.settings.projectRoot?'Disabled · no AgentMem project selected':'Choose a project root in Settings.'};return runtimeStatus();}
-export function shutdown(){codex.close();agentCodex.close();agentmem.close();}
+export async function shutdown(){
+  const sessions=[...deepSeekRecruitmentSessions.entries()];deepSeekRecruitmentSessions.clear();
+  await Promise.all(sessions.map(async([,session])=>{try{await session.runtime.cancel();}catch{}}));
+  codex.close();agentCodex.close();agentmem.close();
+}

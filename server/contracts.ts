@@ -168,6 +168,7 @@ export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never' | 'full-access
 export const settingsSchema = z.object({
     projectRoot: z.string().trim().max(1024), agentmemProjectId: z.string().trim().max(64).regex(/^$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).default(''), agentmemAutoSetup: z.boolean().default(false),
   orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
+  deepseekProvider:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('deepseek-official'),deepseekModel:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('deepseek-flash'),deepseekReasoningEffort:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('high'),
   approvalPolicy: z.enum(['on-request','untrusted','never','full-access']).default('on-request'),
 }).strict();
 
