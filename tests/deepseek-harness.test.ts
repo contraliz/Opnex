@@ -11,16 +11,17 @@ import {
 
 const fixture = path.resolve('tests/fixtures/deepseek-harness-sdk-fixture.mjs');
 const cwd = process.cwd();
-const baseLaunch = (mode = 'normal') => ({
+const baseLaunch = (mode = 'normal', configuredMcpServers?: readonly string[]) => ({
   command: process.execPath,
   args: [fixture, '--profile', 'sdk', `--fixture=${mode}`],
+  ...(configuredMcpServers ? { configuredMcpServers } : {}),
   harnessVersion: '0.2.1-fixture',
 });
 const fullAccess = resolveDeepSeekHarnessPermission({
   approvalPolicy: 'full-access', selectedForTask: true, workspaceRoot: cwd, writeScope: [cwd], requiresFilesystemConfinement: false,
 });
-const options = (mode = 'normal', sessionId?: string) => ({
-  launch: baseLaunch(mode), cwd, provider: 'deepseek-official', model: 'deepseek-flash',
+const options = (mode = 'normal', sessionId?: string, configuredMcpServers?: readonly string[]) => ({
+  launch: baseLaunch(mode, configuredMcpServers), cwd, provider: 'deepseek-official', model: 'deepseek-flash',
   reasoningEffort: 'high', permission: fullAccess, ...(sessionId ? { sessionId } : {}), requestTimeoutMs: 5000,
 });
 
@@ -58,6 +59,7 @@ describe('DeepSeek Harness SDK worker boundary', () => {
       harnessVersion: '0.2.1-fixture', permissionMode: 'danger-full-access',
       selectedApprovalPolicy: 'full-access', workspaceRoot: cwd, writeScope: [cwd], access: 'unrestricted',
       filesystemScope: 'assignment-instruction-only',
+      mcpToolCatalog: { status: 'not-configured', configuredServerNames: [], availableServerNames: [], missingServerNames: [], toolNames: [] },
       serverInfo: { name: 'deepseek-harness-sdk-runtime', version: 'fixture-0.0.1' },
       capabilities: {
         sessionResume: true, workingDirectory: true, approvalResponse: false,
@@ -78,6 +80,48 @@ describe('DeepSeek Harness SDK worker boundary', () => {
     const recovered = new DeepSeekHarnessSdkRuntime(options('normal', sessionId));
     expect(await recovered.resumeSession()).toMatchObject({ sessionId, resumed: true });
     await recovered.shutdown();
+  });
+
+  it('reports only session-observed MCP tool names and preserves tool call/result provenance', async () => {
+    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['agentmem', 'pseudoharness_skills']));
+    const catalogEvents: unknown[] = [];
+    const notifications: Array<{ method: string; params: unknown }> = [];
+    runtime.on('mcpToolCatalog', catalog => catalogEvents.push(catalog));
+    runtime.on('notification', notification => notifications.push(notification));
+
+    const connected = await runtime.connect();
+    expect(connected.mcpToolCatalog.status).toBe('pending');
+    const sessionId = await runtime.startSession([{ type: 'text', text: 'Read-only catalog check.' }]);
+    await runtime.waitSession(sessionId);
+
+    expect(runtime.runtimeInfo?.mcpToolCatalog).toEqual({
+      status: 'ready',
+      configuredServerNames: ['agentmem', 'pseudoharness_skills'],
+      availableServerNames: ['agentmem', 'pseudoharness_skills'],
+      missingServerNames: [],
+      toolNames: ['mcp__agentmem__decisions', 'mcp__pseudoharness_skills__skills_list'],
+      observedAtSequence: 17,
+    });
+    expect(catalogEvents).toHaveLength(1);
+    const toolCall = notifications.find(item => (item.params as any)?.event?.type === 'tool/call')?.params as any;
+    const toolResult = notifications.find(item => (item.params as any)?.event?.type === 'tool/result')?.params as any;
+    expect(toolCall.event.data).toMatchObject({ turn: 1, step: 1, callId: 'fixture-mcp-call', name: 'mcp__agentmem__decisions' });
+    expect(typeof toolCall.event.data.arguments).toBe('string');
+    expect(toolResult.event.data).toMatchObject({ turn: 1, step: 1, message: { role: 'tool', toolCallId: 'fixture-mcp-call', source: { kind: 'tool', callId: 'fixture-mcp-call' }, isError: false } });
+    expect(toolResult.event.sourceEventSeqs).toEqual([18]);
+    await runtime.shutdown();
+  });
+
+  it('marks a configured MCP server missing when the real session header omits its tools', async () => {
+    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['agentmem', 'missing-server']));
+    await runtime.startSession([{ type: 'text', text: 'Read-only catalog check.' }]);
+    await runtime.waitSession();
+    expect(runtime.mcpToolCatalog).toMatchObject({
+      status: 'missing-tools',
+      availableServerNames: ['agentmem'],
+      missingServerNames: ['missing-server'],
+    });
+    await runtime.shutdown();
   });
 
   it('fails closed for permission combinations the installed SDK cannot honor', () => {

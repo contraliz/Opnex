@@ -39,6 +39,10 @@ export type DeepSeekHarnessPermissionGrant = {
 export type DeepSeekHarnessSdkLaunch = {
   command: string;
   args: readonly string[];
+  /** The task-owned DSH SDK profile selected by this launch. Defaults to `sdk`. */
+  profileName?: string;
+  /** Native MCP servers configured in this profile; names only, never server env values. */
+  configuredMcpServers?: readonly string[];
   /** Optional installed Harness application version, distinct from the SDK server version. */
   harnessVersion?: string;
   /** Additional non-secret runtime variables. Credential values should stay in the Harness credential store. */
@@ -60,6 +64,14 @@ export type DeepSeekHarnessSdkOptions = {
 };
 
 export type DeepSeekHarnessServerInfo = { name: string; version: string };
+export type DeepSeekHarnessMcpToolCatalog = {
+  status: 'not-configured' | 'pending' | 'ready' | 'missing-tools';
+  configuredServerNames: readonly string[];
+  availableServerNames: readonly string[];
+  missingServerNames: readonly string[];
+  toolNames: readonly string[];
+  observedAtSequence?: number;
+};
 export type DeepSeekHarnessRuntimeInfo = {
   provider: string;
   model: string;
@@ -71,6 +83,10 @@ export type DeepSeekHarnessRuntimeInfo = {
   access: 'read-only' | 'unrestricted';
   filesystemScope: 'assignment-instruction-only' | 'read-only-preset';
   sessionId: string;
+  profileName: string;
+  configuredMcpServers: readonly string[];
+  /** Actual public MCP tool names observed in this session's request/header event. */
+  mcpToolCatalog: DeepSeekHarnessMcpToolCatalog;
   serverInfo: DeepSeekHarnessServerInfo;
   harnessVersion?: string;
   capabilities: {
@@ -119,9 +135,20 @@ const DSH_HOST_CLI_RELATIVE_PATH = path.join(
   'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js',
 );
 
+function assertProfileName(profileName: string) {
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(profileName)) {
+    throw new DeepSeekHarnessError('configuration', 'The DeepSeek Harness SDK profile name must be lowercase letters, digits, and hyphens, and begin with a letter.');
+  }
+}
+
 /** Build the direct, shell-free SDK launch for an installed Windows DSH desktop app. */
-export function createWindowsDeepSeekHarnessSdkLaunch(installationRoot: string, harnessVersion?: string): DeepSeekHarnessSdkLaunch {
+export function createWindowsDeepSeekHarnessSdkLaunch(
+  installationRoot: string,
+  harnessVersion?: string,
+  profileName = 'sdk',
+): DeepSeekHarnessSdkLaunch {
   assertAbsoluteDirectory(installationRoot, 'DeepSeek Harness installation root');
+  assertProfileName(profileName);
   if (process.platform !== 'win32') {
     throw new DeepSeekHarnessError('unsupported-capability', 'Direct desktop-app SDK launching is currently verified only on Windows. Configure the installed DSH SDK executable explicitly on this platform.');
   }
@@ -136,7 +163,8 @@ export function createWindowsDeepSeekHarnessSdkLaunch(installationRoot: string, 
   }
   return {
     command,
-    args: ['--expose-internals', cli, '--profile', 'sdk'],
+    args: ['--expose-internals', cli, '--profile', profileName],
+    profileName,
     ...(harnessVersion ? { harnessVersion } : {}),
     env: { ELECTRON_RUN_AS_NODE: '1' },
   };
@@ -238,6 +266,36 @@ export function resolveDeepSeekHarnessPermission(request: DeepSeekHarnessPermiss
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function makeMcpToolCatalog(
+  configuredServerNames: readonly string[],
+  discoveredToolNames: readonly string[] = [],
+  observedAtSequence?: number,
+  observed = false,
+): DeepSeekHarnessMcpToolCatalog {
+  const servers = [...new Set(configuredServerNames)].sort();
+  const prefixes = new Map(servers.map(serverName => [serverName, `mcp__${serverName}__`]));
+  const tools = [...new Set(discoveredToolNames)]
+    .filter(name => [...prefixes.values()].some(prefix => name.startsWith(prefix)))
+    .sort();
+  const available = servers.filter(serverName => tools.some(name => name.startsWith(prefixes.get(serverName)!)));
+  const missing = observed ? servers.filter(serverName => !available.includes(serverName)) : [];
+  const status = servers.length === 0
+    ? 'not-configured'
+    : !observed
+      ? 'pending'
+      : missing.length === 0
+        ? 'ready'
+        : 'missing-tools';
+  return Object.freeze({
+    status,
+    configuredServerNames: Object.freeze(servers),
+    availableServerNames: Object.freeze(available),
+    missingServerNames: Object.freeze(missing),
+    toolNames: Object.freeze(tools),
+    ...(observedAtSequence !== undefined ? { observedAtSequence } : {}),
+  });
 }
 
 function assertAbsoluteDirectory(directory: string, label: string) {
@@ -369,6 +427,7 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
   }>();
   private _ready = false;
   private _runtimeInfo?: DeepSeekHarnessRuntimeInfo;
+  private _mcpToolCatalog: DeepSeekHarnessMcpToolCatalog;
   private expectedExit = false;
   private cancelled = false;
 
@@ -382,12 +441,16 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
     if (options.permission[deepSeekPermissionGrantBrand] !== true) {
       throw new DeepSeekHarnessError('configuration', 'DeepSeek Harness permission grants must come from the fail-closed task-policy resolver.');
     }
-    if (!options.launch.args.includes('--profile') || options.launch.args[options.launch.args.indexOf('--profile') + 1] !== 'sdk') {
-      throw new DeepSeekHarnessError('configuration', 'The local DeepSeek Harness must be started with its SDK JSON-RPC profile.');
+    const profileName = options.launch.profileName ?? 'sdk';
+    assertProfileName(profileName);
+    const profileIndex = options.launch.args.indexOf('--profile');
+    if (profileIndex < 0 || options.launch.args[profileIndex + 1] !== profileName) {
+      throw new DeepSeekHarnessError('configuration', 'The local DeepSeek Harness must be started with the selected SDK JSON-RPC profile.');
     }
     if (!options.provider.trim() || !options.model.trim()) {
       throw new DeepSeekHarnessError('configuration', 'Select a DeepSeek Harness provider and model before starting a worker.');
     }
+    this._mcpToolCatalog = makeMcpToolCatalog(options.launch.configuredMcpServers ?? []);
     this.sessionId = options.sessionId?.trim() || `pseudoharness-${randomUUID()}`;
     if (this.sessionId.length > 200 || /[\r\n]/.test(this.sessionId)) {
       throw new DeepSeekHarnessError('configuration', 'The persisted DeepSeek Harness session ID is invalid.');
@@ -396,6 +459,7 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
 
   get ready() { return this._ready; }
   get runtimeInfo() { return this._runtimeInfo; }
+  get mcpToolCatalog() { return this._mcpToolCatalog; }
 
   async connect(): Promise<DeepSeekHarnessRuntimeInfo> {
     if (this.child && this._ready && this._runtimeInfo) return this._runtimeInfo;
@@ -474,6 +538,9 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
       access: this.options.permission.access,
       filesystemScope: this.options.permission.filesystemScope,
       sessionId: this.sessionId,
+      profileName: this.options.launch.profileName ?? 'sdk',
+      configuredMcpServers: Object.freeze([...(this.options.launch.configuredMcpServers ?? [])]),
+      mcpToolCatalog: this._mcpToolCatalog,
       serverInfo,
       ...(this.options.launch.harnessVersion ? { harnessVersion: this.options.launch.harnessVersion } : {}),
       capabilities: {
@@ -527,6 +594,7 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
       }
       if (typeof message.method === 'string') {
         const notification: DeepSeekHarnessNotification = { method: message.method, params: message.params };
+        if (message.method === 'session.event') this.observeMcpToolCatalog(message.params);
         this.emit('notification', notification);
         if (message.method === 'session.event' && this.approvalEvent(message.params)) {
           this.emit('approvalRequired', {
@@ -556,6 +624,23 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
     // DSH emits `approval/policy` as ordinary policy metadata; only an actual
     // request/pending/required event blocks execution and lacks a reply method.
     return /approval|permission|elicitation/.test(type) && /request|pending|required/.test(type);
+  }
+
+  private observeMcpToolCatalog(params: unknown) {
+    if (!isRecord(params) || params.sessionId !== this.sessionId || !isRecord(params.event)) return;
+    const event = params.event;
+    if (event.type !== 'request/header' || !isRecord(event.data) || !isRecord(event.data.header)) return;
+    const tools = event.data.header.tools;
+    if (!Array.isArray(tools)) return;
+    const toolNames = tools.flatMap(tool => isRecord(tool) && typeof tool.name === 'string' ? [tool.name] : []);
+    this._mcpToolCatalog = makeMcpToolCatalog(
+      this.options.launch.configuredMcpServers ?? [],
+      toolNames,
+      Number.isSafeInteger(event.seq) ? Number(event.seq) : undefined,
+      true,
+    );
+    if (this._runtimeInfo) this._runtimeInfo = { ...this._runtimeInfo, mcpToolCatalog: this._mcpToolCatalog };
+    this.emit('mcpToolCatalog', this._mcpToolCatalog);
   }
 
   private failProtocol(child: ChildProcessWithoutNullStreams, message: string) {

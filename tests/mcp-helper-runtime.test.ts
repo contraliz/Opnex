@@ -1,12 +1,22 @@
 import { describe,expect,it } from 'vitest';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { resolveMcpHelperLaunch } from '../server/mcp-helper-runtime.js';
 import { skillLibraryMcpServerConfig } from '../server/skill-library-mcp-config.js';
 import { NODE_RUNTIME_SHA256,NODE_RUNTIME_VERSION } from '../scripts/prepare-mcp-helper-runtime.mjs';
 
 describe('packaged MCP helper runtime',()=>{
-  it('keeps development on the local Node runtime and resolves source helpers',()=>{
-    const launch=resolveMcpHelperLaunch({modulePath:'D:\\repo\\server\\agentmem.ts',helperFile:'agentmem-mcp-gateway.ts',platform:'win32',arch:'x64',tsxLoader:'D:\\repo\\node_modules\\tsx\\dist\\loader.mjs'});
-    expect(launch.command).toBe(process.execPath);expect(launch.packaged).toBe(false);expect(launch.args).toEqual(['--import','D:\\repo\\node_modules\\tsx\\dist\\loader.mjs','D:\\repo\\server\\agentmem-mcp-gateway.ts']);expect(launch.cwd).toBe('D:\\repo');
+  it('keeps development on local Node and passes filesystem loaders as file URLs',()=>{
+    const root=path.resolve('repo with spaces');const modulePath=path.join(root,'server','agentmem.ts');const loaderPath=path.join(root,'node_modules','tsx','dist','loader.mjs');
+    const launch=resolveMcpHelperLaunch({modulePath,helperFile:'agentmem-mcp-gateway.ts',platform:process.platform,arch:process.arch,tsxLoader:loaderPath});
+    expect(launch.command).toBe(process.execPath);expect(launch.packaged).toBe(false);expect(launch.args).toEqual(['--import',pathToFileURL(loaderPath).href,path.join(root,'server','agentmem-mcp-gateway.ts')]);expect(launch.cwd).toBe(root);
+  });
+  it('keeps package specifiers and the resolved default loader unchanged',()=>{
+    const root=path.resolve('repo');const modulePath=path.join(root,'server','agentmem.ts');
+    const defaultLaunch=resolveMcpHelperLaunch({modulePath,helperFile:'agentmem-mcp-gateway.ts'});
+    expect(defaultLaunch.args[1]).toBe(import.meta.resolve('tsx'));
+    const override=resolveMcpHelperLaunch({modulePath,helperFile:'agentmem-mcp-gateway.ts',tsxLoader:'tsx'});
+    expect(override.args[1]).toBe('tsx');
   });
   it('uses a bundled architecture-specific runtime and unpacked helper modules when packaged',()=>{
     const available=new Set(['C:\\app\\resources\\pseudoharness-node\\win32-x64\\node.exe','C:\\app\\resources\\app.asar.unpacked\\dist-server\\skills-mcp-gateway.js']);
