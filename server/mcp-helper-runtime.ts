@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 
 export type McpHelperLaunch = { command:string;args:string[];cwd:string;packaged:boolean };
 export type McpHelperRuntimeOptions = {
@@ -16,6 +16,11 @@ export type McpHelperRuntimeOptions = {
 };
 
 const platformPath=(platform:string)=>platform==='win32'?path.win32:path.posix;
+
+function moduleSpecifier(value:string,platform:string){
+  if(value.startsWith('file:')||value.startsWith('node:'))return value;
+  return platformPath(platform).isAbsolute(value)?pathToFileURL(value).href:value;
+}
 
 /** Resolve the standalone helper runtime without relying on Electron's RunAsNode fuse. */
 export function resolveMcpHelperLaunch(options:McpHelperRuntimeOptions):McpHelperLaunch{
@@ -37,6 +42,7 @@ export function resolveMcpHelperLaunch(options:McpHelperRuntimeOptions):McpHelpe
   const helper=paths.join(moduleDirectory,options.helperFile);
   const electron=!!process.versions.electron;
   const command=options.nodeExecutable||(electron?'node':process.execPath);
-  const args=development?['--import',options.tsxLoader||fileURLToPath(import.meta.resolve('tsx')),helper]:[helper];
+  const tsxLoader=options.tsxLoader??import.meta.resolve('tsx');
+  const args=development?['--import',moduleSpecifier(tsxLoader,platform),helper]:[helper];
   return {command,args,cwd:paths.resolve(moduleDirectory,'..'),packaged:false};
 }
