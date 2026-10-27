@@ -15,3 +15,7 @@ export function rebaseRecruitmentAssignment(assignment:Assignment,canonicalRoot:
   for(const item of assignment.read_scope)if(path.isAbsolute(item))mapPath(item);
   return {...structuredClone(assignment),read_scope:assignment.read_scope.map(mapPath),write_scope:writeScope};
 }
+
+export function integrationReadScope(assignments: readonly Pick<Assignment, 'read_scope' | 'write_scope'>[]): string[] {
+  return [...new Set(assignments.flatMap((assignment) => [...assignment.read_scope, ...assignment.write_scope]))];
+}
