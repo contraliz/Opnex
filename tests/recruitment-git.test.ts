@@ -7,6 +7,8 @@ import {
   mergeRecruitmentCommits,
   prepareRecruitmentWorktrees,
   readRecruitmentBranchHead,
+  recruitmentGitWritableRoots,
+  recruitmentWorkspaceRoot,
   removeRecruitmentWorktree,
   validateRecruitmentBranch,
   validateRecruitmentRoot,
@@ -93,6 +95,32 @@ describe('bounded recruitment Git worktrees', () => {
     expect(await readRecruitmentBranchHead(repo, state.workers[0].branch)).toBe(baseCommit);
     expect(run(repo, 'rev-parse', 'HEAD')).toBe(baseCommit);
     expect(run(repo, 'remote')).toBe('');
+  });
+
+  it('keeps Windows worktree paths short under a deeply nested isolated state directory', async () => {
+    const stateRoot = path.join(fixture, `isolated-state-${'x'.repeat(36)}`);
+    const taskRoot = recruitmentWorkspaceRoot(stateRoot, '12345678-1234-4234-8234-123456789abc', 'abcdefab-cdef-4abc-8def-abcdefabcdef');
+    await mkdir(path.dirname(taskRoot), { recursive: true });
+    const prepared = await prepareRecruitmentWorktrees({
+      canonicalRoot: repo,
+      taskRoot,
+      baseRef: 'main',
+      integrationBranch: 'recruitment/path-limit/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/integration',
+      workers: [
+        { workerId: '7b1bae95-7a4e-4a5f-9eba-2dd77d463fcc', branch: 'recruitment/path-limit/7b1bae95-7a4e-4a5f-9eba-2dd77d463fcc/worker-alpha' },
+        { workerId: '3fc00557-6960-4c5b-b9d2-7c40d35922d5', branch: 'recruitment/path-limit/3fc00557-6960-4c5b-b9d2-7c40d35922d5/worker-beta' },
+      ],
+    });
+    const paths = [prepared.integration.worktreeRoot, ...prepared.workers.map((worker) => worker.worktreeRoot)];
+    expect(paths).toHaveLength(3);
+    expect(Math.max(...paths.map((value) => value.length))).toBeLessThan(260);
+    for (const worktree of paths) await access(path.join(worktree, '.git'));
+    const alphaRoots = await recruitmentGitWritableRoots(repo, prepared.workers[0].worktreeRoot, prepared.workers[0].branch);
+    const betaRoots = await recruitmentGitWritableRoots(repo, prepared.workers[1].worktreeRoot, prepared.workers[1].branch);
+    expect(alphaRoots[1]).not.toBe(betaRoots[1]);
+    expect(alphaRoots[2]).not.toBe(betaRoots[2]);
+    expect(alphaRoots[3]).not.toBe(betaRoots[3]);
+    expect(alphaRoots[2]).toContain(path.join('refs', 'heads', 'recruitment', 'path-limit', '7b1bae95-7a4e-4a5f-9eba-2dd77d463fcc'));
   });
 
   it('refuses existing task roots, worktree destinations, and branches', async () => {
