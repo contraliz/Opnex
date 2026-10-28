@@ -31,6 +31,7 @@ describe('Codex approval and turn configuration',()=>{
   it('accepts only supported approval presets and keeps the safe default',()=>{
     const base={projectRoot:'D:/repo',agentmemProjectId:'demo',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low'};
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
+    expect(settingsSchema.parse(base)).toMatchObject({deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'});
     for(const approvalPolicy of ['on-request','untrusted','never','full-access'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
     expect(settingsSchema.safeParse({...base,approvalPolicy:'custom'}).success).toBe(false);
     expect(settingsSchema.parse({...base,agentmemProjectId:''}).agentmemProjectId).toBe('');

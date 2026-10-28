@@ -4,6 +4,7 @@ export class ApiError extends Error {
 }
 
 let token='';
+export const KERNEL_PROTOCOL_VERSION=1;
 
 function asMessage(value:unknown):string|undefined{
   if(typeof value==='string'){
@@ -63,11 +64,13 @@ async function readJson(response:Response):Promise<any>{
 }
 
 async function localFetch(url:string,init?:RequestInit){
-  try{return await fetch(url,init);}
+  const headers={...((init?.headers||{}) as Record<string,string>),'x-pseudoharness-protocol-version':String(KERNEL_PROTOCOL_VERSION)};
+  const commandUrl=url.startsWith('/api/')&&!url.startsWith('/api/v1/')?`/api/v1/${url.slice('/api/'.length)}`:url;
+  try{return await fetch(commandUrl,{...init,headers});}
   catch(error){throw new ApiError('Could not reach the local Pseudoharness service. Check that it is running, then retry.',undefined,'LOCAL_SERVICE_UNREACHABLE',{cause:error});}
 }
 
-export async function bootstrap(){const r=await localFetch('/api/bootstrap');const j=await readJson(r);token=j.csrf;return j;}
+export async function bootstrap(){const r=await localFetch('/api/v1/snapshot');const j=await readJson(r);token=j.csrf;return j;}
 async function request(url:string,body:unknown,signal?:AbortSignal,method?:'POST'|'PUT'){return localFetch(url,{method:method||(body===undefined?'GET':'POST'),headers:body===undefined?{}:{'content-type':'application/json','x-pseudoharness-token':token},body:body===undefined?undefined:JSON.stringify(body),signal});}
 async function apiRequest<T>(url:string,body:unknown,signal:AbortSignal|undefined,method?:'POST'|'PUT'):Promise<T>{try{return await readJson(await request(url,body,signal,method));}catch(error){if(signal?.aborted)throw error;if(error instanceof ApiError&&error.status===403&&/session token/i.test(error.message)){await bootstrap();return await readJson(await request(url,body,signal,method));}throw error;}}
 export function api<T=any>(url:string,body?:unknown,signal?:AbortSignal):Promise<T>{return apiRequest<T>(url,body,signal);}
