@@ -65,19 +65,20 @@ function fakeDshProfileBootstrap() {
 function server(serverName: DeepSeekHarnessMcpServerConfig['serverName'], env: Record<string, string> = {}): DeepSeekHarnessMcpServerConfig {
   return {
     serverName,
-    command: 'C:\\Program Files\\nodejs\\node.exe',
-    args: ['--import', 'tsx', 'D:\\programming\\pseudoharness\\server\\gateway.ts'],
-    cwd: 'D:\\programming\\pseudoharness',
+    command: process.execPath,
+    args: ['--import', 'tsx', path.join(process.cwd(), 'server', 'gateway.ts')],
+    cwd: process.cwd(),
     env,
   };
 }
 
 describe('DeepSeek Harness isolated SDK profiles', () => {
   it('resolves the documented credential file by path without reading it', () => {
-    expect(resolveDeepSeekHarnessCredentialStorePath({ configuredHome: 'D:\\User\\.dsh' }))
-      .toBe('D:\\User\\.dsh\\.credentials.yaml');
-    expect(resolveDeepSeekHarnessCredentialStorePath({ userHome: 'D:\\User' }))
-      .toBe('D:\\User\\.dsh\\.credentials.yaml');
+    const home = path.join(os.tmpdir(), 'User');
+    expect(resolveDeepSeekHarnessCredentialStorePath({ configuredHome: path.join(home, '.dsh') }))
+      .toBe(path.join(home, '.dsh', '.credentials.yaml'));
+    expect(resolveDeepSeekHarnessCredentialStorePath({ userHome: home }))
+      .toBe(path.join(home, '.dsh', '.credentials.yaml'));
   });
 
   it('creates a task profile with private per-gateway config outside the saved profile patch', async () => {
