@@ -19,7 +19,16 @@ type CodexHomeFileOps={
 const fileOps:CodexHomeFileOps={lstat,realpath,link,symlink,stat,readFile,writeFile,rename,unlink,randomId:randomUUID};
 const profilePattern=/^[A-Za-z0-9_.-]+$/;
 const isCode=(error:unknown,values:string[])=>!!error&&typeof error==='object'&&'code'in error&&values.includes(String((error as NodeJS.ErrnoException).code));
-const samePath=(left:string,right:string)=>process.platform==='win32'?path.resolve(left).toLowerCase()===path.resolve(right).toLowerCase():path.resolve(left)===path.resolve(right);
+const samePath=(left:string,right:string)=>{
+  if(process.platform!=='win32')return path.resolve(left)===path.resolve(right);
+  const key=(value:string)=>{
+    let resolved=path.win32.resolve(value);
+    if(resolved.slice(0,8).toLowerCase()==='\\\\?\\unc\\')resolved=`\\\\${resolved.slice(8)}`;
+    else if(resolved.slice(0,4)==='\\\\?\\')resolved=resolved.slice(4);
+    return resolved.toLowerCase();
+  };
+  return key(left)===key(right);
+};
 const missing=async(ops:CodexHomeFileOps,filename:string,normalHome:string,agentHome:string)=>{
   const destination=path.join(agentHome,filename);
   let current:Stats|undefined;
@@ -29,11 +38,24 @@ const missing=async(ops:CodexHomeFileOps,filename:string,normalHome:string,agent
   if(current.isSymbolicLink()){
     let target:string;
     try{target=await ops.realpath(destination);}catch{throw new Error('Unexpected symbolic link in the app-owned Codex home.');}
-    const expected=path.resolve(normalHome,filename);
+    let expected:string;
+    try{expected=await ops.realpath(path.join(normalHome,filename));}catch{throw new Error('Unexpected symbolic link in the app-owned Codex home.');}
     if(!samePath(target,expected))throw new Error('Unexpected symbolic link in the app-owned Codex home.');
   }
   await ops.unlink(destination);
   return 'missing' as const;
+};
+
+const hasReparseDirectoryComponent=async(ops:CodexHomeFileOps,directory:string)=>{
+  const parsed=path.parse(directory);
+  let current=parsed.root;
+  const components=directory.slice(parsed.root.length).split(path.sep).filter(Boolean);
+  for(const component of components){
+    current=path.join(current,component);
+    const entry=await ops.lstat(current);
+    if(!entry.isDirectory()||entry.isSymbolicLink())return true;
+  }
+  return false;
 };
 
 async function replaceVerifiedTemp(temp:string,destination:string,agentHome:string,ops:CodexHomeFileOps){
@@ -64,9 +86,9 @@ export async function linkNormalCodexFile(
   if(!allowed)throw new Error('Only the normal Codex config and the explicitly selected profile config may be exposed to the app-owned home.');
   const ops={...fileOps,...overrides} as CodexHomeFileOps;
   const normalRoot=path.resolve(normalHome),agentRoot=path.resolve(agentHome);
-  const [normalRootReal,agentRootReal]=await Promise.all([ops.realpath(normalRoot),ops.realpath(agentRoot)]);
+  const normalRootReal=await ops.realpath(normalRoot);
   const [normalStat,agentStat]=await Promise.all([ops.lstat(normalRoot),ops.lstat(agentRoot)]);
-  if(!normalStat.isDirectory()||normalStat.isSymbolicLink()||!agentStat.isDirectory()||agentStat.isSymbolicLink()||!samePath(agentRootReal,agentRoot))throw new Error('The normal or app-owned Codex home is not a verified directory.');
+  if(!normalStat.isDirectory()||normalStat.isSymbolicLink()||!agentStat.isDirectory()||agentStat.isSymbolicLink()||await hasReparseDirectoryComponent(ops,agentRoot))throw new Error('The normal or app-owned Codex home is not a verified directory.');
   const source=path.join(normalRoot,filename),destination=path.join(agentRoot,filename);
   if(!samePath(path.dirname(destination),agentRoot)||!destination.toLowerCase().startsWith(`${agentRoot.toLowerCase()}${path.sep}`))throw new Error('The Codex config destination escaped its app-owned home.');
   let sourceStat:Stats;

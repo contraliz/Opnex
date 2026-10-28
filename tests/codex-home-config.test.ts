@@ -91,4 +91,14 @@ describe('instruction-filtered Codex configuration sharing',()=>{
     await expect(linkNormalCodexFile(normalHome,agentHome,'config.toml',true)).rejects.toThrow('Unexpected symbolic link');
     expect(await readFile(other,'utf8')).toBe('do not expose');
   });
+
+  it('rejects an app-owned home reached through a linked parent directory',async()=>{
+    const {root,normalHome,agentHome}=await fixture(),linkedRoot=path.join(root,'linked-parent'),source=path.join(normalHome,'config.toml');
+    await writeFile(source,'[mcp_servers.fixture]\ncommand="fixture"\n');
+    try{await symlink(root,linkedRoot,'junction');}
+    catch(error){if(['EPERM','EACCES','ENOTSUP','EOPNOTSUPP','ENOSYS'].includes((error as NodeJS.ErrnoException).code??''))return;throw error;}
+    const aliasedAgentHome=path.join(linkedRoot,path.basename(agentHome));
+    await expect(linkNormalCodexFile(normalHome,aliasedAgentHome,'config.toml',true)).rejects.toThrow('not a verified directory');
+    await expect(readFile(path.join(agentHome,'config.toml'),'utf8')).rejects.toMatchObject({code:'ENOENT'});
+  });
 });
