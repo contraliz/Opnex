@@ -246,7 +246,12 @@ export class AgentMem {
     return saved;
   }
   private async completionContext(projectId:string,taskId:string){
-    const args={project_id:projectId,task_id:taskId,max_chars:12000,requirements_limit:1000,acceptance_limit:1000};
+    // Completion needs every applicable requirement and acceptance row. A
+    // smaller packet can be truncated by AgentMem before it returns a
+    // continuation page, especially when the repository metadata summary is
+    // large. Use the service's maximum packet budget, then keep the existing
+    // fail-closed pagination checks below.
+    const args={project_id:projectId,task_id:taskId,max_chars:100000,requirements_limit:1000,acceptance_limit:1000};
     const first=await this.call('task_context',{...args,requirement_offset:0,acceptance_offset:0});
     const initialRequirements=first?.requirements;
     if(!initialRequirements||!Number.isInteger(initialRequirements.requirements_revision))throw new Error('AgentMem task context omitted the current requirements revision; completion was not requested.');
