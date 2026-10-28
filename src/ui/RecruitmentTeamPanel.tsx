@@ -23,6 +23,8 @@ export type RecruitmentAssignment = {
 export type RecruitmentWorker = {
   workerId: string;
   name: string;
+  step?: string;
+  dependsOn?: string[];
   status: string;
   canSteer?: boolean;
   effort: 'high' | 'xhigh' | 'max';
@@ -148,6 +150,8 @@ function WorkerCard({ worker, selected, onSelectSteerWorker }: { worker: Recruit
           <span className="recruitment-team__status" role="status">{worker.status}</span>
         </header>
         <dl className="recruitment-team__metadata">
+          {worker.step&&<div><dt>Step</dt><dd>{worker.step}</dd></div>}
+          {!!worker.dependsOn?.length&&<div><dt>Waits for</dt><dd>{worker.dependsOn.join(', ')}</dd></div>}
           <div><dt>Branch</dt><dd><code>{worker.branch}</code></dd></div>
         </dl>
         <ProviderDetails execution={worker.deepSeekExecution} runtime={worker.deepSeekRuntime} phaseRuns={worker.deepSeekPhaseRuns}/>

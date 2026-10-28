@@ -8,7 +8,7 @@ import { createChildDirectory, listDirectories, validateProjectDirectory } from 
 import { errorMessage } from './errors.js';
 import { loadState, getState, mutate, getTask, subscribe, renameTaskInState, deleteTaskInState, moveTaskProjectInState, noteTaskInteractionInState, saveProjectInState, selectProjectInState, pauseActiveTasksForKernelShutdown } from './state.js';
 import { readWorkspaceGitSnapshot } from './git.js';
-import { cancelTask, getRuntimeStatus, initialize, listAgentMemProjects, refreshConnections, resolveApproval, retryAgentMemCompletion, saveSettings, submitEscalationDecision, submitTask, shutdown } from './orchestrator.js';
+import { cancelTask, getRuntimeStatus, initialize, listAgentMemProjects, pauseQualityLoop, refreshConnections, resolveApproval, resumeQualityLoop, retryAgentMemCompletion, saveSettings, submitEscalationDecision, submitTask, acceptQualityFindings, shutdown } from './orchestrator.js';
 import { approvalDecisionSchema, sessionTitleSchema, settingsSchema, userTaskSchema } from './contracts.js';
 import { readGitHubWorkspace } from './github.js';
 import { readGitHubMetadata, readGitWorkspace } from './git-workspace.js';
@@ -100,13 +100,16 @@ function streamStateEvents(req:express.Request,res:express.Response){
 }
 app.get('/events',streamStateEvents);
 app.get('/api/v1/events',streamStateEvents);
-app.post('/api/tasks',async(req,res)=>{try{const body=userTaskSchema.parse(req.body);const task=await submitTask(body.message,undefined,body.attachments,body.skillIds,body.projectId);res.status(201).json(task);}catch(e){res.status(400).json({error:errorMessage(e)});}});
+app.post('/api/tasks',async(req,res)=>{try{const body=userTaskSchema.parse(req.body);const task=await submitTask(body.message,undefined,body.attachments,body.skillIds,body.projectId,undefined,body.qaEnabled);res.status(201).json(task);}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/tasks/new',async(_req,res)=>{await mutate(s=>{s.activeTaskId=null;});res.json({ok:true});});
-app.post('/api/tasks/:id/messages',async(req,res)=>{try{const body=userTaskSchema.parse(req.body);const task=await submitTask(body.message,req.params.id,body.attachments,body.skillIds,undefined,body.recruitmentWorkerId);res.json(task);}catch(e){res.status(400).json({error:errorMessage(e)});}});
+app.post('/api/tasks/:id/messages',async(req,res)=>{try{const body=userTaskSchema.parse(req.body);const task=await submitTask(body.message,req.params.id,body.attachments,body.skillIds,undefined,body.recruitmentWorkerId,body.qaEnabled);res.json(task);}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/tasks/:id/escalation',async(req,res)=>{try{const body=userTaskSchema.parse(req.body);const task=await submitEscalationDecision(req.params.id,body.message,body.attachments,body.skillIds);res.json(task);}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/tasks/:id/cancel',async(req,res)=>{try{res.json(await cancelTask(req.params.id));}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/tasks/:id/passes/:passId/agentmem/retry',async(req,res)=>{try{res.json(await retryAgentMemCompletion(req.params.id,req.params.passId));}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/tasks/:id/approval',async(req,res)=>{try{const body=approvalDecisionSchema.parse(req.body);res.json(await resolveApproval(req.params.id,body.requestId,body.decision,body.content));}catch(e){res.status(400).json({error:errorMessage(e)});}});
+app.post('/api/tasks/:id/qa/accept',async(req,res)=>{try{const body=z.object({note:z.string().trim().max(1000).optional()}).strict().parse(req.body);res.json(await acceptQualityFindings(req.params.id,body.note));}catch(e){res.status(400).json({error:errorMessage(e)});}});
+app.post('/api/tasks/:id/qa/pause',async(req,res)=>{try{z.object({}).strict().parse(req.body);res.json(await pauseQualityLoop(req.params.id));}catch(e){res.status(400).json({error:errorMessage(e)});}});
+app.post('/api/tasks/:id/qa/resume',async(req,res)=>{try{z.object({}).strict().parse(req.body);res.json(await resumeQualityLoop(req.params.id));}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/tasks/:id/select',async(req,res)=>{try{let task:any;await mutate(s=>{task=s.tasks.find(row=>row.id===req.params.id);if(!task)throw new Error('Task not found.');s.activeTaskId=task.id;noteTaskInteractionInState(s,task.id);if(task.projectId){selectProjectInState(s,task.projectId);if(!s.expandedProjectIds.includes(task.projectId))s.expandedProjectIds.push(task.projectId);}else{s.selectedProjectId=null;if(!s.expandedProjectIds.includes('unclassified'))s.expandedProjectIds.push('unclassified');}});res.json(task);}catch(e){const message=errorMessage(e);res.status(message==='Task not found.'?404:400).json({error:message});}});
 app.post('/api/tasks/:id/rename',async(req,res)=>{try{const {title}=sessionTitleSchema.parse(req.body);let renamed;await mutate(s=>{renamed=renameTaskInState(s,req.params.id,title);});res.json(renamed);}catch(e){const message=errorMessage(e);res.status(message==='Session not found.'?404:400).json({error:message});}});
 app.post('/api/tasks/:id/delete',async(req,res)=>{try{await mutate(s=>{deleteTaskInState(s,req.params.id);});res.json({ok:true,id:req.params.id});}catch(e){const message=errorMessage(e);res.status(message==='Session not found.'?404:message.startsWith('Stop or finish')||message.startsWith('Wait for AgentMem')?409:400).json({error:message});}});
@@ -117,7 +120,7 @@ app.post('/api/v1/kernel/shutdown',async(req,res)=>{
   if(shutdownRequested){res.status(409).json({error:'The kernel is already stopping.',code:'KERNEL_SHUTTING_DOWN'});return;}
   try{
     z.object({confirm:z.literal('stop-kernel')}).strict().parse(req.body);
-    const pendingAgentMem=getState().tasks.some(task=>[task,...(task.passes||[])].some(record=>record.agentmemRecordStatus==='saving'||record.agentmemRecordStatus==='in_progress'||!!record.agentmemLease));
+    const pendingAgentMem=getState().tasks.some(task=>[task,...(task.passes||[])].some(record=>record.agentmemRecordStatus==='saving'||!!record.agentmemLease));
     if(pendingAgentMem){res.status(409).json({error:'Wait for AgentMem work and receipt saving to finish before stopping the kernel.',code:'AGENTMEM_WORK_PENDING'});return;}
     shutdownRequested=true;
     let pausedTasks=0;
