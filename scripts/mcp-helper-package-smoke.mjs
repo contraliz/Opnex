@@ -21,7 +21,7 @@ const resourcesPath=path.resolve(packagedResources);
 process.env.PSEUDOHARNESS_PACKAGED_APP='1';process.env.PSEUDOHARNESS_RESOURCES_PATH=resourcesPath;
 const temp=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-mcp-package-smoke-'));
 const data=path.join(temp,'app-data'),taskId='packaged-smoke-task',passId='packaged-smoke-pass';
-await mkdir(data,{recursive:true});await writeFile(path.join(data,'state.json'),JSON.stringify({tasks:[{id:taskId,currentPassId:passId}]}));process.env.PSEUDOHARNESS_DATA_DIR=data;
+await mkdir(data,{recursive:true});await writeFile(path.join(data,'state.json'),JSON.stringify({tasks:[{id:taskId,currentPassId:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn',passes:[{id:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn'}]}]}));process.env.PSEUDOHARNESS_DATA_DIR=data;
 const inheritedEnv=Object.fromEntries(['PATH','SystemRoot','WINDIR','TEMP','TMP','HOME'].flatMap(key=>process.env[key]===undefined?[]:[[key,process.env[key]]]));
 
 async function connect(config,extraEnv={}){
@@ -41,7 +41,8 @@ try{
   const {client}=await connect(config);
   try{
     const tools=await client.listTools();
-    const blocked=await client.callTool({name:'skills_save',arguments:{name:'Unauthorized packaged task skill',description:'Must be rejected',instructions:'This task agent cannot save this body.'}});
+    const saved=await client.callTool({name:'skills_save',arguments:{skill_id:skill.id,expected_revision:skill.revision,name:skill.name,description:'Temporary isolated packaging updated by the active task',instructions:'This revision was saved through the task-scoped helper.'}});
+    const stale=await client.callTool({name:'skills_save',arguments:{skill_id:skill.id,expected_revision:skill.revision,name:skill.name,description:'Stale packaged overwrite',instructions:'This stale revision must not replace the saved one.'}});
     const [search,list,loaded,afterSave,taskSaves]=await Promise.all([
       client.callTool({name:'skills_search',arguments:{query:'Temporary isolated packaging'}}),
       client.callTool({name:'skills_list',arguments:{query:'Packaged runtime'}}),
@@ -49,11 +50,12 @@ try{
       getSkill(skill.id),
       recordedSkillSaves(taskId,passId),
     ]);
-    const searchText=JSON.stringify(search),listText=JSON.stringify(list),loadText=JSON.stringify(loaded),blockedText=blocked.content?.map(block=>block.text||'').join('\n')||'';
-    const expected=['skills_list','skills_search','skills_load','skills_read_file'];
-    const unauthorizedSaveRejected=blocked.isError===true&&blockedText.includes('Task agents cannot write the shared saved-skills library')&&!tools.tools.some(tool=>tool.name==='skills_save')&&afterSave.revision===skill.revision&&taskSaves.length===0;
-    const verified=expected.every(name=>tools.tools.some(tool=>tool.name===name))&&searchText.includes(skill.id)&&listText.includes(skill.revision)&&loadText.includes(skill.revision)&&loadText.includes('This synthetic body exists only inside this temporary smoke-test profile.')&&unauthorizedSaveRejected;
-    console.log(JSON.stringify({helper:'skills',command:config.command,tools:tools.tools.map(tool=>tool.name),revision:skill.revision,searchPassed:searchText.includes(skill.id),listPassed:listText.includes(skill.revision),loadPassed:loadText.includes('This synthetic body exists only inside this temporary smoke-test profile.'),unauthorizedSaveRejected,verified}));
+    const searchText=JSON.stringify(search),listText=JSON.stringify(list),loadText=JSON.stringify(loaded),staleText=stale.content?.map(block=>block.text||'').join('\n')||'';
+    const expected=['skills_list','skills_search','skills_load','skills_read_file','skills_save'];
+    const savePassed=saved.isError!==true&&afterSave.revision!==skill.revision&&JSON.stringify(saved).includes(afterSave.revision)&&taskSaves.some(row=>row.skillId===skill.id&&row.revision===afterSave.revision&&row.role==='direct'&&row.action==='update');
+    const staleRejected=stale.isError===true&&staleText.includes('changed since it was loaded')&&afterSave.revision!==skill.revision;
+    const verified=expected.every(name=>tools.tools.some(tool=>tool.name===name))&&searchText.includes(skill.id)&&listText.includes(afterSave.revision)&&loadText.includes(afterSave.revision)&&loadText.includes('This revision was saved through the task-scoped helper.')&&savePassed&&staleRejected;
+    console.log(JSON.stringify({helper:'skills',command:config.command,tools:tools.tools.map(tool=>tool.name),revision:afterSave.revision,searchPassed:searchText.includes(skill.id),listPassed:listText.includes(afterSave.revision),loadPassed:loadText.includes('This revision was saved through the task-scoped helper.'),savePassed,staleRejected,verified}));
     if(!verified)failures++;
   }finally{await client.close();}
 

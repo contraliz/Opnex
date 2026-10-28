@@ -1128,6 +1128,7 @@ function QualityLoopPanel({state,onAction}:{state:NonNullable<TaskPass['qualityL
   const canAccept=!!onAction&&findings.length>0&&['awaiting_corrections','needs_attention'].includes(state.status);
   const canPause=!!onAction&&['auditing','awaiting_corrections'].includes(state.status);
   const canResume=!!onAction&&['paused','paused_after_restart'].includes(state.status);
+  const canRetry=!!onAction&&state.status==='needs_attention'&&state.resumeAction==='audit';
   return <section className={`quality-loop-panel ${state.status}`} aria-label="Independent QA loop" data-qa-status={state.status}>
     <header><Sparkles size={15}/><strong>Independent QA loop</strong><span className={`quality-loop-status ${state.status}`}>{labels[state.status]||state.status}</span></header>
     <p>Each audit uses gpt-6.1-terra with high reasoning. Findings return to the orchestrator for worker corrections; the independent final receipt review remains separate.</p>
@@ -1147,6 +1148,7 @@ function QualityLoopPanel({state,onAction}:{state:NonNullable<TaskPass['qualityL
     {onAction&&<div className="quality-loop-actions">
       {canPause&&<button type="button" onClick={()=>onAction('pause')}>Pause QA</button>}
       {canResume&&<button type="button" onClick={()=>onAction('resume')}>Resume QA</button>}
+      {canRetry&&<button type="button" onClick={()=>onAction('resume')}>Retry QA audit</button>}
       {canAccept&&<button type="button" className="accept-findings" onClick={()=>onAction('accept')}>Accept findings and continue to final review</button>}
     </div>}
   </section>;
