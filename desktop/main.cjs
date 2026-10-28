@@ -1,7 +1,7 @@
-const { app, BrowserWindow, WebContentsView, session, ipcMain, utilityProcess, shell, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, session, ipcMain, utilityProcess, shell, dialog, Tray, Menu, nativeImage } = require('electron');
 const { createServer } = require('node:net');
 const { createHmac, randomBytes } = require('node:crypto');
-const { mkdirSync } = require('node:fs');
+const { mkdirSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 const { assignTabToPane, removeTabFromPanes } = require('./pane-state.cjs');
 const { safeAnnotation, captureScript, disableScript } = require('./annotation.cjs');
@@ -9,12 +9,21 @@ const { browserProfilePath } = require('./browser-profile.cjs');
 const { clampNativeBounds } = require('./browser-bounds.cjs');
 const { navigationState, navigate, attachNavigationHandlers } = require('./browser-navigation.cjs');
 const { openCodexThread } = require('./codex-thread-link.cjs');
+const { createTrayController } = require('./tray-controller.cjs');
+const { stopOwnedKernel } = require('./kernel-shutdown.cjs');
 
 const partition = 'persist:pseudoharness-browser-v1';
 const projectRoot=path.resolve(__dirname,'..');
 let mainWindow;
+let mainWindowLoadPromise;
 let backend;
 let backendExitCode=null;
+let backendExitPromise=Promise.resolve(null);
+let kernelOwnership='unknown';
+let trayController;
+let quitInProgress=false;
+let quitApproved=false;
+const kernelShutdownState={ownsKernel:false,shutdownAccepted:false};
 let origin;
 let bounds={main:null,side:null,chat:null};
 let assignments={main:null,side:null,chat:null};
@@ -27,6 +36,8 @@ let annotationTimer;
 if(process.env.PSEUDOHARNESS_INTERACTION_TEST==='1'&&process.env.PSEUDOHARNESS_CDP_PORT)app.commandLine.appendSwitch('remote-debugging-port',String(Number(process.env.PSEUDOHARNESS_CDP_PORT)));
 
 if(process.env.PSEUDOHARNESS_ELECTRON_DATA_DIR){const userData=path.resolve(process.env.PSEUDOHARNESS_ELECTRON_DATA_DIR);mkdirSync(userData,{recursive:true});app.setPath('userData',userData);}
+const ownsDesktopInstance=app.requestSingleInstanceLock();
+if(!ownsDesktopInstance)app.quit();
 const browserProfile=browserProfilePath({platform:process.platform,localAppData:process.env.LOCALAPPDATA,userData:app.getPath('userData'),isolated:!!process.env.PSEUDOHARNESS_ELECTRON_DATA_DIR});
 mkdirSync(browserProfile,{recursive:true});app.setPath('sessionData',browserProfile);
 
@@ -60,13 +71,64 @@ function addTab(rawUrl,pane='main',hostId){
 }
 function closeTab(id){const tab=tabs.get(id);if(!tab)return legacyState();mainWindow.contentView.removeChildView(tab.view);tab.view.webContents.close();tabs.delete(id);if(tab.workspaceId){workspaceTabs.delete(tab.workspaceId);workspaceBounds.delete(tab.workspaceId);}const wasMain=assignments.main===id;assignments=removeTabFromPanes(assignments,id);if(wasMain)assignments.main=[...tabs.keys()].find(key=>!tabs.get(key)?.workspaceId&&key!==assignments.side&&key!==assignments.chat)||null;applyBounds();return legacyState();}
 
-async function startBackend(){const port=await pickPort();origin=`http://127.0.0.1:${port}`;const launcher=path.join(projectRoot,'bin','pseudoharness.js');const data=path.join(app.getPath('userData'),'local-state');const startupSecret=randomBytes(32).toString('hex');const backendEnv={...process.env,NODE_ENV:'production',PORT:String(port),PSEUDOHARNESS_DATA_DIR:data,PSEUDOHARNESS_DESKTOP:'1',PSEUDOHARNESS_STARTUP_SECRET:startupSecret,PSEUDOHARNESS_PACKAGED_APP:app.isPackaged?'1':'0',PSEUDOHARNESS_RESOURCES_PATH:process.resourcesPath};backend=utilityProcess.fork(launcher,[],{cwd:app.getPath('userData'),env:backendEnv,stdio:process.env.PSEUDOHARNESS_SMOKE_TEST==='1'?'inherit':'ignore',serviceName:'Pseudoharness local backend'});backend.once('error',error=>console.error('Pseudoharness backend failed to start:',error.message));backend.once('exit',code=>{backendExitCode=code;});
+async function attachToExistingKernel(data){
+  const infoPath=path.join(data,'kernel-instance.json');let record;
+  try{record=JSON.parse(readFileSync(infoPath,'utf8'));}catch{return false;}
+  if(!record||record.version!==1||record.protocolVersion!==1||record.host!=='127.0.0.1'||!Number.isInteger(record.port)||record.port<1||record.port>65535||typeof record.instanceId!=='string'||typeof record.startupSecret!=='string'||!/^[A-Za-z0-9_-]{32,128}$/.test(record.startupSecret))return false;
+  const candidate=`http://${record.host}:${record.port}`;const challenge=randomBytes(32).toString('hex');const expected=createHmac('sha256',record.startupSecret).update(challenge).digest('hex');
+  try{
+    const response=await fetch(`${candidate}/api/health`,{headers:{'x-pseudoharness-startup-challenge':challenge},signal:AbortSignal.timeout(1500)});
+    if(!response.ok)return false;
+    const health=await response.json();
+    if(health.startupProof!==expected||health.kernelInstanceId!==record.instanceId||health.protocolVersion!==1)return false;
+    if(health.stateCode){const error=new Error(health.stateError||'Pseudoharness could not claim its local state directory.');error.code=health.stateCode;throw error;}
+    origin=candidate;kernelOwnership='attached';return true;
+  }catch(error){if(error instanceof Error&&['STATE_DIRECTORY_IN_USE','STATE_OWNER_UNAVAILABLE'].includes(error.code))throw error;return false;}
+}
+async function startBackend(){const data=path.join(app.getPath('userData'),'local-state');if(await attachToExistingKernel(data))return;const port=await pickPort();origin=`http://127.0.0.1:${port}`;const launcher=path.join(projectRoot,'bin','pseudoharness.js');const startupSecret=randomBytes(32).toString('hex');const backendEnv={...process.env,NODE_ENV:'production',PORT:String(port),PSEUDOHARNESS_DATA_DIR:data,PSEUDOHARNESS_DESKTOP:'1',PSEUDOHARNESS_STARTUP_SECRET:startupSecret,PSEUDOHARNESS_PACKAGED_APP:app.isPackaged?'1':'0',PSEUDOHARNESS_RESOURCES_PATH:process.resourcesPath};backend=utilityProcess.fork(launcher,[],{cwd:app.getPath('userData'),env:backendEnv,stdio:process.env.PSEUDOHARNESS_SMOKE_TEST==='1'?'inherit':'ignore',serviceName:'Pseudoharness headless kernel'});kernelOwnership='owned';kernelShutdownState.ownsKernel=true;backendExitPromise=new Promise(resolve=>backend.once('exit',code=>{backendExitCode=code;resolve(code);}));backend.once('error',error=>console.error('Pseudoharness kernel failed to start:',error.message));
   const deadline=Date.now()+20_000;while(Date.now()<deadline){if(backendExitCode!==null)throw new Error('Pseudoharness backend exited during startup.');try{const challenge=randomBytes(32).toString('hex');const expected=createHmac('sha256',startupSecret).update(challenge).digest('hex');const response=await fetch(`${origin}/api/health`,{headers:{'x-pseudoharness-startup-challenge':challenge}});if(response.ok){const health=await response.json();if(health.startupProof!==expected)throw new Error('The selected local port is not serving the Pseudoharness backend. Startup was stopped.');if(health.stateCode){const error=new Error(health.stateError||'Pseudoharness could not claim its local state directory.');error.code=health.stateCode;throw error;}return;}}catch(error){if(error instanceof Error&&(error.code==='STATE_DIRECTORY_IN_USE'||error.code==='STATE_OWNER_UNAVAILABLE'||error.message.includes('not serving the Pseudoharness backend')))throw error;}await new Promise(resolve=>setTimeout(resolve,200));}throw new Error('Pseudoharness backend did not become ready.');}
+
+function waitForBackendExit(timeoutMs){if(backendExitCode!==null)return Promise.resolve(true);return new Promise(resolve=>{const timer=setTimeout(()=>resolve(false),timeoutMs);backendExitPromise.then(()=>{clearTimeout(timer);resolve(true);});});}
+async function requestAppQuit(){if(quitInProgress)return;quitInProgress=true;try{if(kernelOwnership==='owned')await stopOwnedKernel({ownsKernel:true,origin,state:kernelShutdownState,isBackendExited:()=>backendExitCode!==null,waitForBackendExit});quitApproved=true;app.quit();}catch(error){dialog.showErrorBox('Pseudoharness could not quit safely',error instanceof Error?error.message:String(error));}finally{quitInProgress=false;}}
+function createSystemTray(){
+  if(trayController)return;
+  try{
+    const image=nativeImage.createFromPath(path.join(projectRoot,'desktop','tray-icon.png'));
+    if(image.isEmpty())throw new Error('The Pseudoharness tray mark could not be loaded.');
+    trayController=createTrayController({Tray,Menu,image,openWindow:focusOrReopenAppWindow,quitApp:requestAppQuit});
+    const tray=trayController.start();
+    if(process.env.PSEUDOHARNESS_SMOKE_TEST==='1'){
+      const labels=trayController.getMenu()?.items?.map(item=>item.label||item.type)||[];
+      const bounds=tray.getBounds();
+      const usableBounds=[bounds.x,bounds.y,bounds.width,bounds.height].every(Number.isFinite)
+        &&bounds.width>0
+        &&(process.platform==='darwin'?bounds.height>=0:bounds.height>0);
+      if(labels.join('|')!=='Open Pseudoharness|separator|Quit'||!usableBounds)throw new Error(`Native tray smoke failed: menu=${labels.join(', ')}, bounds=${JSON.stringify(bounds)}.`);
+      console.log(`System tray smoke passed: tooltip Pseudoharness; menu ${labels.join(', ')}; bounds ${JSON.stringify(bounds)}.`);
+    }
+  }catch(error){
+    trayController?.destroy();
+    trayController=undefined;
+    if(process.env.PSEUDOHARNESS_SMOKE_TEST==='1')throw error;
+    console.error('Pseudoharness could not initialize the system tray:',error instanceof Error?error.message:String(error));
+  }
+}
+
+async function createAppWindow(){
+  mainWindow=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:620,frame:process.platform!=='win32',title:'Pseudoharness',backgroundColor:'#141414',show:process.env.PSEUDOHARNESS_SMOKE_TEST!=='1',webPreferences:{preload:path.join(projectRoot,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
+  if(process.platform!=='darwin')mainWindow.setMenuBarVisibility(false);
+  mainWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  for(const [id,tab] of tabs){if(tab.view.webContents.isDestroyed()){tabs.delete(id);if(tab.workspaceId)workspaceTabs.delete(tab.workspaceId);}else mainWindow.contentView.addChildView(tab.view);}
+  attachNavigationHandlers(mainWindow.webContents,{validateUrl:url=>{if(new URL(url).origin!==origin)throw new Error('Only the local Pseudoharness origin may navigate the main window.');},onMainFrameStart:()=>{}});
+  mainWindow.on('resize',applyBounds);mainWindow.on('maximize',()=>mainWindow.webContents.send('pseudoharness:window-state',true));mainWindow.on('unmaximize',()=>mainWindow.webContents.send('pseudoharness:window-state',false));mainWindow.on('closed',()=>{mainWindow=null;});
+  mainWindowLoadPromise=mainWindow.loadURL(origin);await mainWindowLoadPromise;applyBounds();
+}
 
 function registerIpc(){
   ipcMain.handle('pseudoharness:window-minimize',event=>{requireAppSender(event);mainWindow.minimize();});
   ipcMain.handle('pseudoharness:window-toggle-maximize',event=>{requireAppSender(event);if(mainWindow.isMaximized())mainWindow.restore();else mainWindow.maximize();return mainWindow.isMaximized();});
   ipcMain.handle('pseudoharness:window-close',event=>{requireAppSender(event);mainWindow.close();});
+  ipcMain.handle('pseudoharness:app-quit',async event=>{requireAppSender(event);await requestAppQuit();});
   ipcMain.handle('pseudoharness:open-codex-thread',(event,threadId)=>{requireAppSender(event);return openCodexThread(threadId,url=>shell.openExternal(url));});
   ipcMain.handle('pseudoharness:browser-list',event=>{requireAppSender(event);return legacyState();});
   ipcMain.handle('pseudoharness:browser-open',(event,payload)=>{requireAppSender(event);return addTab(payload?.url,payload?.pane);});
@@ -95,9 +157,17 @@ function registerIpc(){
   ipcMain.handle('pseudoharness:browser-clear-data',async event=>{requireAppSender(event);await session.fromPartition(partition).clearStorageData();await session.fromPartition(partition).clearCache();for(const tab of tabs.values())try{tab.view.webContents.reload();}catch{}return true;});
 }
 
+function focusOrReopenAppWindow(){if(mainWindow&&!mainWindow.isDestroyed()){if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();return mainWindow;}if(origin)return createAppWindow().then(()=>mainWindow).catch(error=>{console.error('Pseudoharness window could not reopen:',error.message);return undefined;});return undefined;}
+async function kernelInstanceId(){const response=await fetch(`${origin}/api/v1/info`,{headers:{'x-pseudoharness-protocol-version':'1'},signal:AbortSignal.timeout(1500)});if(!response.ok)throw new Error(`Kernel identity check failed with HTTP ${response.status}.`);return (await response.json()).kernelInstanceId;}
+async function smokeTrayWindowLifecycle(){const original=mainWindow;const instanceBefore=await kernelInstanceId();await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('The source smoke window did not close.')),5000);original.once('closed',()=>{clearTimeout(timer);resolve();});original.close();});if(mainWindow)throw new Error('Closing the window did not clear the wrapper reference.');const tray=trayController?.getTray();if(!tray||tray.isDestroyed())throw new Error('Closing the window removed the system tray icon.');const openItem=trayController.getMenu()?.items?.[0];if(typeof openItem?.click!=='function')throw new Error('The native Open Pseudoharness menu action is unavailable.');openItem.click();const reopened=mainWindow;if(!reopened||reopened===original)throw new Error('Open Pseudoharness did not recreate the closed window.');await mainWindowLoadPromise;await trayController.open();if(mainWindow!==reopened)throw new Error('Repeated tray activation created a duplicate window.');if(await kernelInstanceId()!==instanceBefore)throw new Error('Reopening the wrapper started or attached to a different kernel instance.');reopened.hide();console.log('System tray lifecycle smoke passed: window close, menu reopen, repeated focus, and one unchanged kernel instance.');}
+if(ownsDesktopInstance){
+  app.on('second-instance',()=>focusOrReopenAppWindow());
+  app.on('activate',focusOrReopenAppWindow);
+}
 app.whenReady().then(async()=>{
-  try{await startBackend();await session.fromPartition(partition).setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));registerIpc();mainWindow=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:620,frame:process.platform!=='win32',title:'Pseudoharness',backgroundColor:'#141414',show:process.env.PSEUDOHARNESS_SMOKE_TEST!=='1',webPreferences:{preload:path.join(projectRoot,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});if(process.platform!=='darwin')mainWindow.setMenuBarVisibility(false);mainWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));attachNavigationHandlers(mainWindow.webContents,{validateUrl:url=>{if(new URL(url).origin!==origin)throw new Error('Only the local Pseudoharness origin may navigate the main window.');},onMainFrameStart:()=>{}});mainWindow.on('resize',applyBounds);mainWindow.on('maximize',()=>mainWindow.webContents.send('pseudoharness:window-state',true));mainWindow.on('unmaximize',()=>mainWindow.webContents.send('pseudoharness:window-state',false));mainWindow.on('closed',()=>{mainWindow=null;});await mainWindow.loadURL(origin);if(process.env.PSEUDOHARNESS_SMOKE_TEST==='1'){const smokeUrl=process.env.PSEUDOHARNESS_SMOKE_URL;if(smokeUrl){const [smokeTab]=addTab(smokeUrl,'main');tabs.get(smokeTab.id)?.view.webContents.once('did-finish-load',()=>void session.fromPartition(partition).cookies.flushStore().finally(()=>app.quit()));}else app.quit();}}
+  if(!ownsDesktopInstance)return;
+  try{await startBackend();createSystemTray();await session.fromPartition(partition).setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));registerIpc();await createAppWindow();if(process.env.PSEUDOHARNESS_SMOKE_TEST==='1'){await smokeTrayWindowLifecycle();const smokeUrl=process.env.PSEUDOHARNESS_SMOKE_URL;if(smokeUrl){const [smokeTab]=addTab(smokeUrl,'main');tabs.get(smokeTab.id)?.view.webContents.once('did-finish-load',()=>void session.fromPartition(partition).cookies.flushStore().finally(()=>void requestAppQuit()));}else void requestAppQuit();}}
   catch(error){console.error(error);if(error instanceof Error&&error.code==='STATE_DIRECTORY_IN_USE')dialog.showErrorBox('Pseudoharness is already running',error.message);else if(error instanceof Error&&error.code==='STATE_OWNER_UNAVAILABLE')dialog.showErrorBox('Pseudoharness could not use local state',error.message);process.exitCode=1;app.quit();}
 });
-app.on('before-quit',()=>{if(annotationTimer)clearInterval(annotationTimer);for(const tab of tabs.values())try{tab.view.webContents.close();}catch{}tabs.clear();backend?.kill();});
-app.on('window-all-closed',()=>app.quit());
+app.on('before-quit',event=>{if(kernelOwnership==='owned'&&!quitApproved){event.preventDefault();void requestAppQuit();return;}if(annotationTimer)clearInterval(annotationTimer);for(const tab of tabs.values())try{tab.view.webContents.close();}catch{}tabs.clear();trayController?.destroy();trayController=undefined;});
+app.on('window-all-closed',()=>{});

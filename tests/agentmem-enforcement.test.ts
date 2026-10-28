@@ -23,6 +23,11 @@ describe('artifact AgentMem enforcement',()=>{
     expect(agentMemArtifactUsageGaps(current.agentmemAudit,current,'worker','thread-1','turn-1',receipt(['No AgentMem knowledge update was needed because the task was a verification-only review.','No repository resync was needed because the full turn diff is empty.']))).toEqual([]);
   });
 
+  it('accepts the required hyphenated repository-index resync wording',()=>{
+    const current=readyPass();
+    expect(agentMemArtifactUsageGaps(current.agentmemAudit,current,'worker','thread-1','turn-1',receipt(['No AgentMem knowledge update was needed because this audit produced no new durable facts.','No repository-index resync was needed because this was a read-only audit and no source files changed.']))).toEqual([]);
+  });
+
   it('requires a later model-issued repository resync when source files changed',()=>{
     const current=readyPass('diff --git a/a.ts b/a.ts');
     const noWrite=receipt(['No AgentMem knowledge update was needed because no durable project decision changed.']);

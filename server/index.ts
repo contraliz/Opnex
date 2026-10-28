@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createChildDirectory, listDirectories, validateProjectDirectory } from './directories.js';
 import { errorMessage } from './errors.js';
-import { loadState, getState, mutate, getTask, subscribe, renameTaskInState, deleteTaskInState, moveTaskProjectInState, noteTaskInteractionInState, saveProjectInState, selectProjectInState } from './state.js';
+import { loadState, getState, mutate, getTask, subscribe, renameTaskInState, deleteTaskInState, moveTaskProjectInState, noteTaskInteractionInState, saveProjectInState, selectProjectInState, pauseActiveTasksForKernelShutdown } from './state.js';
 import { readWorkspaceGitSnapshot } from './git.js';
 import { cancelTask, getRuntimeStatus, initialize, listAgentMemProjects, refreshConnections, resolveApproval, retryAgentMemCompletion, saveSettings, submitEscalationDecision, submitTask, shutdown } from './orchestrator.js';
 import { approvalDecisionSchema, sessionTitleSchema, settingsSchema, userTaskSchema } from './contracts.js';
@@ -17,31 +17,40 @@ import { archiveSkill, createSkill, getSkill, importSkillPackage, listSkills, up
 import { searchConfiguredSkills } from './worker-staging.js';
 import { z } from 'zod';
 import { acquireStateDirectoryOwner, StateDirectoryInUseError, type StateDirectoryOwner } from './state-owner.js';
+import { createKernelInstanceRecord, KERNEL_PROTOCOL_VERSION, removeKernelInstanceIfOwned, type KernelInstanceRecord, writeKernelInstance } from './kernel-instance.js';
 
-const app=express();const server=createServer(app);const port=Number(process.env.PORT||4174);const host='127.0.0.1';const version=createRequire(import.meta.url)('../package.json').version as string;
+const app=express();const server=createServer(app);const port=Number(process.env.PORT||4174);let boundPort=port;const host='127.0.0.1';const version=createRequire(import.meta.url)('../package.json').version as string;
 const githubAuth=new GitHubAuthService();
 const nonce=randomBytes(24).toString('base64url');
 const here=path.dirname(fileURLToPath(import.meta.url));
 const production=process.env.NODE_ENV==='production';
 const startupSecret=process.env.PSEUDOHARNESS_STARTUP_SECRET;
+const kernelStartupSecret=startupSecret||randomBytes(32).toString('hex');
 let stateLoadError:string|undefined;
 let stateOwnershipError:string|undefined;
 let stateOwnershipCode:string|undefined;
 let stateOwner:StateDirectoryOwner|undefined;
+let kernelInstance:KernelInstanceRecord|undefined;
 let runtimeInitialization:Promise<void>|undefined;
 let shuttingDown=false;
+let shutdownRequested=false;
 const eventStreams=new Set<{response:express.Response;unsubscribe:()=>void;heartbeat:NodeJS.Timeout}>();
-function initializeRuntime(){return runtimeInitialization??=initialize();}
+function initializeRuntime(){if(process.env.NODE_ENV==='test')return runtimeInitialization??=Promise.resolve();return runtimeInitialization??=initialize();}
 app.disable('x-powered-by');app.use(express.json({limit:'17mb'}));
 function isLoopbackHost(raw:string|undefined){if(!raw)return false;const v=raw.split(':')[0].replace(/^\[|\]$/g,'').toLowerCase();return ['127.0.0.1','localhost','::1'].includes(v);}
 function requestedProjectRoot(req:express.Request){const value=req.query.root;if(value===undefined)return getState().settings.projectRoot;if(typeof value!=='string'||value.length>1024)throw new Error('Choose one project folder of 1024 characters or fewer.');return value;}
-app.use((req,res,next)=>{if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}const origin=req.headers.origin;const allowed=!origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${port}`||origin===`http://localhost:${port}`;if(!allowed){res.status(403).json({error:'Request origin rejected.'});return;}if(shuttingDown){res.setHeader('Connection','close');res.status(503).json({error:'Pseudoharness is shutting down.'});return;}next();});
+app.use((req,res,next)=>{if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}const origin=req.headers.origin;const allowed=!origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${boundPort}`||origin===`http://localhost:${boundPort}`;if(!allowed){res.status(403).json({error:'Request origin rejected.'});return;}const versionHeader=req.get('x-pseudoharness-protocol-version');const versionedPath=req.originalUrl.split('?')[0].startsWith('/api/v1/');const eventQuery=versionedPath&&req.method==='GET'?req.query.protocol:undefined;const suppliedVersion=versionHeader??(typeof eventQuery==='string'?eventQuery:undefined);if((versionedPath&&suppliedVersion!==String(KERNEL_PROTOCOL_VERSION))||(suppliedVersion!==undefined&&suppliedVersion!==String(KERNEL_PROTOCOL_VERSION))){res.status(426).json({error:'The client and Pseudoharness kernel use different protocol versions. Reload with a matching Pseudoharness client.',code:'PROTOCOL_VERSION_MISMATCH',supportedProtocolVersion:KERNEL_PROTOCOL_VERSION});return;}if(shuttingDown||shutdownRequested){res.setHeader('Connection','close');res.status(503).json({error:'Pseudoharness kernel is shutting down.',code:'KERNEL_SHUTTING_DOWN'});return;}next();});
+const versionedControlPaths=new Set(['/api/v1/info','/api/v1/snapshot','/api/v1/events','/api/v1/kernel/shutdown']);
+app.use((req,_res,next)=>{const originalPath=req.originalUrl.split('?')[0];if(originalPath.startsWith('/api/v1/')&&!versionedControlPaths.has(originalPath))req.url=req.url.replace(/^\/api\/v1(?=\/|$)/,'/api');next();});
 app.use('/api',(req,res,next)=>{if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}if(req.method!=='GET'&&req.method!=='HEAD'){
-  const origin=req.headers.origin;const allowed=!origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${port}`||origin===`http://localhost:${port}`;
+  const origin=req.headers.origin;const allowed=!origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${boundPort}`||origin===`http://localhost:${boundPort}`;
   if(!allowed||req.get('x-pseudoharness-token')!==nonce){res.status(403).json({error:'Local request origin or session token rejected.'});return;}
 }if(stateOwnershipError&&req.path!=='/health'){res.status(503).json({error:stateOwnershipError,code:stateOwnershipCode});return;}next();});
 app.get('/api/bootstrap',async(_req,res)=>{try{await loadState();stateLoadError=undefined;void initializeRuntime();res.json({state:getState(),runtime:getRuntimeStatus(),csrf:nonce});}catch(e){stateLoadError=errorMessage(e);res.status(503).json({error:stateLoadError,code:'STATE_UNAVAILABLE'});}});
 app.get('/api/state',async(_req,res)=>{try{await loadState();stateLoadError=undefined;void initializeRuntime();res.json({state:getState(),runtime:getRuntimeStatus()});}catch(e){stateLoadError=errorMessage(e);res.status(503).json({error:stateLoadError,code:'STATE_UNAVAILABLE'});}});
+function kernelSnapshot(csrf?:string){const state=getState();return {protocolVersion:KERNEL_PROTOCOL_VERSION,kernelInstanceId:kernelInstance?.instanceId||'',cursor:state.revision,state,runtime:getRuntimeStatus(),...(csrf?{csrf}:{})};}
+app.get('/api/v1/info',(_req,res)=>res.json({protocol:'pseudoharness.kernel',protocolVersion:KERNEL_PROTOCOL_VERSION,kernelInstanceId:kernelInstance?.instanceId||'',stateRevision:getState().revision,host,port:boundPort}));
+app.get('/api/v1/snapshot',async(_req,res)=>{try{await loadState();stateLoadError=undefined;void initializeRuntime();res.setHeader('X-Pseudoharness-Protocol-Version',String(KERNEL_PROTOCOL_VERSION));res.json(kernelSnapshot(nonce));}catch(e){stateLoadError=errorMessage(e);res.status(503).json({error:stateLoadError,code:'STATE_UNAVAILABLE'});}});
 const projectSchema=z.object({id:z.string().uuid(),name:z.string().trim().min(1).max(80),projectRoot:z.string().trim().min(1).max(1024),agentmemEnabled:z.boolean(),agentmemProjectId:z.string().trim().max(64).regex(/^$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).default(''),agentmemAutoSetup:z.boolean().default(false),pinned:z.boolean().default(false)}).strict().refine(value=>!value.agentmemEnabled||value.agentmemAutoSetup||!!value.agentmemProjectId,{message:'Choose an AgentMem project ID or enable automatic setup.'});
 app.post('/api/projects',async(req,res)=>{try{const body=projectSchema.parse(req.body);const {resolveProjectDirectory}=await import('./directories.js');const projectRoot=await resolveProjectDirectory(body.projectRoot);let agentmemProjectId=body.agentmemEnabled?body.agentmemProjectId:'';if(body.agentmemEnabled){const registered=await listAgentMemProjects();const rootKey=(value:string)=>value.replaceAll('\\','/').replace(/\/+$/,'').toLowerCase();const byRoot=registered.find(item=>rootKey(item.sourceRoot)===rootKey(projectRoot));const byId=agentmemProjectId?registered.find(item=>item.id===agentmemProjectId):undefined;if(byId&&rootKey(byId.sourceRoot)!==rootKey(projectRoot))throw new Error('AgentMem project ID is already bound to a different folder. Select the matching folder or a different knowledge base.');if(byRoot&&agentmemProjectId&&byRoot.id!==agentmemProjectId)throw new Error(`This folder is already registered as AgentMem project "${byRoot.id}". Select that ID; Pseudoharness will not rebind it.`);if(body.agentmemAutoSetup&&byRoot)agentmemProjectId=byRoot.id;else if(body.agentmemAutoSetup&&!agentmemProjectId){const base=path.basename(projectRoot).normalize('NFKD').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,24)||'project';agentmemProjectId=`agentmem-${base}-${createHash('sha256').update(path.resolve(projectRoot).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase()).digest('hex').slice(0,16)}`;}}let project:any;await mutate(state=>{project=saveProjectInState(state,{...body,agentmemProjectId,projectRoot});if(!state.selectedProjectId)state.selectedProjectId=project.id;if(!state.expandedProjectIds.includes(project.id))state.expandedProjectIds.push(project.id);});res.json(project);}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/projects/select',async(req,res)=>{try{const body=z.object({projectId:z.string().uuid().nullable()}).strict().parse(req.body);await mutate(state=>{selectProjectInState(state,body.projectId);});res.json({ok:true,projectId:body.projectId});}catch(e){res.status(400).json({error:errorMessage(e)});}});
@@ -66,7 +75,31 @@ app.get('/api/tasks/:id/passes/:passId/git',async(req,res)=>{const task=getTask(
 app.get('/api/tasks/:id/github',async(req,res)=>{const task=getTask(req.params.id);if(!task){res.status(404).json({error:'Task not found.'});return;}try{res.json({workspace:await readGitHubWorkspace(task.userRoot),link:task.githubLink||null});}catch(e){res.status(503).json({error:errorMessage(e)});}});
 app.get('/api/directories',async(req,res)=>{try{const requested=req.query.path;if(requested!==undefined&&typeof requested!=='string'||typeof requested==='string'&&requested.length>1024){res.status(400).json({error:'Enter one folder path of 1024 characters or fewer.'});return;}const roots=req.query.roots;const resolve=req.query.resolve;if(roots!==undefined&&roots!=='1'&&roots!=='true'||resolve!==undefined&&resolve!=='1'&&resolve!=='true'||roots!==undefined&&resolve!==undefined){res.status(400).json({error:'Invalid folder browser request.'});return;}if(resolve==='1'||resolve==='true'){if(typeof requested!=='string'||!requested.trim()){res.status(400).json({error:'Select a folder before continuing.'});return;}res.json(await validateProjectDirectory(requested));return;}res.json(await listDirectories(typeof requested==='string'?requested:undefined,roots==='1'||roots==='true'));}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/directories',async(req,res)=>{try{const body=req.body;if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>key!=='parent'&&key!=='name')||typeof body.parent!=='string'||typeof body.name!=='string'){res.status(400).json({error:'Choose a parent folder and enter one folder name.'});return;}if(body.parent.length>1024){res.status(400).json({error:'The selected parent path is too long. Browse to the folder again.'});return;}res.status(201).json(await createChildDirectory(body.parent,body.name));}catch(e){res.status(400).json({error:errorMessage(e)});}});
-app.get('/events',(_req,res)=>{res.setHeader('Content-Type','text/event-stream');res.setHeader('Cache-Control','no-cache');res.setHeader('Connection','keep-alive');res.flushHeaders();const send=(payload:unknown)=>{if(!res.destroyed&&!res.writableEnded)res.write(`data: ${JSON.stringify(payload)}\n\n`);};if(stateOwnershipError)send({type:'state-unavailable',error:stateOwnershipError});else if(stateLoadError)send({type:'state-unavailable',error:stateLoadError});else send({state:getState(),runtime:getRuntimeStatus()});const unsubscribe=stateLoadError||stateOwnershipError?()=>{}:subscribe(send);const heartbeat=setInterval(()=>send({type:'heartbeat'}),25000);const stream={response:res,unsubscribe,heartbeat};eventStreams.add(stream);res.on('close',()=>{unsubscribe();clearInterval(heartbeat);eventStreams.delete(stream);});});
+function streamStateEvents(req:express.Request,res:express.Response){
+  res.setHeader('Content-Type','text/event-stream');res.setHeader('Cache-Control','no-cache');res.setHeader('Connection','keep-alive');res.setHeader('X-Pseudoharness-Protocol-Version',String(KERNEL_PROTOCOL_VERSION));res.flushHeaders();
+  const requested=req.get('last-event-id')??(typeof req.query.after==='string'?req.query.after:undefined);
+  const parsedRequested=requested===undefined?undefined:Number(requested);
+  let lastSent=-1;
+  let firstState=true;
+  const sendState=(state=getState())=>{
+    if(res.destroyed||res.writableEnded)return;
+    if(state.revision<lastSent)return;
+    const resync=firstState&&requested!==undefined&&(parsedRequested===undefined||!Number.isSafeInteger(parsedRequested)||parsedRequested!==state.revision);
+    firstState=false;
+    lastSent=state.revision;
+    const payload={type:'snapshot',protocolVersion:KERNEL_PROTOCOL_VERSION,kernelInstanceId:kernelInstance?.instanceId||'',cursor:state.revision,resync,state,runtime:getRuntimeStatus()};
+    res.write(`id: ${state.revision}\ndata: ${JSON.stringify(payload)}\n\n`);
+  };
+  if(stateOwnershipError)res.write(`data: ${JSON.stringify({type:'state-unavailable',error:stateOwnershipError})}\n\n`);
+  else if(stateLoadError)res.write(`data: ${JSON.stringify({type:'state-unavailable',error:stateLoadError})}\n\n`);
+  else sendState();
+  const unsubscribe=stateLoadError||stateOwnershipError?()=>{}:subscribe(sendState);
+  const heartbeat=setInterval(()=>{if(!res.destroyed&&!res.writableEnded)res.write(': heartbeat\n\n');},25000);
+  const stream={response:res,unsubscribe,heartbeat};eventStreams.add(stream);
+  res.on('close',()=>{unsubscribe();clearInterval(heartbeat);eventStreams.delete(stream);});
+}
+app.get('/events',streamStateEvents);
+app.get('/api/v1/events',streamStateEvents);
 app.post('/api/tasks',async(req,res)=>{try{const body=userTaskSchema.parse(req.body);const task=await submitTask(body.message,undefined,body.attachments,body.skillIds,body.projectId);res.status(201).json(task);}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/tasks/new',async(_req,res)=>{await mutate(s=>{s.activeTaskId=null;});res.json({ok:true});});
 app.post('/api/tasks/:id/messages',async(req,res)=>{try{const body=userTaskSchema.parse(req.body);const task=await submitTask(body.message,req.params.id,body.attachments,body.skillIds,undefined,body.recruitmentWorkerId);res.json(task);}catch(e){res.status(400).json({error:errorMessage(e)});}});
@@ -79,24 +112,48 @@ app.post('/api/tasks/:id/rename',async(req,res)=>{try{const {title}=sessionTitle
 app.post('/api/tasks/:id/delete',async(req,res)=>{try{await mutate(s=>{deleteTaskInState(s,req.params.id);});res.json({ok:true,id:req.params.id});}catch(e){const message=errorMessage(e);res.status(message==='Session not found.'?404:message.startsWith('Stop or finish')||message.startsWith('Wait for AgentMem')?409:400).json({error:message});}});
 app.post('/api/settings',async(req,res)=>{try{const settings=settingsSchema.parse(req.body);res.json({runtime:await saveSettings(settings)});}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/runtime/refresh',async(_req,res)=>res.json({runtime:await refreshConnections()}));
-app.get('/api/health',(req,res)=>{const challenge=req.get('x-pseudoharness-startup-challenge')||'';const startupProof=startupSecret&&/^[a-f0-9]{64}$/i.test(challenge)?createHmac('sha256',startupSecret).update(challenge).digest('hex'):undefined;res.json({ok:true,host,version,stateReady:!stateLoadError&&!stateOwnershipError,...(stateLoadError||stateOwnershipError?{stateError:stateOwnershipError||stateLoadError}:{}),...(stateOwnershipError?{stateCode:stateOwnershipCode}:{}),...(startupProof?{startupProof}:{})});});
+app.post('/api/v1/kernel/shutdown',async(req,res)=>{
+  if(req.get('x-pseudoharness-token')!==nonce){res.status(403).json({error:'Local request origin or session token rejected.'});return;}
+  if(shutdownRequested){res.status(409).json({error:'The kernel is already stopping.',code:'KERNEL_SHUTTING_DOWN'});return;}
+  try{
+    z.object({confirm:z.literal('stop-kernel')}).strict().parse(req.body);
+    const pendingAgentMem=getState().tasks.some(task=>[task,...(task.passes||[])].some(record=>record.agentmemRecordStatus==='saving'||record.agentmemRecordStatus==='in_progress'||!!record.agentmemLease));
+    if(pendingAgentMem){res.status(409).json({error:'Wait for AgentMem work and receipt saving to finish before stopping the kernel.',code:'AGENTMEM_WORK_PENDING'});return;}
+    shutdownRequested=true;
+    let pausedTasks=0;
+    const state=await mutate(current=>{pausedTasks=pauseActiveTasksForKernelShutdown(current);});
+    res.status(202).json({status:'stopping',pausedTasks,cursor:state.revision,kernelInstanceId:kernelInstance?.instanceId||''});
+    setTimeout(()=>void stopServer(),30).unref?.();
+  }catch(error){
+    shutdownRequested=false;
+    const message=errorMessage(error);
+    res.status(400).json({error:message});
+  }
+});
+app.get('/api/health',(req,res)=>{const challenge=req.get('x-pseudoharness-startup-challenge')||'';const startupProof=/^[a-f0-9]{64}$/i.test(challenge)?createHmac('sha256',kernelStartupSecret).update(challenge).digest('hex'):undefined;res.json({ok:true,host,port:boundPort,version,protocolVersion:KERNEL_PROTOCOL_VERSION,kernelInstanceId:kernelInstance?.instanceId||'',stateReady:!stateLoadError&&!stateOwnershipError,...(stateLoadError||stateOwnershipError?{stateError:stateOwnershipError||stateLoadError}:{}),...(stateOwnershipError?{stateCode:stateOwnershipCode}:{}),...(startupProof?{startupProof}:{})});});
 app.use('/api',(req,res)=>res.status(404).json({error:`Unknown API endpoint: ${req.method} ${req.path}.`}));
 if(production) app.use(express.static(path.resolve(here,'../dist'),{fallthrough:true}));
 app.use((req,res)=>{if(production)res.sendFile(path.resolve(here,'../dist/index.html'));else res.status(404).send('Open the Vite development server on port 5173.');});
 try{stateOwner=acquireStateDirectoryOwner();}catch(error){stateLoadError=stateOwnershipError=errorMessage(error);stateOwnershipCode=error instanceof StateDirectoryInUseError?'STATE_DIRECTORY_IN_USE':'STATE_OWNER_UNAVAILABLE';}
 if(stateOwner)try{await loadState();}catch(error){stateLoadError=errorMessage(error);}
-server.listen(port,host,()=>{console.log(`Pseudoharness local backend listening on http://${host}:${port}`);if(stateOwnershipError)console.error(stateOwnershipError);if(!stateLoadError)void initializeRuntime();});
+server.listen(port,host,()=>{const address=server.address();if(address&&typeof address==='object')boundPort=address.port;if(stateOwner){kernelInstance=createKernelInstanceRecord({port:boundPort,startupSecret:kernelStartupSecret});void writeKernelInstance(kernelInstance).catch(()=>{console.error('Pseudoharness kernel discovery is unavailable; the local service remains accessible at its configured address.');});}console.log(`Pseudoharness headless kernel listening on http://${host}:${boundPort}`);if(stateOwnershipError)console.error(stateOwnershipError);if(!stateLoadError)void initializeRuntime();});
 let shutdownTimer:NodeJS.Timeout|undefined;
 function stopServer(){
   if(shuttingDown)return;
-  shuttingDown=true;
+  shutdownRequested=true;shuttingDown=true;
   for(const stream of eventStreams){stream.unsubscribe();clearInterval(stream.heartbeat);if(!stream.response.destroyed&&!stream.response.writableEnded)stream.response.end();}
   eventStreams.clear();
-  try{shutdown();}catch(error){console.error('Pseudoharness runtime shutdown failed:',error);}
   server.close(error=>{
-    if(shutdownTimer)clearTimeout(shutdownTimer);
-    try{stateOwner?.release();}catch(releaseError){console.error('Could not release Pseudoharness state ownership:',releaseError);}
-    process.exit(error?1:0);
+    void (async()=>{
+      if(shutdownTimer)clearTimeout(shutdownTimer);
+      if(stateOwner)try{await mutate(state=>{pauseActiveTasksForKernelShutdown(state);});}catch(stateError){console.error('Pseudoharness could not persist kernel shutdown state:',errorMessage(stateError));}
+      // Persist the paused state before terminating owned provider processes so
+      // their rejected in-flight requests cannot be mistaken for failed jobs.
+      try{await shutdown();}catch(shutdownError){console.error('Pseudoharness runtime shutdown failed:',errorMessage(shutdownError));}
+      try{if(kernelInstance)await removeKernelInstanceIfOwned(kernelInstance.instanceId);}catch{console.error('Pseudoharness kernel discovery record could not be removed.');}
+      try{stateOwner?.release();}catch(releaseError){console.error('Could not release Pseudoharness state ownership:',errorMessage(releaseError));}
+      process.exit(error?1:0);
+    })();
   });
   // Allow in-flight HTTP work to finish, then abort any stuck connections. The
   // state-owner lock stays held until server.close confirms all are gone.

@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const bridge={
   platform:process.platform,
+  quit:()=>ipcRenderer.invoke('pseudoharness:app-quit'),
   windowControls:process.platform==='win32'?{
     minimize:()=>ipcRenderer.invoke('pseudoharness:window-minimize'),
     toggleMaximize:()=>ipcRenderer.invoke('pseudoharness:window-toggle-maximize'),

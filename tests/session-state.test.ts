@@ -3,7 +3,7 @@ import { deleteTaskInState, renameTaskInState, taskDeletionBlockReason, type Sta
 import { sessionTitleSchema } from '../server/contracts.js';
 
 const task=(patch:Partial<Task>={}):Task=>({id:'session-a',title:'Original title',phase:'accepted',createdAt:'2026-10-20T00:00:00.000Z',updatedAt:'2026-10-20T00:00:00.000Z',userRoot:'D:/workspace/demo',agentmemProjectId:'',userMessages:['hello'],messages:[{id:'m1',role:'user',text:'hello',createdAt:'2026-10-20T00:00:00.000Z'}],correctionCount:0,processedTurns:[],...patch});
-const state=(items:Task[],activeTaskId:string|null):State=>({version:3,settings:{projectRoot:'D:/workspace/demo',agentmemProjectId:'',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:items,activeTaskId,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']});
+const state=(items:Task[],activeTaskId:string|null):State=>({version:3,revision:0,settings:{projectRoot:'D:/workspace/demo',agentmemProjectId:'',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:items,activeTaskId,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']});
 
 describe('local session lifecycle',()=>{
   it('validates trimmed non-empty titles with a bounded length',()=>{

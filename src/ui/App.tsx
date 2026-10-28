@@ -1,6 +1,6 @@
 import { createRef, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AlertCircle, BookOpen, Check, ChevronDown, ChevronRight, Command, Copy, Database, FileText, Folder, FolderPlus, GitBranch, Globe, Keyboard, Maximize2, MessageSquarePlus, Minus, PanelLeft, PanelRight, Pin, Plus, Search, Settings2, ShieldCheck, Square, Terminal, X } from 'lucide-react';
-import { api, bootstrap } from './api';
+import { api, bootstrap, KERNEL_PROTOCOL_VERSION } from './api';
 import { Markdown } from './Markdown';
 import Composer from './Composer';
 import { prepareMarkdownSubmission } from './LiveMarkdownEditor';
@@ -13,10 +13,11 @@ import { EmbeddedWorkspace } from './EmbeddedWorkspace';
 import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitPane, type SessionPane } from './paneGroups';
 import { formatBrowserAnnotation } from './browser-annotation';
 import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
-import type { AppState, Assignment, BrowserAnnotation, LiveActivity, Project, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
+import type { AppState, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, LiveActivity, Project, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
 const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
 
 const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
+const fallbackSettings:Settings={projectRoot:'',agentmemProjectId:'',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'};
 const stamp=(s:string)=>new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(new Date(s));
 const auditStamp=(s:string)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(s));
 const rootLabel=(root?:string)=>root?.split(/[\\/]/).filter(Boolean).at(-1)||'Choose project root';
@@ -94,6 +95,7 @@ export default function App() {
   const projectExpandedRef = useRef<string[]>([]);
   const projectExpansionQueue = useRef(Promise.resolve());
   const projectSelectorRef = useRef<HTMLSelectElement>(null);
+  const kernelCursor = useRef<{instanceId:string;revision:number}|null>(null);
   const recentSessionNavigation = useRef<{ids:string[];activeId:string|null}|null>(null);
   const tabDragSuppressUntil = useRef<{tab:string;until:number}|null>(null);
   const closeTimers = useRef<Record<string, number>>({});
@@ -103,6 +105,15 @@ export default function App() {
   const rootPane = panes[0] || { id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 };
   const models = useMemo(() => runtime?.codex.models || [], [runtime]);
   const selectedProject = state?.projects?.find(project => project.id === state.selectedProjectId) || null;
+  const applyKernelSnapshot=(value:any)=>{
+    if(value.protocolVersion!==undefined&&value.protocolVersion!==KERNEL_PROTOCOL_VERSION){setError('The client and local kernel use different protocol versions. Reload Pseudoharness to reconnect.');return false;}
+    const incomingId=typeof value.kernelInstanceId==='string'?value.kernelInstanceId:'';
+    const incomingRevision=Number.isSafeInteger(value.cursor)?value.cursor:Number.isSafeInteger(value.state?.revision)?value.state.revision:undefined;
+    const previous=kernelCursor.current;
+    if(previous&&incomingId&&previous.instanceId===incomingId&&incomingRevision!==undefined&&incomingRevision<previous.revision)return false;
+    if(incomingId&&incomingRevision!==undefined)kernelCursor.current={instanceId:incomingId,revision:incomingRevision};
+    setState(value.state);setRuntime(value.runtime);return true;
+  };
   useEffect(()=>{projectExpandedRef.current=state?.expandedProjectIds||[];},[state?.expandedProjectIds]);
 
   const taskForTab = (id: string): Task | null => state?.tasks.find(task => task.id === id) || null;
@@ -119,9 +130,8 @@ export default function App() {
   const setPaneActive = (paneId: string, tab: string) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, activeTab: tab } : pane));
   const refresh = async () => {
     try {
-      const value = await api('/api/state');
-      setState(value.state);
-      setRuntime(value.runtime);
+      const value = await api('/api/v1/snapshot');
+      applyKernelSnapshot(value);
     } catch (cause) {
       setError(String(cause));
     }
@@ -513,8 +523,7 @@ export default function App() {
     let alive = true;
     bootstrap().then(value => {
       if (!alive) return;
-      setState(value.state);
-      setRuntime(value.runtime);
+      applyKernelSnapshot(value);
       if (value.state.activeTaskId) {
         const id = value.state.activeTaskId;
         setPanes([{ id: 'pane:root', tabs: [id], activeTab: id, weight: 1 }]);
@@ -530,14 +539,11 @@ export default function App() {
         setLoading(false);
       }
     });
-    const source = new EventSource('/events');
+    const source = new EventSource(`/api/v1/events?protocol=${KERNEL_PROTOCOL_VERSION}`);
     source.onmessage = event => {
       try {
         const value = JSON.parse(event.data);
-        if (value.state && alive) {
-          setState(value.state);
-          setRuntime(value.runtime);
-        }
+        if (value.state && alive) applyKernelSnapshot(value);
       } catch {
       }
     };
@@ -795,7 +801,7 @@ export default function App() {
       {renderSessionPaneActions(tab, task)}
       {task && <>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task, pane.id)}</div></>}
       {!task && taskView}
-      <HeadsUpPanel task={task} settings={task?{...state!.settings,projectRoot:task.userRoot,agentmemProjectId:task.agentmemProjectId||''}:selectedProject?{...state!.settings,projectRoot:selectedProject.projectRoot,agentmemProjectId:selectedProject.agentmemProjectId}:state!.settings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
+      <HeadsUpPanel task={task} settings={task?{...(state?.settings||fallbackSettings),projectRoot:task.userRoot,agentmemProjectId:task.agentmemProjectId||''}:selectedProject?{...(state?.settings||fallbackSettings),projectRoot:selectedProject.projectRoot,agentmemProjectId:selectedProject.agentmemProjectId}:state?.settings||fallbackSettings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
         onClose={() => setHeadsUpOpen(current => ({ ...current, [tab]: false }))}
         onOpenSettings={openSettings} triggerRef={headsUpTriggerRef(tab)} />
     </div>;
@@ -955,10 +961,10 @@ export default function App() {
 }
 
 
-function ConversationMessage({message:m}:{message:Message}){
+function ConversationMessage({message:m,execution}:{message:Message;execution?:DeepSeekExecutionProfile}){
   if(m.role==='user')return <div className="message user-message" key={m.id}><div className="user-avatar">U</div><div className="message-main"><div className="message-meta"><strong>You</strong><span>{stamp(m.createdAt)}</span>{m.submissionKind==='steering'&&<span className={`model-chip steering-chip ${m.deliveryStatus||'pending'}`}>{m.deliveryStatus==='steered'?'Steered active turn':m.deliveryStatus==='unconfirmed'?'Steering delivery unconfirmed':'Sending steering'}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
   if(m.role==='system')return <div className={`system-event ${m.text.startsWith('Worker activity:')?'progress-event':''}`} key={m.id}><span className="event-glyph">{m.text.startsWith('Worker activity:')?<Activity size={14}/>:<AlertCircle size={14}/>}</span><span>{m.text.replace(/^Worker activity: /,'')}</span></div>;
-  return <div className="message agent-message" key={m.id}><div className={`agent-avatar ${m.role}`}>{m.role==='worker'?<Terminal size={15}/>:<Command size={15}/>}</div><div className="message-main"><div className="message-meta"><strong>{m.role==='worker'?'Luna worker':m.role==='router'?'Routing agent':m.role==='direct'?'Direct answer':m.role==='simple'?'Luna simple implementation':'Orchestrator'}</strong><span>{stamp(m.createdAt)}</span>{(['worker','router','direct','simple'].includes(m.role))&&<span className="model-chip">gpt-6-luna · {m.role==='worker'?'high':m.role==='simple'?'xhigh':m.role==='router'?'low · Fast':'high'}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
+  return <div className="message agent-message" key={m.id}><div className={`agent-avatar ${m.role}`}>{m.role==='worker'?<Terminal size={15}/>:<Command size={15}/>}</div><div className="message-main"><div className="message-meta"><strong>{execution&&m.role==='worker'?`DeepSeek Harness worker · ${execution.provider}`:m.role==='worker'?'Luna worker':m.role==='router'?'Routing agent':m.role==='direct'?'Direct answer':m.role==='simple'?'Luna simple implementation':'Orchestrator'}</strong><span>{stamp(m.createdAt)}</span>{(['worker','router','direct','simple'].includes(m.role))&&<span className="model-chip">{execution&&m.role==='worker'?`${execution.model} · requested native effort ${execution.nativeReasoningEffort} · effective effort unknown`:`gpt-6-luna · ${m.role==='worker'?'high':m.role==='simple'?'xhigh':m.role==='router'?'low · Fast':'high'}`}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
 }
 
 function ActivityRow({item}:{item:LiveActivity}){
@@ -976,14 +982,18 @@ function ReasoningResponse({turn,summaries,activities,live,fallbackTime}:{turn:N
   const elapsedSeconds=Math.max(0,Math.floor((clock-Date.parse(turn.startedAt||fallbackTime))/1000));
   const elapsed=elapsedSeconds>=3600?`${Math.floor(elapsedSeconds/3600)}h`:elapsedSeconds>=60?`${Math.floor(elapsedSeconds/60)}m`:`${elapsedSeconds}s`;
   const durationLabel=turn.status==='interrupted'?'Interrupted after':turn.status==='failed'?'Failed after':live?'Working for':'Worked for';
+  const turnLabel=turn.provider?`DeepSeek Harness worker · ${turn.provider}`:turn.role==='worker'?'Luna worker':turn.role==='orchestrator'?'Orchestrator':'GPT-6 Luna';
+  const modelLabel=turn.provider?`${turn.provider} / ${turn.requestedModel} · requested native effort ${turn.requestedEffort} · effective effort unknown`:`${turn.requestedModel} · ${turn.requestedEffort}`;
   return <section className={`turn-activity ${live?'is-live':''}`} aria-label={`${turn.role} model response`} data-status={turn.status}>
-    <header className="turn-activity-heading"><span>{turn.role==='worker'?'Luna worker':turn.role==='orchestrator'?'Orchestrator':'GPT-6 Luna'}</span><span className="turn-activity-duration">{durationLabel} {elapsed}</span>{turn.role!=='orchestrator'&&<span className="model-chip">{turn.requestedModel} · {turn.requestedEffort}</span>}</header>
+    <header className="turn-activity-heading"><span>{turnLabel}</span><span className="turn-activity-duration">{durationLabel} {elapsed}</span>{turn.role!=='orchestrator'&&<span className="model-chip">{modelLabel}</span>}</header>
     <div className="turn-activity-events">{events.map(event=>event.kind==='summary'?<div className="live-activity-row commentary summary" key={`summary:${event.summary.itemId}:${event.summary.summaryIndex}`}><span className="live-activity-icon"><Command size={14}/></span><div className="live-activity-main"><div className="markdown-body"><Markdown>{event.summary.text}</Markdown></div></div></div>:<ActivityRow key={`activity:${event.item.itemId}`} item={event.item}/>)}{!events.length&&<div className="reasoning-response-empty">{live?'Waiting for activity…':turn.status==='failed'?'Turn failed.':turn.status==='interrupted'?'Turn interrupted.':'No activity details were reported for this turn.'}</div>}</div>
   </section>;
 }
 
 function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpanded,workerActivityExpanded,agentmemAuditExpanded,retrying,selectedSteerWorkerId,onRetryAgentMem,onSelectSteerWorker,toggleAssignment,toggleReceipt,toggleWorkerActivity,toggleAgentMemAudit}:{pass:TaskPass;messages:Message[];active:boolean;task:Task;assignmentExpanded:boolean;receiptExpanded:boolean;workerActivityExpanded:boolean;agentmemAuditExpanded:boolean;retrying:boolean;selectedSteerWorkerId?:string;onRetryAgentMem:()=>void;onSelectSteerWorker:(workerId:string)=>void;toggleAssignment:()=>void;toggleReceipt:()=>void;toggleWorkerActivity:()=>void;toggleAgentMemAudit:()=>void}){
   const live=active&&task.phase===p.phase&&['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(p.phase);
+  const recruitedExecution=p.recruitmentTeam?p.deepSeekExecution:undefined;
+  const recruitedWorkerLabel=recruitedExecution?`${recruitedExecution.provider} / ${recruitedExecution.model} · requested native effort ${recruitedExecution.nativeReasoningEffort} · effective effort unknown`:'gpt-6-luna · high';
   const output=p.publicAnswer||p.receipt?.result||'';
   const visibleMessages=messages.filter(m=>!(m.role==='orchestrator'&&m.text==='Prepared a complete assignment.'&&(p.reasoningTurns||[]).some(turn=>turn.role==='orchestrator'))&&!(output&&m.role!=='user'&&m.text===output)&&!(p.error&&m.role==='system'&&m.text===p.error));
   const turns=p.reasoningTurns||[];const directTurn=turns.filter(turn=>turn.role==='direct'&&turn.threadId===p.directThreadId).at(-1);const directOutputLabel=directTurn?`${directTurn.requestedModel==='gpt-6-luna'?'GPT-6 Luna':directTurn.requestedModel}${directTurn.requestedEffort?` · ${directTurn.requestedEffort}`:''}`:p.directThreadId?'GPT-6 Luna':'Orchestrator';const timeline=[...visibleMessages.map((message,index)=>({kind:'message' as const,at:Date.parse(message.createdAt)||0,index,message})),...turns.map((turn,index)=>{const roleTurns=turns.filter(item=>item.role===turn.role);const roleMessages=visibleMessages.filter(message=>message.role===turn.role);const roleIndex=roleTurns.findIndex(item=>item.threadId===turn.threadId&&item.turnId===turn.turnId);const matchingMessage=roleMessages[roleIndex];const latestUser=visibleMessages.filter(message=>message.role==='user').at(-1);const fallbackAt=matchingMessage?(Date.parse(matchingMessage.createdAt)||0)-1:(Date.parse(latestUser?.createdAt||p.createdAt)||0)+1;return {kind:'reasoning' as const,at:Date.parse(turn.startedAt||'')||fallbackAt,index,turn};})].sort((a,b)=>a.at-b.at||(a.kind!==b.kind?(a.kind==='reasoning'?-1:1):a.index-b.index));
@@ -996,10 +1006,10 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
     <header className="pass-heading"><span>{p.legacyUnassociated?'Legacy history':`Pass ${p.index}`}</span><span className={`pass-status ${p.phase}`}>{phaseText[p.phase]||p.phase}</span><time>{stamp(p.createdAt)}</time></header>
     {p.legacyUnassociated&&<div className="legacy-association-note">This older session predates per-pass records. Its messages and saved artifacts cannot be reliably matched, so they are shown as unassociated history.</div>}
     {((p.selectedSkills?.length||0)+(p.loadedSkills?.length||0)>0)&&<div className="pass-skill-provenance"><strong>Saved skills used</strong>{[...(p.selectedSkills||[]).map(skill=>({...skill,usage:'Invoked by you'})),...(p.loadedSkills||[]).map(skill=>({...skill,usage:`Loaded${skill.role?` by ${skill.role}`:''}`}))].map((skill,index)=><details key={`${skill.id}:${skill.revision}:${skill.usage}:${index}`}><summary>{skill.name} · {skill.usage} · {skill.revision.slice(0,12)}</summary><small>{skill.source}</small><pre>{skill.instructions}</pre></details>)}</div>}{(p.savedSkills?.length||0)>0&&<div className="pass-skill-provenance"><strong>Skills saved by agents</strong>{p.savedSkills!.map((skill,index)=><div key={`${skill.id}:${skill.revision}:${index}`}><span>{skill.name} · {skill.action} · {skill.revision.slice(0,12)}</span><small>{skill.source} · {skill.role}</small></div>)}</div>}
-    {visibleTimeline.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole===row.turn.role&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}
-    {workerRows.length>0&&<div className="worker-activity"><Disclosure title={`Luna activity · ${live&&p.activeRole==='worker'?'live · ':''}${workerActivityCount} ${workerActivityCount===1?'item':'items'}`} icon={<Terminal size={15}/>} open={workerActivityExpanded} onToggle={toggleWorkerActivity}><div className="worker-activity-scroll">{workerRows.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole==='worker'&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}</div></Disclosure></div>}
-    {p.simpleThreadId&&<div className="worker-status" role="status">{p.phase==='simple_running'?<div className="activity-spinner"/>:<Check size={17} className="worker-activity-icon"/>}<strong>{p.phase==='simple_running'?'Simple implementation is working':'Simple implementation complete'}</strong><span className="worker-model">GPT-6 Luna · xhigh</span><span className={`worker-state ${p.phase}`}>{p.phase==='simple_running'?'Verifying · no Sol review':'Self-verified · no Sol review'}</span></div>}{(p.assignment||p.workerThreadId||p.receipt)&&p.resolution!=='direct'&&p.resolution!=='simple'&&<div className="worker-status" role="status">{p.phase==='worker_running'?<div className="activity-spinner"/>:<Activity size={17} className="worker-activity-icon"/>}<strong>{p.phase==='worker_running'?'Worker is working':p.phase==='accepted'?'Worker review':'Worker task'}</strong><span className="worker-model">gpt-6-luna · high</span><span className={`worker-state ${p.phase}`}>{p.phase==='accepted'&&p.receipt?'Complete':p.phase==='worker_running'?p.workerStage==='context_plan'?'Composing scope context · orchestrator idle':p.workerStage==='context_compose'?`${p.workerContextStatus?.status==='retrieved'?'Reviewing retrieved context':p.workerContextStatus?.status==='disabled'?'AgentMem disabled · composing context':'AgentMem unavailable · composing context'} · orchestrator idle`:p.workerStage==='execute'?'Executing assignment · orchestrator idle':'Preparing worker · orchestrator idle':phaseText[p.phase]||p.phase}</span></div>}
-    {p.recruitmentTeam&&<RecruitmentTeamPanel team={{teamId:p.recruitmentTeam.teamId,status:p.recruitmentTeam.status,workers:p.recruitmentTeam.workers.map(worker=>({workerId:worker.workerId,name:worker.name,status:worker.status,canSteer:!!worker.activeTurnId,effort:worker.effort,branch:worker.branch,worktreePath:worker.worktreeRoot,assignment:worker.assignment,receipt:worker.receipt,error:worker.error})),integration:{status:p.recruitmentTeam.integration.status,canSteer:!!p.recruitmentTeam.integration.activeTurnId,branch:p.recruitmentTeam.integration.branch,worktreePath:p.recruitmentTeam.integration.worktreeRoot,receipt:p.recruitmentTeam.integration.receipt,error:p.recruitmentTeam.integration.error}}} selectedWorkerId={selectedSteerWorkerId} onSelectSteerWorker={active?onSelectSteerWorker:undefined}/>}
+    {visibleTimeline.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message} execution={recruitedExecution}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole===row.turn.role&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}
+    {workerRows.length>0&&<div className="worker-activity"><Disclosure title={`${recruitedExecution?'DeepSeek Harness':'Luna'} activity · ${live&&p.activeRole==='worker'?'live · ':''}${workerActivityCount} ${workerActivityCount===1?'item':'items'}`} icon={<Terminal size={15}/>} open={workerActivityExpanded} onToggle={toggleWorkerActivity}><div className="worker-activity-scroll">{workerRows.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message} execution={recruitedExecution}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole==='worker'&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}</div></Disclosure></div>}
+    {p.simpleThreadId&&<div className="worker-status" role="status">{p.phase==='simple_running'?<div className="activity-spinner"/>:<Check size={17} className="worker-activity-icon"/>}<strong>{p.phase==='simple_running'?'Simple implementation is working':'Simple implementation complete'}</strong><span className="worker-model">GPT-6 Luna · xhigh</span><span className={`worker-state ${p.phase}`}>{p.phase==='simple_running'?'Verifying · no Sol review':'Self-verified · no Sol review'}</span></div>}{(p.assignment||p.workerThreadId||p.receipt)&&p.resolution!=='direct'&&p.resolution!=='simple'&&<div className="worker-status" role="status">{p.phase==='worker_running'?<div className="activity-spinner"/>:<Activity size={17} className="worker-activity-icon"/>}<strong>{p.phase==='worker_running'?'Worker is working':p.phase==='accepted'?'Worker review':'Worker task'}</strong><span className="worker-model">{recruitedWorkerLabel}</span><span className={`worker-state ${p.phase}`}>{p.phase==='accepted'&&p.receipt?'Complete':p.phase==='worker_running'?p.workerStage==='context_plan'?'Composing scope context · orchestrator idle':p.workerStage==='context_compose'?`${p.workerContextStatus?.status==='retrieved'?'Reviewing retrieved context':p.workerContextStatus?.status==='disabled'?'AgentMem disabled · composing context':'AgentMem unavailable · composing context'} · orchestrator idle`:p.workerStage==='execute'?'Executing assignment · orchestrator idle':'Preparing worker · orchestrator idle':phaseText[p.phase]||p.phase}</span></div>}
+    {p.recruitmentTeam&&<RecruitmentTeamPanel team={{teamId:p.recruitmentTeam.teamId,status:p.recruitmentTeam.status,workers:p.recruitmentTeam.workers.map(worker=>({workerId:worker.workerId,name:worker.name,status:worker.status,canSteer:!!worker.activeTurnId&&!worker.deepSeekExecution,effort:worker.effort,branch:worker.branch,worktreePath:worker.worktreeRoot,assignment:worker.assignment,receipt:worker.receipt,error:worker.error,deepSeekExecution:worker.deepSeekExecution,deepSeekRuntime:worker.deepSeekRuntime,deepSeekPhaseRuns:worker.deepSeekPhaseRuns})),integration:{status:p.recruitmentTeam.integration.status,canSteer:!!p.recruitmentTeam.integration.activeTurnId&&!p.recruitmentTeam.integration.deepSeekExecution,branch:p.recruitmentTeam.integration.branch,worktreePath:p.recruitmentTeam.integration.worktreeRoot,receipt:p.recruitmentTeam.integration.receipt,error:p.recruitmentTeam.integration.error,deepSeekExecution:p.recruitmentTeam.integration.deepSeekExecution,deepSeekRuntime:p.recruitmentTeam.integration.deepSeekRuntime,deepSeekPhaseRuns:p.recruitmentTeam.integration.deepSeekPhaseRuns}}} selectedWorkerId={selectedSteerWorkerId} onSelectSteerWorker={active?onSelectSteerWorker:undefined}/>}
     {p.assignment&&<Disclosure title="Assignment" icon={<FileText size={15}/>} open={assignmentExpanded} onToggle={toggleAssignment}><AssignmentView assignment={p.assignment}/></Disclosure>}
     <Disclosure title={agentMemAuditTitle(p)} icon={<Database size={15}/>} open={agentmemAuditExpanded} onToggle={toggleAgentMemAudit}><AgentMemAuditView pass={p}/></Disclosure>
     {p.escalation&&<div className="escalation-card"><div className="escalation-head"><AlertCircle size={16}/><strong>Worker needs a decision</strong></div><p>{p.escalation.decision_needed}</p>{p.escalation.evidence?.map((x:string,i:number)=><div className="escalation-detail" key={i}>{x}</div>)}<div className="escalation-options">{p.escalation.options?.map((x:string,i:number)=><span key={i}>{x}</span>)}</div>{p.escalation.recommendation&&<p className="rec-line"><b>Recommendation:</b> {p.escalation.recommendation}</p>}</div>}
@@ -1007,7 +1017,7 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
     {p.phase==='accepted'&&task.agentmemProjectId&&recordStatus&&recordStatus!=='done'&&<div className={`agentmem-pass-status ${recordStatus==='failed'?'is-error':''}`} role="status"><span>{recordStatus==='saving'?'Saving AgentMem receipt…':recordStatus==='failed'?'AgentMem save failed':recordStatus==='in_progress'?'Receipt saved · AgentMem task still open':recordStatus==='released'?'AgentMem lease released':'Checking AgentMem receipt status…'}</span>{recordError&&<small>{recordError}</small>}{p.agentmemTaskId&&(recordStatus==='failed'||recordStatus==='in_progress')&&<button className="text-button" disabled={retrying} onClick={onRetryAgentMem}>{retrying?'Retrying…':'Retry AgentMem completion'}</button>}</div>}
     {p.error&&<div className="error-card"><AlertCircle size={16}/><div><strong>{p.phase==='needs_attention'?'Action needed':'Workflow error'}</strong><p>{p.error}</p>{p.phase==='paused_after_restart'&&<small>Send an explicit update to reattach the saved threads and continue.</small>}</div></div>}
     <PassUsagePanel pass={p}/>
-    {output&&<section className="final-artifact" aria-label="Final output"><header><FileText size={16}/><strong>Final output</strong><span>{p.resolution==='direct'?directOutputLabel:p.resolution==='simple'?'GPT-6 Luna · xhigh · self-verified':'Luna · reviewed by orchestrator'}</span></header><div className="final-artifact-body markdown-body"><Markdown>{output}</Markdown></div></section>}
+    {output&&<section className="final-artifact" aria-label="Final output"><header><FileText size={16}/><strong>Final output</strong><span>{p.resolution==='direct'?directOutputLabel:p.resolution==='simple'?'GPT-6 Luna · xhigh · self-verified':recruitedExecution?`DeepSeek Harness (${recruitedExecution.provider}) · reviewed by orchestrator`:'Luna · reviewed by orchestrator'}</span></header><div className="final-artifact-body markdown-body"><Markdown>{output}</Markdown></div></section>}
     <Disclosure title="Run receipt · repository and knowledge base changes" icon={<Check size={15}/>} open={receiptExpanded} onToggle={toggleReceipt}><RunReceipt pass={p} taskId={task.id}/></Disclosure>
   </section>;
 }
