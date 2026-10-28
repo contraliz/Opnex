@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { closeSkillLibrary, createSkill, getSkill, recordedSkillSaves } from '../dist-server/skill-library.js';
 import { resolveMcpHelperLaunch } from '../dist-server/mcp-helper-runtime.js';
 import { skillLibraryMcpServerConfig } from '../dist-server/skill-library-mcp-config.js';
 
@@ -33,24 +34,26 @@ async function connect(config,extraEnv={}){
 
 let failures=0;
 try{
+  const skill=await createSkill({name:'Packaged runtime smoke skill',description:'Temporary isolated packaging check',instructions:'This synthetic body exists only inside this temporary smoke-test profile.',source:'Packaged smoke fixture'});
   const config=skillLibraryMcpServerConfig({taskId,role:'direct'});
   const target=`${process.platform}-${process.arch}`,packagedNode=path.join(resourcesPath,'pseudoharness-node',target,process.platform==='win32'?'node.exe':'node');
   if(config.command!==packagedNode)throw new Error(`The packaged skills server did not resolve to the staged ${target} Node executable.`);
   const {client}=await connect(config);
   try{
     const tools=await client.listTools();
-    const saved=await client.callTool({name:'skills_save',arguments:{name:'Packaged runtime smoke skill',description:'Temporary isolated packaging check',instructions:'This synthetic body exists only inside this temporary smoke-test profile.'}});
-    if(saved.isError)throw new Error(saved.content?.map(block=>block.text||'').join('\n')||'The isolated skills_save request failed.');
-    const skill=JSON.parse(saved.content.find(block=>block.type==='text').text);
-    const [search,list,loaded]=await Promise.all([
+    const blocked=await client.callTool({name:'skills_save',arguments:{name:'Unauthorized packaged task skill',description:'Must be rejected',instructions:'This task agent cannot save this body.'}});
+    const [search,list,loaded,afterSave,taskSaves]=await Promise.all([
       client.callTool({name:'skills_search',arguments:{query:'Temporary isolated packaging'}}),
       client.callTool({name:'skills_list',arguments:{query:'Packaged runtime'}}),
       client.callTool({name:'skills_load',arguments:{skill_id:skill.id}}),
+      getSkill(skill.id),
+      recordedSkillSaves(taskId,passId),
     ]);
-    const searchText=JSON.stringify(search),listText=JSON.stringify(list),loadText=JSON.stringify(loaded);
-    const expected=['skills_list','skills_search','skills_load','skills_read_file','skills_save'];
-    const verified=expected.every(name=>tools.tools.some(tool=>tool.name===name))&&searchText.includes(skill.id)&&listText.includes(skill.revision)&&loadText.includes(skill.revision)&&loadText.includes('This synthetic body exists only inside this temporary smoke-test profile.');
-    console.log(JSON.stringify({helper:'skills',command:config.command,tools:tools.tools.map(tool=>tool.name),revision:skill.revision,searchPassed:searchText.includes(skill.id),listPassed:listText.includes(skill.revision),loadPassed:loadText.includes('This synthetic body exists only inside this temporary smoke-test profile.'),verified}));
+    const searchText=JSON.stringify(search),listText=JSON.stringify(list),loadText=JSON.stringify(loaded),blockedText=blocked.content?.map(block=>block.text||'').join('\n')||'';
+    const expected=['skills_list','skills_search','skills_load','skills_read_file'];
+    const unauthorizedSaveRejected=blocked.isError===true&&blockedText.includes('Task agents cannot write the shared saved-skills library')&&!tools.tools.some(tool=>tool.name==='skills_save')&&afterSave.revision===skill.revision&&taskSaves.length===0;
+    const verified=expected.every(name=>tools.tools.some(tool=>tool.name===name))&&searchText.includes(skill.id)&&listText.includes(skill.revision)&&loadText.includes(skill.revision)&&loadText.includes('This synthetic body exists only inside this temporary smoke-test profile.')&&unauthorizedSaveRejected;
+    console.log(JSON.stringify({helper:'skills',command:config.command,tools:tools.tools.map(tool=>tool.name),revision:skill.revision,searchPassed:searchText.includes(skill.id),listPassed:listText.includes(skill.revision),loadPassed:loadText.includes('This synthetic body exists only inside this temporary smoke-test profile.'),unauthorizedSaveRejected,verified}));
     if(!verified)failures++;
   }finally{await client.close();}
 
@@ -67,5 +70,5 @@ try{
     if(!verified)failures++;
   }finally{await agentmem.close();}
 }catch(error){console.error(error);failures++;}
-finally{await rm(temp,{recursive:true,force:true});}
+finally{closeSkillLibrary();await rm(temp,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
 if(failures)process.exitCode=1;
