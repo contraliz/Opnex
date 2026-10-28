@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import type { DeepSeekExecutionProfile, DeepSeekRuntimeInfo } from '../types';
+import type { DeepSeekExecutionProfile, DeepSeekPhaseRunState, DeepSeekRuntimeInfo } from '../types';
 import './recruitment-team.css';
 
 export type RecruitmentReceipt = {
@@ -33,6 +33,7 @@ export type RecruitmentWorker = {
   error?: string;
   deepSeekExecution?: DeepSeekExecutionProfile;
   deepSeekRuntime?: DeepSeekRuntimeInfo;
+  deepSeekPhaseRuns?: DeepSeekPhaseRunState[];
 };
 
 export type RecruitmentIntegration = {
@@ -44,6 +45,7 @@ export type RecruitmentIntegration = {
   error?: string;
   deepSeekExecution?: DeepSeekExecutionProfile;
   deepSeekRuntime?: DeepSeekRuntimeInfo;
+  deepSeekPhaseRuns?: DeepSeekPhaseRunState[];
 };
 
 export type RecruitmentTeam = {
@@ -101,8 +103,8 @@ function ReceiptDetails({ receipt, label = 'Public receipt' }: { receipt: Recrui
   );
 }
 
-function ProviderDetails({ execution, runtime }: { execution?: DeepSeekExecutionProfile; runtime?: DeepSeekRuntimeInfo }) {
-  if (!execution && !runtime) return null;
+function ProviderDetails({ execution, runtime, phaseRuns }: { execution?: DeepSeekExecutionProfile; runtime?: DeepSeekRuntimeInfo; phaseRuns?: DeepSeekPhaseRunState[] }) {
+  if (!execution && !runtime && !phaseRuns?.length) return null;
   const provider = runtime?.provider || execution?.provider || 'DeepSeek Harness';
   const model = runtime?.model || execution?.model || 'Not recorded';
   const effort = runtime?.requestedReasoningEffort || execution?.nativeReasoningEffort;
@@ -116,6 +118,22 @@ function ProviderDetails({ execution, runtime }: { execution?: DeepSeekExecution
         <small>{runtime.filesystemScope === 'assignment-instruction-only' ? 'Write scope is an assignment instruction; runtime access is unrestricted.' : 'Read-only runtime preset.'}</small>
         <small>Approvals and steering are unsupported. Cancellation terminates the process tree.</small>
       </> : <small>Waiting for the local SDK to connect.</small>}
+      {!!phaseRuns?.length&&<details className="recruitment-team__disclosure">
+        <summary>Execution phases ({phaseRuns.length})</summary>
+        <ul className="recruitment-team__phase-runs">
+          {phaseRuns.map((run,index)=><li key={`${run.sessionId}:${run.turnId}:${index}`}>
+            <strong>{run.stage.replaceAll('_',' ')} · {run.status}</strong>
+            <small>{run.model} · requested native effort {run.requestedReasoningEffort||'unknown'} · effective effort unknown</small>
+            <small>{run.permissionMode} · {run.filesystemScope==='assignment-instruction-only'?'unrestricted; assignment write scope is instruction-only':'read-only preset'}</small>
+            {run.profileName&&<small>Task profile: {run.profileName}</small>}
+            {run.mcpToolCatalog&&<small>MCP tools: {run.mcpToolCatalog.status}{run.mcpToolCatalog.configuredServerNames.length?` · ${run.mcpToolCatalog.configuredServerNames.join(', ')}`:''}</small>}
+            <small>Session {run.sessionId} · turn {run.turnId}</small>
+            {run.serverInfo&&<small>SDK {run.serverInfo.version}{run.harnessVersion?` · Harness ${run.harnessVersion}`:''}</small>}
+            {run.writeScope.length>0&&<small>Validated assignment write scope: {run.writeScope.join(', ')}</small>}
+            {run.error&&<small role="note">{run.error}</small>}
+          </li>)}
+        </ul>
+      </details>}
     </div>
   );
 }
@@ -132,7 +150,7 @@ function WorkerCard({ worker, selected, onSelectSteerWorker }: { worker: Recruit
         <dl className="recruitment-team__metadata">
           <div><dt>Branch</dt><dd><code>{worker.branch}</code></dd></div>
         </dl>
-        <ProviderDetails execution={worker.deepSeekExecution} runtime={worker.deepSeekRuntime}/>
+        <ProviderDetails execution={worker.deepSeekExecution} runtime={worker.deepSeekRuntime} phaseRuns={worker.deepSeekPhaseRuns}/>
         <details className="recruitment-team__disclosure recruitment-team__worktree">
           <summary>Full worktree path</summary>
           <code>{worker.worktreePath}</code>
@@ -185,7 +203,7 @@ export function RecruitmentTeamPanel({ team, selectedWorkerId, onSelectSteerWork
           <dl className="recruitment-team__metadata">
             <div><dt>Branch</dt><dd><code>{team.integration.branch}</code></dd></div>
           </dl>
-          <ProviderDetails execution={team.integration.deepSeekExecution} runtime={team.integration.deepSeekRuntime}/>
+          <ProviderDetails execution={team.integration.deepSeekExecution} runtime={team.integration.deepSeekRuntime} phaseRuns={team.integration.deepSeekPhaseRuns}/>
           <details className="recruitment-team__disclosure recruitment-team__worktree">
             <summary>Full worktree path</summary>
             <code>{team.integration.worktreePath}</code>

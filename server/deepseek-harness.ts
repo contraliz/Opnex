@@ -663,7 +663,7 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new DeepSeekHarnessError('timeout', `The DeepSeek Harness SDK request ${method} timed out. The session remains available for explicit recovery.`, method));
+        reject(new DeepSeekHarnessError('timeout', `The DeepSeek Harness SDK request ${method} timed out.`, method));
       }, timeoutMs);
       this.pending.set(id, { method, resolve, reject, timer });
       child.stdin.write(payload, error => {

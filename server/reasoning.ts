@@ -90,7 +90,7 @@ function agentMemResultSummary(item:any){
   const summary=[...new Set(counts)].slice(0,8);const refs=[...new Set(references)].slice(0,8);if(refs.length)summary.push(`refs=${refs.join(', ')}`);
   return (summary.join(' · ')||'Tool completed; response content omitted.').slice(0,650);
 }
-function agentMemModelCall(task:Task,role:WorkflowRole,threadId:string,turnId:string,item:any,status:'running'|'completed'|'failed'|'interrupted'){
+export function recordAgentMemModelCall(task:Task,role:WorkflowRole,threadId:string,turnId:string,item:any,status:'running'|'completed'|'failed'|'interrupted'){
   const server=String(item?.serverName??item?.server??'').toLowerCase();if(!server.includes('agentmem')||typeof item?.id!=='string')return false;
   const pass=task.passes?.find(row=>row.id===task.currentPassId);if(!pass)return false;const audit=pass.agentmemAudit??(pass.agentmemAudit={recorded:true,coverage:'from_first_recorded_call',selectedProjectId:task.agentmemProjectId||null,workspaceRoot:task.userRoot,identityStatus:task.agentmemProjectId?'unverified':'unknown',modelMcpStatus:'unknown',contexts:[],calls:[]});if(!audit.recorded)return false;
   let args:any=item.arguments??item.input;if(typeof args==='string'){try{args=JSON.parse(args)}catch{args=undefined;}}
@@ -103,7 +103,8 @@ function agentMemModelCall(task:Task,role:WorkflowRole,threadId:string,turnId:st
   const operation:AgentMemAuditCall['operation']=writeMethod||writeAction?'write':readOnlyMethod?'read':'unknown';
   const repositoryId=service==='repository_index'?binding?.repositoryId||audit.verifiedRepositoryId:undefined;
   const resultSummary=status==='completed'?agentMemResultSummary(item):undefined;
-  const record={id:key,source:'model' as const,role,method,status,startedAt:now,updatedAt:now,threadId,turnId,service,operation,...(calledProject?{projectId:calledProject}:{}),...(repositoryId?{repositoryId}:{}),...(resultSummary?{resultSummary}:{})};
+  const providerEventSequence=Number.isSafeInteger(item.eventSequence)&&item.eventSequence>=0?item.eventSequence:undefined;
+  const record={id:key,source:'model' as const,role,method,status,startedAt:now,updatedAt:now,threadId,turnId,...(providerEventSequence!==undefined?{providerEventSequence}:{}),service,operation,...(calledProject?{projectId:calledProject}:{}),...(repositoryId?{repositoryId}:{}),...(resultSummary?{resultSummary}:{})};
   const index=audit.calls.findIndex(row=>row.id===key);if(index>=0){const previous=audit.calls[index];audit.calls[index]={...previous,...record,startedAt:previous.startedAt};}else audit.calls.push(record);
   audit.modelMcpStatus='observed';if(calledProject&&audit.selectedProjectId&&calledProject!==audit.selectedProjectId||typeof args?.repository_id==='string'&&repositoryId&&args.repository_id!==repositoryId)audit.identityStatus='mismatch';
   return true;
@@ -139,7 +140,7 @@ function applyCompletedItem(task:Task,threadId:string,turnId:string,item:any){
 }
 
 function finishTurn(task:Task,threadId:unknown,turn:any){
-  if(threadId===task.routerThreadId){if(task.phase==='cancelled'||task.activeRole!=='router'||!turn||task.activeTurnId&&task.activeTurnId!==turn.id)return false;let changed=false;for(const item of Array.isArray(turn.items)?turn.items:[])if(item?.type==='mcpToolCall'&&String(item.serverName??item.server??'').toLowerCase().includes('agentmem'))changed=agentMemModelCall(task,'router',threadId as string,turn.id,item,finalStatus(item,'completed')==='failed'?'failed':'completed')||changed;const status=turn.status==='interrupted'?'interrupted':turn.status==='failed'?'failed':'completed';const audit=task.passes?.find(pass=>pass.id===task.currentPassId)?.agentmemAudit;for(const call of audit?.calls||[])if(call.source==='model'&&call.threadId===threadId&&call.turnId===turn.id&&call.status==='running'){call.status=status;call.updatedAt=new Date().toISOString();changed=true;}return changed;}
+  if(threadId===task.routerThreadId){if(task.phase==='cancelled'||task.activeRole!=='router'||!turn||task.activeTurnId&&task.activeTurnId!==turn.id)return false;let changed=false;for(const item of Array.isArray(turn.items)?turn.items:[])if(item?.type==='mcpToolCall'&&String(item.serverName??item.server??'').toLowerCase().includes('agentmem'))changed=recordAgentMemModelCall(task,'router',threadId as string,turn.id,item,finalStatus(item,'completed')==='failed'?'failed':'completed')||changed;const status=turn.status==='interrupted'?'interrupted':turn.status==='failed'?'failed':'completed';const audit=task.passes?.find(pass=>pass.id===task.currentPassId)?.agentmemAudit;for(const call of audit?.calls||[])if(call.source==='model'&&call.threadId===threadId&&call.turnId===turn.id&&call.status==='running'){call.status=status;call.updatedAt=new Date().toISOString();changed=true;}return changed;}
   const role=roleForThread(task,threadId);if(task.phase==='cancelled'||!role||!turn||task.activeRole!==role||(task.activeTurnId&&task.activeTurnId!==turn.id))return false;
   let changed=false;
   for(const item of Array.isArray(turn.items)?turn.items:[])changed=applyCompletedItem(task,threadId as string,turn.id,item)||changed;
@@ -154,7 +155,7 @@ function finishTurn(task:Task,threadId:unknown,turn:any){
 export function applyCodexReasoningNotification(task:Task,method:string,params:any) {
   if(method==='turn/completed')return finishTurn(task,params?.threadId,params?.turn);
   const threadId=params?.threadId;const turnId=params?.turnId;const itemId=params?.itemId;
-  if(threadId===task.routerThreadId){if(task.phase==='cancelled'||task.activeRole!=='router'||typeof turnId!=='string'||!turnId||task.activeTurnId&&task.activeTurnId!==turnId)return false;const item=params?.item;if(item?.type==='mcpToolCall'&&String(item.serverName??item.server??'').toLowerCase().includes('agentmem')){if(method==='item/started')return agentMemModelCall(task,'router',threadId,turnId,item,'running');if(method==='item/completed')return agentMemModelCall(task,'router',threadId,turnId,item,finalStatus(item,'completed')==='failed'?'failed':'completed');}return false;}
+  if(threadId===task.routerThreadId){if(task.phase==='cancelled'||task.activeRole!=='router'||typeof turnId!=='string'||!turnId||task.activeTurnId&&task.activeTurnId!==turnId)return false;const item=params?.item;if(item?.type==='mcpToolCall'&&String(item.serverName??item.server??'').toLowerCase().includes('agentmem')){if(method==='item/started')return recordAgentMemModelCall(task,'router',threadId,turnId,item,'running');if(method==='item/completed')return recordAgentMemModelCall(task,'router',threadId,turnId,item,finalStatus(item,'completed')==='failed'?'failed':'completed');}return false;}
   const role=roleForThread(task,threadId);
   if(!role||task.phase==='cancelled'||task.activeRole!==role||typeof turnId!=='string'||!turnId)return false;
   if(task.activeTurnId&&turnId!==task.activeTurnId)return false;
@@ -175,7 +176,7 @@ export function applyCodexReasoningNotification(task:Task,method:string,params:a
     const item=params.item;if(!item||typeof item.id!=='string')return false;
     if(item.type==='reasoning')return matchingTurn(task,role,threadId,turnId)!==undefined;
     if(item.type==='agentMessage'&&item.phase==='commentary')return upsertActivity(task,role,threadId,turnId,item.id,'commentary','agentMessage','');
-    if(item.type==='mcpToolCall'&&String(item.serverName??item.server??'').toLowerCase().includes('agentmem')){const recorded=agentMemModelCall(task,role,threadId,turnId,item,'running');const shown=upsertActivity(task,role,threadId,turnId,item.id,'tool',item.type,toolTitle(item),{status:'running'});return recorded||shown;}
+    if(item.type==='mcpToolCall'&&String(item.serverName??item.server??'').toLowerCase().includes('agentmem')){const recorded=recordAgentMemModelCall(task,role,threadId,turnId,item,'running');const shown=upsertActivity(task,role,threadId,turnId,item.id,'tool',item.type,toolTitle(item),{status:'running'});return recorded||shown;}
     if(!toolTypes.has(item.type))return false;
     const detail=toolDetail(item);
     return upsertActivity(task,role,threadId,turnId,item.id,'tool',item.type,toolTitle(item),detail?{detail}:{});
@@ -193,7 +194,7 @@ export function applyCodexReasoningNotification(task:Task,method:string,params:a
   if(method==='item/completed'){
     const item=params.item;
     if(item?.type==='mcpToolCall'&&String(item.serverName??item.server??'').toLowerCase().includes('agentmem')){
-      const status=finalStatus(item,'completed')==='failed'?'failed':'completed';const changed=agentMemModelCall(task,role,threadId,turnId,item,status);
+      const status=finalStatus(item,'completed')==='failed'?'failed':'completed';const changed=recordAgentMemModelCall(task,role,threadId,turnId,item,status);
       // Audit only tool metadata. Never persist model MCP arguments, output, or error payloads.
       const shown=applyCompletedItem(task,threadId,turnId,{...item,aggregatedOutput:undefined,output:undefined,result:undefined,error:undefined});return changed||shown;
     }

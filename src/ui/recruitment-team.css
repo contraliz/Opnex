@@ -163,6 +163,19 @@
   overflow-wrap: anywhere;
 }
 
+.recruitment-team__phase-runs {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.45rem 0 0;
+  padding-left: 1.15rem;
+}
+
+.recruitment-team__phase-runs li {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
 .recruitment-team code {
   overflow-wrap: anywhere;
   word-break: break-word;
