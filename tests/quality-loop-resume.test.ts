@@ -3,7 +3,7 @@ import { qualityLoopResumeAction } from '../server/quality-loop-resume.js';
 
 const round={roundId:'round-1',status:'awaiting_corrections',findings:[{findingId:'finding-1'}]};
 type PlannerStatus='preflight'|'dispatch_unknown'|'active'|'interrupted'|'completed';
-type LoopStatus='paused'|'paused_after_restart'|'needs_attention';
+type LoopStatus='disabled'|'awaiting_audit'|'auditing'|'awaiting_corrections'|'correcting'|'complete'|'user_accepted'|'needs_attention'|'paused'|'paused_after_restart'|'cancelled';
 const loop=(status:LoopStatus,plannerStatus?:PlannerStatus)=>({enabled:true,status,resumeAction:'corrections' as const,rounds:[round],...(plannerStatus?{correctionPlanner:{roundId:round.roundId,status:plannerStatus}}:{})});
 
 describe('QA resume eligibility',()=>{
@@ -15,6 +15,10 @@ describe('QA resume eligibility',()=>{
   it.each(['interrupted','completed'] as const)('allows the saved findings after a terminal planner outcome (%s)',(plannerStatus:PlannerStatus)=>{
     expect(qualityLoopResumeAction(loop('paused',plannerStatus))).toBe('corrections');
     expect(qualityLoopResumeAction(loop('paused_after_restart',plannerStatus))).toBe('corrections');
+  });
+  it.each(['disabled','awaiting_audit','auditing','awaiting_corrections','correcting','complete','user_accepted','needs_attention','paused','paused_after_restart','cancelled'] as const)('never exposes a resume action while a planner dispatch is unknown in %s state',(status:LoopStatus)=>{
+    expect(qualityLoopResumeAction(loop(status,'dispatch_unknown'))).toBeUndefined();
+    expect(qualityLoopResumeAction(loop(status,'active'))).toBeUndefined();
   });
   it('blocks every QA resume action while a correction planner may still be running',()=>{
     expect(qualityLoopResumeAction({...loop('needs_attention','dispatch_unknown'),resumeAction:'audit'})).toBeUndefined();
