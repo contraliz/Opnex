@@ -49,10 +49,11 @@ function safeSegment(value: string, label: string): string {
   return value;
 }
 
-export function recruitmentWorkspaceRoot(stateRoot: string, taskId: string, passId: string): string {
+export function recruitmentWorkspaceRoot(stateRoot: string, taskId: string, passId: string, teamId?:string): string {
   const task = safeSegment(taskId, 'Task ID').replaceAll('-', '');
   const pass = safeSegment(passId, 'Pass ID').replaceAll('-', '');
-  const key = createHash('sha256').update(`${task}\0${pass}`).digest('hex').slice(0, 32);
+  const team = teamId?safeSegment(teamId,'Team ID').replaceAll('-',''):'';
+  const key = createHash('sha256').update(`${task}\0${pass}${team?`\0${team}`:''}`).digest('hex').slice(0, 32);
   return path.join(stateRoot, 'rw', key);
 }
 
@@ -231,6 +232,30 @@ export async function prepareRecruitmentWorktrees(options: {
     integration: { branch: integrationBranch, worktreeRoot: path.join(taskRoot, 'integration') },
     workers: created,
   };
+}
+
+export async function mergeRecruitmentWorkerDependencies(options:{canonicalRoot:string;taskRoot:string;workerId:string;branch:string;worktreeRoot:string;dependencies:Array<{workerId:string;branch:string;worktreeRoot:string;headCommit:string}>}):Promise<string[]>{
+  const {projectRoot}=await validateRecruitmentProject(options.canonicalRoot,'HEAD');
+  const taskRoot=await realpath(options.taskRoot).catch(error=>{throw new RecruitmentGitError('Task-owned recruitment worktree parent is missing or inaccessible.',{cause:error});});
+  const manifest=await readTaskManifest(projectRoot,taskRoot);
+  const targetId=safeSegment(options.workerId,'Worker ID'),targetBranch=validateRecruitmentBranch(options.branch),targetPath=path.join(taskRoot,`worker-${targetId}`);
+  if(path.resolve(options.worktreeRoot).toLowerCase()!==targetPath.toLowerCase())throw new RecruitmentGitError('Worker dependency target does not match its task-owned worktree location.');
+  const recordedTarget=manifest.workers.find(worker=>worker.workerId===targetId);
+  if(!recordedTarget||recordedTarget.branch!==targetBranch||path.resolve(recordedTarget.worktreeRoot).toLowerCase()!==targetPath.toLowerCase())throw new RecruitmentGitError('Worker dependency target does not match the task ownership manifest.');
+  const ownedTarget=await validateOwnedLocation(projectRoot,taskRoot,targetPath,targetBranch);
+  const merged:string[]=[];const seen=new Set<string>();
+  for(const dependency of options.dependencies){
+    const workerId=safeSegment(dependency.workerId,'Dependency worker ID'),branch=validateRecruitmentBranch(dependency.branch),worktreeRoot=path.join(taskRoot,`worker-${workerId}`);
+    if(workerId===targetId||seen.has(workerId))throw new RecruitmentGitError('Worker dependencies must be unique and cannot include the target worker.');
+    seen.add(workerId);
+    const recorded=manifest.workers.find(worker=>worker.workerId===workerId);
+    if(!recorded||recorded.branch!==branch||path.resolve(recorded.worktreeRoot).toLowerCase()!==path.resolve(dependency.worktreeRoot).toLowerCase())throw new RecruitmentGitError(`Dependency worker ${workerId} does not match the task ownership manifest.`);
+    if(!/^[0-9a-f]{40,64}$/i.test(dependency.headCommit))throw new RecruitmentGitError(`Dependency worker ${workerId} must provide a full commit SHA.`);
+    const ownedDependency=await validateOwnedLocation(projectRoot,taskRoot,worktreeRoot,branch),observedHead=await commitAt(ownedDependency);
+    if(observedHead.toLowerCase()!==dependency.headCommit.toLowerCase())throw new RecruitmentGitError(`Dependency worker ${workerId} HEAD changed; refusing to expose an unconfirmed commit.`);
+    try{await git(ownedTarget,['merge','--no-ff','--no-edit',observedHead]);merged.push(observedHead);}catch(error){const files=await git(ownedTarget,['diff','--name-only','--diff-filter=U']).then(result=>result.stdout.split(/\r?\n/).filter(Boolean)).catch(()=>[]);throw new RecruitmentGitError(`Could not prepare dependent worker ${targetId} from prerequisite ${workerId}${files.length?`: merge conflicts in ${files.join(', ')}`:''}. The worktree is preserved for inspection.`,{cause:error});}
+  }
+  return merged;
 }
 
 export async function mergeRecruitmentCommits(options: {

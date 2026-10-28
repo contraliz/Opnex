@@ -189,6 +189,7 @@ describe('AgentMem receipt boundary',()=>{
     const saved=await adapter.recordReceipt('pseudoharness','task-paged','lease-paged',{...receipt,review_outcome:'accept'});
     expect(saved.status).toBe('done');
     expect(call.mock.calls.filter(([name])=>name==='task_context').map(([,args])=>args.requirement_offset)).toEqual([0,1]);
+    expect(call.mock.calls.filter(([name])=>name==='task_context').every(([,args])=>args.max_chars===100000)).toBe(true);
     expect(call).toHaveBeenCalledTimes(3);
     expect(serviceTask).toEqual({status:'done',owner:'',lease_until:0});
   });

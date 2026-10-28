@@ -26,4 +26,11 @@ describe('kernel-owned state cursor and shutdown recovery',()=>{
     expect(intake.phase).toBe('paused_after_restart');
     expect(escalated.phase).toBe('escalated');
   });
+  it('persists an interrupted read-only QA audit as resumable without inferring findings',()=>{
+    const at='2026-10-27T12:30:00.000Z';const round={roundId:'qa-round-1',index:1,status:'auditing',createdAt:at,startedAt:at,threadId:'terra-thread',turnId:'terra-turn',model:'gpt-6.1-terra',requestedEffort:'high',workspaceRoot:'D:/workspace/.pseudoharness/integration',integrationBranch:'recruitment/smoke/integration',integrationHead:'abc123',findings:[]} as const;
+    const pass:any={id:'pass-qa',index:1,createdAt:at,userInput:'Run a bounded QA task',userInputs:['Run a bounded QA task'],userMessageIds:['user-qa'],phase:'reviewing',correctionCount:0,processedTurns:[],qualityLoop:{enabled:true,status:'auditing',rounds:[round],maxRounds:5}};
+    const task:Task={id:'task-qa',title:'QA smoke',phase:'reviewing',createdAt:at,updatedAt:at,userRoot:'D:/workspace',agentmemProjectId:'',userMessages:['Run a bounded QA task'],messages:[{id:'user-qa',role:'user',text:'Run a bounded QA task',createdAt:at}],passes:[pass],currentPassId:'pass-qa',activeRole:'orchestrator',activeTurnId:'terra-turn',correctionCount:0,processedTurns:[]};
+    const state:State={version:3,revision:1,settings:{projectRoot:'D:/workspace',agentmemProjectId:'',orchestratorModel:'gpt-6-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[task],activeTaskId:task.id,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']};
+    expect(pauseActiveTasksForKernelShutdown(state,at)).toBe(1);expect(pass.qualityLoop).toMatchObject({enabled:true,status:'paused_after_restart',resumeAction:'audit',rounds:[{roundId:'qa-round-1',status:'paused_after_restart',findings:[],error:expect.stringContaining('no saved result was inferred')}]});expect(task.phase).toBe('paused_after_restart');expect(task.activeTurnId).toBeUndefined();
+  });
 });
