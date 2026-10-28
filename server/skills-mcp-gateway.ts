@@ -9,7 +9,7 @@ import { stateDirectory } from './paths.js';
 const taskId=process.env.PSEUDOHARNESS_SKILLS_TASK_ID||'';
 const role=process.env.PSEUDOHARNESS_SKILLS_ROLE||'';
 async function currentPassId(){try{const state=JSON.parse(await readFile(path.join(stateDirectory(),'state.json'),'utf8'));const task=state.tasks?.find((item:any)=>item.id===taskId);return typeof task?.currentPassId==='string'?task.currentPassId:'';}catch{return '';}}
-const server=new Server({name:'pseudoharness-skills',version:'1.0.0'},{capabilities:{tools:{listChanged:false}}});
+const server=new Server({name:'pseudoharness_skills',version:'1.0.0'},{capabilities:{tools:{listChanged:false}}});
 server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[
   {name:'skills_list',description:'List saved application skills by name, with a short description and immutable revision. Bodies are not included.',inputSchema:{type:'object',properties:{query:{type:'string',maxLength:200}},additionalProperties:false}},
   {name:'skills_search',description:'Search saved application skill names and descriptions. Returns concise matches and immutable revisions, without skill instructions.',inputSchema:{type:'object',properties:{query:{type:'string',minLength:1,maxLength:200},limit:{type:'integer',minimum:1,maximum:20}},required:['query'],additionalProperties:false}},

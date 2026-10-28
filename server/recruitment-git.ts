@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { access, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -46,6 +47,37 @@ function safeSegment(value: string, label: string): string {
     throw new RecruitmentGitError(`${label} must be a simple 1-64 character identifier using letters, numbers, dot, underscore, or hyphen.`);
   }
   return value;
+}
+
+export function recruitmentWorkspaceRoot(stateRoot: string, taskId: string, passId: string): string {
+  const task = safeSegment(taskId, 'Task ID').replaceAll('-', '');
+  const pass = safeSegment(passId, 'Pass ID').replaceAll('-', '');
+  const key = createHash('sha256').update(`${task}\0${pass}`).digest('hex').slice(0, 32);
+  return path.join(stateRoot, 'rw', key);
+}
+
+export async function recruitmentGitWritableRoots(canonicalRoot: string, worktreeRoot: string, branch: string): Promise<string[]> {
+  const { projectRoot } = await validateRecruitmentProject(canonicalRoot, 'HEAD');
+  const branchParts = validateRecruitmentBranch(branch).split('/');
+  if (branchParts.length !== 4 || branchParts[0] !== 'recruitment') {
+    throw new RecruitmentGitError('Worker branches must use the task and worker namespace required for scoped Git writes.');
+  }
+  const worktree = await canonicalDirectory(worktreeRoot, 'Worker worktree');
+  const topLevel = await realpath((await git(worktree, ['rev-parse', '--show-toplevel'])).stdout);
+  if (topLevel.toLowerCase() !== worktree.toLowerCase()) throw new RecruitmentGitError('Worker write roots require the exact worktree root.');
+  const commonDirectory = await realpath((await git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout);
+  const canonicalCommonDirectory = await realpath((await git(projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout);
+  if (commonDirectory.toLowerCase() !== canonicalCommonDirectory.toLowerCase()) throw new RecruitmentGitError('Worker worktree belongs to a different Git repository.');
+  const adminDirectory = await realpath((await git(worktree, ['rev-parse', '--path-format=absolute', '--git-dir'])).stdout);
+  const adminParent = path.join(commonDirectory, 'worktrees');
+  if (!isWithin(adminParent, adminDirectory)) throw new RecruitmentGitError('Worker Git metadata is not isolated under this repository’s worktree administration directory.');
+  const refNamespace = path.join(commonDirectory, 'refs', 'heads', ...branchParts.slice(0, 3));
+  const logNamespace = path.join(commonDirectory, 'logs', 'refs', 'heads', ...branchParts.slice(0, 3));
+  for (const root of [refNamespace, logNamespace]) {
+    const resolved = path.resolve(root);
+    if (!isWithin(commonDirectory, resolved)) throw new RecruitmentGitError('Worker Git ref write root escaped the shared repository metadata directory.');
+  }
+  return [worktree, adminDirectory, refNamespace, logNamespace];
 }
 
 export function validateRecruitmentBranch(branch: string): string {

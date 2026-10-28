@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { recruitmentWorkersSchema } from '../server/contracts.js';
-import { rebaseRecruitmentAssignment } from '../server/recruitment-scope.js';
+import { integrationReadScope, rebaseRecruitmentAssignment } from '../server/recruitment-scope.js';
 import {
   cancelRecruitmentTeamState,
   claimRecruitmentCompletion,
@@ -89,6 +89,14 @@ describe('recruited worker team contracts and recovery', () => {
     expect(local.write_scope).toEqual([path.join(worktree, 'src')]);
     expect(scoped.read_scope[0]).toBe(path.join(canonical, 'src'));
     expect(() => rebaseRecruitmentAssignment({ ...scoped, read_scope: [path.resolve('D:/other-project/private')] }, canonical, worktree)).toThrow(/escapes/i);
+  });
+
+  it('gives integration read access to validated worker output scopes without widening individual workers', () => {
+    const alpha = { ...assignment, read_scope: ['D:/project/README.md'], write_scope: ['D:/project/qa-artifacts/alpha'] };
+    const beta = { ...assignment, read_scope: ['D:/project/README.md'], write_scope: ['D:/project/qa-artifacts/beta'] };
+    expect(integrationReadScope([alpha, beta])).toEqual(['D:/project/README.md', 'D:/project/qa-artifacts/alpha', 'D:/project/qa-artifacts/beta']);
+    expect(alpha.read_scope).toEqual(['D:/project/README.md']);
+    expect(beta.read_scope).toEqual(['D:/project/README.md']);
   });
 
   it('claims integration once and only after every worker is terminal', () => {
