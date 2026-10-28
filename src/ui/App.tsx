@@ -14,6 +14,7 @@ import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitP
 import { formatBrowserAnnotation } from './browser-annotation';
 import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
 import type { AppState, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, LiveActivity, Project, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
+import { qualityCorrectionPlannerInFlight, qualityLoopResumeAction } from '../../server/quality-loop-resume.js';
 const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
 
 const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
@@ -1125,14 +1126,16 @@ function QualityLoopPanel({state,onAction}:{state:NonNullable<TaskPass['qualityL
   const labels:Record<string,string>={awaiting_audit:'Waiting for QA audit',auditing:'GPT-6.1 Terra is auditing',awaiting_corrections:'QA findings need correction',correcting:'Workers are correcting QA findings',complete:'QA audit found no actionable issues',user_accepted:'Known QA findings accepted by user',needs_attention:'QA loop needs attention',paused:'QA loop paused',paused_after_restart:'QA paused when the kernel restarted',cancelled:'QA loop cancelled',disabled:'QA loop off'};
   const latest=state.rounds[state.rounds.length-1];
   const findings=latest?.findings||[];
-  const canAccept=!!onAction&&findings.length>0&&['awaiting_corrections','needs_attention'].includes(state.status);
+  const canAccept=!!onAction&&findings.length>0&&['awaiting_corrections','needs_attention'].includes(state.status)&&!qualityCorrectionPlannerInFlight(state.correctionPlanner);
   const canPause=!!onAction&&['auditing','awaiting_corrections'].includes(state.status);
-  const canResume=!!onAction&&['paused','paused_after_restart'].includes(state.status);
-  const canRetry=!!onAction&&state.status==='needs_attention'&&state.resumeAction==='audit';
+  const resumeAction=qualityLoopResumeAction(state);
+  const canResume=!!onAction&&['paused','paused_after_restart'].includes(state.status)&&resumeAction!==undefined;
+  const canRetry=!!onAction&&state.status==='needs_attention'&&resumeAction==='audit';
   return <section className={`quality-loop-panel ${state.status}`} aria-label="Independent QA loop" data-qa-status={state.status}>
     <header><Sparkles size={15}/><strong>Independent QA loop</strong><span className={`quality-loop-status ${state.status}`}>{labels[state.status]||state.status}</span></header>
     <p>Each audit uses gpt-6.1-terra with high reasoning. Findings return to the orchestrator for worker corrections; the independent final receipt review remains separate.</p>
     {state.terminalReason&&<div className="quality-loop-note">{state.terminalReason}</div>}
+    {qualityCorrectionPlannerInFlight(state.correctionPlanner)&&<div className="quality-loop-note">The correction planner setup or turn is unresolved. Wait for its outcome before resuming or accepting findings.</div>}
     {state.userAcceptanceNote&&<div className="quality-loop-note">User acceptance: {state.userAcceptanceNote}</div>}
     {!!state.rounds.length&&<ol className="quality-round-list">{state.rounds.map(round=><li key={round.roundId}>
       <div><b>Round {round.index}</b><span>{round.resultStatus==='no_actionable_issues'?'No actionable issues':round.resultStatus==='issues_found'?`${round.findings?.length||0} actionable finding(s)`:round.status}</span></div>

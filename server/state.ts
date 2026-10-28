@@ -8,6 +8,7 @@ import type { DeepSeekHarnessMcpToolCatalog, DeepSeekHarnessRuntimeInfo } from '
 import { stateDirectory } from './paths.js';
 import { assignmentSchema, receiptSchema } from './contracts.js';
 import { normalizeAgentWorkspaceUrl } from './workspace-tools.js';
+import { qualityCorrectionPlannerMayHaveBeenSent, qualityLoopResumeAction, type QACorrectionPlannerDispatch } from './quality-loop-resume.js';
 
 export type TaskPhase = 'intake' | 'routing' | 'direct_running' | 'simple_running' | 'planning' | 'worker_running' | 'escalated' | 'reviewing' | 'accepted' | 'needs_attention' | 'cancelled' | 'paused_after_restart';
 export type WorkflowRole='router'|'direct'|'simple'|'orchestrator'|'worker';
@@ -41,7 +42,7 @@ export type WorkerReceiptBundleRecord={workerId:string;name:string;status:Recrui
 export type RecruitmentTeam={teamId:string;passId:string;createdAt:string;canonicalProjectRoot:string;agentmemProjectId:string;workspaceParent:string;baseRef:string;baseCommit:string;status:RecruitmentStatus;sealed:boolean;workers:RecruitmentWorker[];integration:RecruitmentIntegration;toolCallIds:string[];completionWakeSent:boolean;workerReceiptBundle?:WorkerReceiptBundleRecord[];integrationReceiptProducer?:ReceiptProvenance;combinedReceipt?:Receipt};
 export type QAFinding={findingId:string;fingerprint:string;title:string;severity:'critical'|'high'|'medium'|'low';issue:string;requiredFix:string;evidence:string[];file?:string;line?:number};
 export type QAAuditRound={roundId:string;index:number;status:'starting'|'auditing'|'completed'|'awaiting_corrections'|'correcting'|'interrupted'|'failed'|'paused_after_restart';createdAt:string;startedAt:string;completedAt?:string;threadId?:string;turnId?:string;model:'gpt-6.1-terra';requestedEffort:'high';reportedModel?:string;reportedEffort?:string;workspaceRoot:string;integrationBranch:string;integrationHead:string;summary?:string;resultStatus?:'issues_found'|'no_actionable_issues';findings?:QAFinding[];findingsFingerprint?:string;teamId?:string;error?:string};
-export type QualityLoop={enabled:boolean;status:'disabled'|'awaiting_audit'|'auditing'|'awaiting_corrections'|'correcting'|'complete'|'user_accepted'|'needs_attention'|'paused'|'paused_after_restart'|'cancelled';rounds:QAAuditRound[];maxRounds:number;terminalReason?:string;userAcceptedAt?:string;userAcceptanceNote?:string;resumeAction?:'audit'|'corrections'};
+export type QualityLoop={enabled:boolean;status:'disabled'|'awaiting_audit'|'auditing'|'awaiting_corrections'|'correcting'|'complete'|'user_accepted'|'needs_attention'|'paused'|'paused_after_restart'|'cancelled';rounds:QAAuditRound[];maxRounds:number;terminalReason?:string;userAcceptedAt?:string;userAcceptanceNote?:string;resumeAction?:'audit'|'corrections';correctionPlanner?:QACorrectionPlannerDispatch};
 export const terminalRecruitmentWorkerStatuses:RecruitmentWorkerStatus[]=['complete','failed','blocked','escalated','cancelled'];
 export function sealRecruitmentTeam(team:RecruitmentTeam){if(team.sealed)throw new Error('Recruitment team is already sealed.');if(team.workers.length<1||team.workers.length>9)throw new Error('Recruitment teams must contain between one and nine workers.');team.sealed=true;team.status='running';}
 export function claimRecruitmentIntegration(team:RecruitmentTeam){if(!team.sealed||team.status!=='running'||team.integration.status!=='queued'||!team.workers.every(worker=>terminalRecruitmentWorkerStatuses.includes(worker.status)))return false;team.status='integrating';team.integration.status='preparing';return true;}
@@ -154,7 +155,8 @@ function isRecruitmentTeam(value:unknown){
 }
 function isQAFinding(value:unknown){return isStoredRecord(value)&&['findingId','fingerprint','title','issue','requiredFix'].every(k=>isString(value[k]))&&['critical','high','medium','low'].includes(value.severity)&&strings(value.evidence)&&value.evidence.length>0&&(value.file===undefined||isString(value.file))&&(value.line===undefined||Number.isInteger(value.line)&&value.line>0);}
 function isQAAuditRound(value:unknown){return isStoredRecord(value)&&isString(value.roundId)&&Number.isInteger(value.index)&&value.index>0&&['starting','auditing','completed','awaiting_corrections','correcting','interrupted','failed','paused_after_restart'].includes(value.status)&&isDate(value.createdAt)&&isDate(value.startedAt)&&(value.completedAt===undefined||isDate(value.completedAt))&&value.model==='gpt-6.1-terra'&&value.requestedEffort==='high'&&['threadId','turnId','reportedModel','reportedEffort','summary','findingsFingerprint','teamId','error'].every(k=>isOptionalString(value,k))&&isString(value.workspaceRoot)&&isString(value.integrationBranch)&&isString(value.integrationHead)&&(value.resultStatus===undefined||['issues_found','no_actionable_issues'].includes(value.resultStatus))&&(value.findings===undefined||Array.isArray(value.findings)&&value.findings.every(isQAFinding));}
-function isQualityLoop(value:unknown){return isStoredRecord(value)&&typeof value.enabled==='boolean'&&['disabled','awaiting_audit','auditing','awaiting_corrections','correcting','complete','user_accepted','needs_attention','paused','paused_after_restart','cancelled'].includes(value.status)&&Number.isInteger(value.maxRounds)&&value.maxRounds>=1&&value.maxRounds<=9&&Array.isArray(value.rounds)&&value.rounds.length<=value.maxRounds&&value.rounds.every(isQAAuditRound)&&['terminalReason','userAcceptanceNote'].every(k=>isOptionalString(value,k))&&(value.userAcceptedAt===undefined||isDate(value.userAcceptedAt))&&(value.resumeAction===undefined||['audit','corrections'].includes(value.resumeAction));}
+function isQACorrectionPlannerDispatch(value:unknown){return isStoredRecord(value)&&isString(value.roundId)&&['preflight','dispatch_unknown','active','interrupted','completed'].includes(value.status)&&['threadId','turnId'].every(k=>isOptionalString(value,k));}
+function isQualityLoop(value:unknown){return isStoredRecord(value)&&typeof value.enabled==='boolean'&&['disabled','awaiting_audit','auditing','awaiting_corrections','correcting','complete','user_accepted','needs_attention','paused','paused_after_restart','cancelled'].includes(value.status)&&Number.isInteger(value.maxRounds)&&value.maxRounds>=1&&value.maxRounds<=9&&Array.isArray(value.rounds)&&value.rounds.length<=value.maxRounds&&value.rounds.every(isQAAuditRound)&&['terminalReason','userAcceptanceNote'].every(k=>isOptionalString(value,k))&&(value.userAcceptedAt===undefined||isDate(value.userAcceptedAt))&&(value.resumeAction===undefined||['audit','corrections'].includes(value.resumeAction))&&(value.correctionPlanner===undefined||isQACorrectionPlannerDispatch(value.correctionPlanner));}
 function hasValidNestedArrays(value:Record<string,any>){
   const arrays=(fields:string[],check:(row:unknown)=>boolean)=>fields.every(field=>value[field]===undefined||Array.isArray(value[field])&&value[field].every(check));
   if(!arrays(['reasoningSummaries'],isSummary)||!arrays(['reasoningTurns'],isReasoningTurn)||!arrays(['liveActivity'],isLiveActivity))return false;
@@ -243,13 +245,19 @@ async function loadStateOnce(): Promise<State> {
   loaded = true;
   return structuredClone(current);
 }
-function recoverQualityLoopAfterRestart(pass:TaskPass,at:string){
+function recoverQualityLoopAfterRestart(pass:TaskPass,at:string,possiblyActiveCorrectionPlanner?:{threadId?:string;turnId?:string}){
   const loop=pass.qualityLoop;if(!loop)return;
   const running=loop.rounds.find(round=>round.status==='starting'||round.status==='auditing');
   if(running){running.status='paused_after_restart';running.completedAt=at;running.error='The kernel restarted before this QA audit returned. Resume starts a new independent audit; no saved result was inferred.';loop.resumeAction='audit';loop.status='paused_after_restart';loop.terminalReason=running.error;return;}
   const latest=loop.rounds.at(-1);
-  if(loop.status==='awaiting_corrections'&&latest?.status==='awaiting_corrections'&&latest.findings?.length){
-    loop.status='paused_after_restart';loop.resumeAction='corrections';loop.terminalReason='The kernel restarted after actionable QA findings were saved and before correction planning began. Resume will reuse the saved findings.';return;
+  if(['awaiting_corrections','paused','paused_after_restart','needs_attention'].includes(loop.status)&&latest?.status==='awaiting_corrections'&&latest.findings?.length){
+    const legacyPausedWithoutDispatch=!loop.correctionPlanner&&loop.resumeAction==='corrections'&&['paused','paused_after_restart'].includes(loop.status);
+    if((possiblyActiveCorrectionPlanner||legacyPausedWithoutDispatch)&&!loop.correctionPlanner)loop.correctionPlanner={roundId:latest.roundId,status:'dispatch_unknown',threadId:possiblyActiveCorrectionPlanner?.threadId||pass.orchestratorThreadId,...(possiblyActiveCorrectionPlanner?.turnId?{turnId:possiblyActiveCorrectionPlanner.turnId}:{})};
+    if(loop.correctionPlanner?.status==='preflight')loop.correctionPlanner=undefined;
+    const ambiguous=qualityCorrectionPlannerMayHaveBeenSent(loop.correctionPlanner);
+    loop.status='paused_after_restart';loop.resumeAction='corrections';loop.terminalReason=ambiguous?'The kernel restarted after a QA correction planner turn may have been sent. Resume is unavailable until the exact turn is confirmed stopped; saved findings are preserved.':'The kernel restarted after actionable QA findings were saved and before correction planning began. Resume will reuse the saved findings.';
+    if(qualityLoopResumeAction(loop)!=='corrections'&&!ambiguous)loop.resumeAction=undefined;
+    return;
   }
   if(loop.status==='awaiting_audit'&&pass.recruitmentTeam?.status==='complete'&&pass.recruitmentTeam.integration.status==='complete'){
     loop.status='paused_after_restart';loop.resumeAction='audit';loop.terminalReason='The kernel restarted before the next QA audit began. Resume will audit the saved integration.';return;
@@ -284,7 +292,7 @@ export function upgradeStoredState(value:any):State{
     }
     for(const pass of task.passes){pass.approvalPolicy=savedApprovalPolicy(pass.approvalPolicy??value.settings?.approvalPolicy);if(pass.agentContextVersion!==1)pass.agentContextVersion=0;}
     for(const message of task.messages||[])if(message.role==='user'&&message.submissionKind==='steering'&&message.deliveryStatus==='pending'){message.deliveryStatus='unconfirmed';const pass=task.passes.find(row=>row.id===message.passId);if(pass&&!pass.userMessageIds.includes(message.id)){pass.userInputs.push(message.text);pass.userMessageIds.push(message.id);pass.attachments=[...(pass.attachments||[]),...(message.attachments||[])];}if(!task.userMessages.includes(message.text))task.userMessages.push(message.text);}
-    const current=task.passes.find(pass=>pass.id===task.currentPassId);
+    const current=task.passes.find(pass=>pass.id===task.currentPassId),possiblyActiveCorrectionPlanner=task.activeRole==='orchestrator'&&current?.qualityLoop?.status==='awaiting_corrections'?{threadId:task.orchestratorThreadId,turnId:task.activeTurnId}:undefined;
     const wasActive=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(t.phase),recoveringRestart=wasActive||t.phase==='paused_after_restart';
     if(wasActive){
       task.phase='paused_after_restart';task.activeRole=undefined;task.activeTurnId=undefined;task.approvalRequests=[];
@@ -293,7 +301,7 @@ export function upgradeStoredState(value:any):State{
     if(recoveringRestart){
       for(const turn of task.reasoningTurns||[])if(turn.status==='streaming')turn.status='interrupted';
       const interruptedAt=new Date().toISOString();for(const activity of task.liveActivity||[])if(activity.status==='running'){activity.status='interrupted';activity.updatedAt=interruptedAt;}
-      for(const pass of task.passes||[]){for(const context of pass.agentmemAudit?.contexts||[])if(context.status==='running'){context.status='interrupted';context.updatedAt=interruptedAt;}for(const call of pass.agentmemAudit?.calls||[])if(call.status==='running'){call.status='interrupted';call.updatedAt=interruptedAt;}for(const team of recruitmentTeamsForPass(pass))pauseRecruitmentTeamAfterRestart(team);if(pass.id===task.currentPassId)recoverQualityLoopAfterRestart(pass,interruptedAt);}
+      for(const pass of task.passes||[]){for(const context of pass.agentmemAudit?.contexts||[])if(context.status==='running'){context.status='interrupted';context.updatedAt=interruptedAt;}for(const call of pass.agentmemAudit?.calls||[])if(call.status==='running'){call.status='interrupted';call.updatedAt=interruptedAt;}for(const team of recruitmentTeamsForPass(pass))pauseRecruitmentTeamAfterRestart(team);if(pass.id===task.currentPassId)recoverQualityLoopAfterRestart(pass,interruptedAt,possiblyActiveCorrectionPlanner);}
     }
     delete (task as any).reasoningRawContent;
     for(const pass of task.passes||[])delete (pass as any).reasoningRawContent;
@@ -309,7 +317,7 @@ export function pauseActiveTasksForKernelShutdown(state:State,at=new Date().toIS
   for(const task of state.tasks){
     const active=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(task.phase)||!!task.activeRole||!!task.activeTurnId||!!task.approvalRequests?.length;
     if(!active){if(task.phase==='paused_after_restart'){const pass=currentPass(task);if(pass)recoverQualityLoopAfterRestart(pass,at);syncCurrentPass(task);}continue;}
-    const pass=currentPass(task);
+    const pass=currentPass(task),possiblyActiveCorrectionPlanner=task.activeRole==='orchestrator'&&pass?.qualityLoop?.status==='awaiting_corrections'?{threadId:task.orchestratorThreadId,turnId:task.activeTurnId}:undefined;
     if(pass&&task.approvalRequests?.length)pass.interruptedApprovals=[...(pass.interruptedApprovals||[]),...structuredClone(task.approvalRequests)];
     task.phase='paused_after_restart';task.activeRole=undefined;task.activeTurnId=undefined;task.approvalRequests=[];
     task.error='The kernel was explicitly stopped before this pass completed. Saved messages, receipts, and audit records remain available; send a follow-up to continue.';
@@ -321,7 +329,7 @@ export function pauseActiveTasksForKernelShutdown(state:State,at=new Date().toIS
       for(const context of row.agentmemAudit?.contexts||[])if(context.status==='running'){context.status='interrupted';context.updatedAt=at;}
       for(const call of row.agentmemAudit?.calls||[])if(call.status==='running'){call.status='interrupted';call.updatedAt=at;}
       for(const team of recruitmentTeamsForPass(row))pauseRecruitmentTeamAfterRestart(team);
-      if(row.id===task.currentPassId)recoverQualityLoopAfterRestart(row,at);
+      if(row.id===task.currentPassId)recoverQualityLoopAfterRestart(row,at,possiblyActiveCorrectionPlanner);
     }
     syncCurrentPass(task);paused++;
   }
