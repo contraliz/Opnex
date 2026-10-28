@@ -10,7 +10,7 @@ describe('Codex approval and turn configuration',()=>{
   it('omits absent MCP servers instead of emitting malformed disabled entries',()=>{
     for(const role of ['router','direct','simple','orchestrator','worker'] as const){const config=appAgentConfig('/repo',role);expect(config).not.toHaveProperty('mcp_servers');}
     const skills={command:'node',args:['gateway.js'],enabled:true,enabled_tools:['skills_list']};
-    const worker=appAgentConfig('/repo','worker',undefined,skills);
+    const worker=appAgentConfig('/repo','worker',undefined,skills) as any;
     expect(worker.mcp_servers).toEqual({pseudoharness_skills:skills});
     expect(worker.mcp_servers).not.toHaveProperty('agentmem');
     const router=appAgentConfig('/repo','router',undefined,skills);expect(router).not.toHaveProperty('mcp_servers');
@@ -64,6 +64,25 @@ describe('Codex approval and turn configuration',()=>{
     expect(()=>normalizeAgentWorkspaceUrl('https://user:password@example.com')).toThrow('credentials');
     expect(workspaceToolRequiresDesktop('open_browser')).toBe(true);expect(workspaceToolRequiresDesktop('inspect_github')).toBe(false);
   });
+  it('gives QA a distinct read-only thread config with external MCP, plugins, apps, and dynamic tools disabled',()=>{
+    const qa=makeThreadParams({role:'qa',root:'/tmp/project',model:'gpt-6.1-terra',approvalPolicy:'full-access',dynamicTools:workerWorkspaceTool,agentmemMcpConfig:{command:'agentmem',env:{TOKEN:'private'}},skillsMcpConfig:{command:'skills'},disabledMcpServerNames:['github','linear']});
+    expect(qa).toMatchObject({approvalPolicy:'never',sandbox:'read-only',dynamicTools:[],config:{'mcp_servers.github.enabled':false,'mcp_servers.linear.enabled':false,features:{apps:false,plugins:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false},web_search:'disabled'}});
+    expect(qa.config).not.toHaveProperty('mcp_servers');expect(qa.config).not.toHaveProperty('agentmem');expect(qa.config).not.toHaveProperty('pseudoharness_skills');expect(qa.developerInstructions).not.toContain('PROJECT KNOWLEDGE AND REPOSITORY INDEX USE');expect(()=>appAgentConfig('/tmp/project','qa',undefined,undefined,['server.with-dot'])).toThrow('cannot safely disable');
+    const turn=makeTurnParams({threadId:'qa-thread',input:'Audit read only',role:'qa',model:'gpt-6.1-terra',effort:'high',writeRoots:['/tmp/project'],approvalPolicy:'full-access',schema:null});
+    expect(turn).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'readOnly',networkAccess:false}});
+    const resumed=makeThreadResumeParams('qa-thread','full-access','qa','/tmp/project',undefined,{command:'agentmem'},undefined,workerWorkspaceTool,['github','linear']);
+    expect(resumed).toMatchObject({sandbox:'read-only',dynamicTools:[],config:qa.config,developerInstructions:qa.developerInstructions});
+  });
+  it('refreshes configured MCP names and disables them for QA start and resume without copying credentials',async()=>{
+    const client=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
+    const first={config:{mcp_servers:{github:{command:'github',env:{TOKEN:'SENSITIVE_CONFIG_VALUE_42'}},linear:{url:'https://linear.invalid'}},plugins:{fixture:{enabled:true}}},layers:[{config:{mcp_servers:{project_private:{command:'hidden-project-server',env:{TOKEN:'SENSITIVE_CONFIG_VALUE_42'}}}}}]};const second={config:{mcp_servers:{github:{command:'github'},private_server:{command:'private'}},plugins:{fixture:{enabled:true}}},layers:[{config:{mcp_servers:{workspace_private:{command:'hidden-workspace-server'}}}}]};
+    const request=vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'qa-thread'}}).mockResolvedValueOnce(second).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'qa-thread'}});(client as any).request=request;
+    await expect(client.startThread('qa','/repo','gpt-6.1-terra','high','on-request')).resolves.toBe('qa-thread');
+    const start=request.mock.calls[1][1];expect(start).toMatchObject({model:'gpt-6.1-terra',sandbox:'read-only',dynamicTools:[],config:{'mcp_servers.github.enabled':false,'mcp_servers.linear.enabled':false,'mcp_servers.project_private.enabled':false,features:{apps:false,plugins:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false},web_search:'disabled'}});expect(start.config).not.toHaveProperty('mcp_servers');expect(JSON.stringify(start.config)).not.toContain('SENSITIVE_CONFIG_VALUE_42');
+    await expect(client.resumeThread('qa-thread','on-request','qa','/repo')).resolves.toBe('qa-thread');
+    const resume=request.mock.calls[3][1];expect(resume.config).toMatchObject({'mcp_servers.github.enabled':false,'mcp_servers.private_server.enabled':false,'mcp_servers.workspace_private.enabled':false});expect(resume.config).not.toHaveProperty('mcp_servers');const configReads=request.mock.calls.filter(([method]:any[])=>method==='config/read');expect(configReads).toHaveLength(2);expect(configReads.map(([,params]:any[])=>params)).toEqual([{cwd:'/repo',includeLayers:true},{cwd:'/repo',includeLayers:true}]);client.close();
+    const incomplete=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(incomplete as any).ready=true;(incomplete as any).child={killed:false,stdin:{write:()=>{}}};const missingLayers=(incomplete as any).request=vi.fn().mockResolvedValue({config:{mcp_servers:{github:{}},plugins:{fixture:{enabled:true}}}});await expect(incomplete.startThread('qa','/repo','gpt-6.1-terra','high','on-request')).rejects.toThrow('could not report all configuration layers');expect(missingLayers).toHaveBeenCalledTimes(1);incomplete.close();
+  });
   it('isolates the router with a classification-only thread and assigns the Fast tier only to its low-effort turn',()=>{
     const router=makeThreadParams({role:'router',root:'/tmp/project',model:'gpt-6-luna',effort:'low',approvalPolicy:'on-request'});
     expect((router as any).dynamicTools).toEqual([]);
@@ -79,7 +98,7 @@ describe('Codex approval and turn configuration',()=>{
     expect(simple).not.toHaveProperty('serviceTierForTurn');expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:false});
     const toolFirst=makeTurnParams({threadId:'setup',input:'Use the setup tools first',role:'orchestrator',model:'gpt-6.1-sol',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:undefined});
     expect(toolFirst).not.toHaveProperty('outputSchema');
-    for(const role of ['router','direct','simple','orchestrator','worker'] as const){const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'});expect(thread.config).toMatchObject({projects:{'/tmp/project':{trust_level:'trusted'}}});expect(thread.baseInstructions).toBe(appAgentBaseInstructions('/tmp/project'));expect(thread.baseInstructions).toContain(`Host platform: ${process.platform}`);if(role==='router')expect(thread.config).toHaveProperty('project_doc_max_bytes',0);else{expect(thread.config).not.toHaveProperty('project_doc_fallback_filenames');expect(thread.config).not.toHaveProperty('project_root_markers');}}
+    for(const role of ['router','direct','simple','orchestrator','worker','qa'] as const){const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'});expect(thread.config).toMatchObject({projects:{'/tmp/project':{trust_level:'trusted'}}});expect(thread.baseInstructions).toBe(appAgentBaseInstructions('/tmp/project'));expect(thread.baseInstructions).toContain(`Host platform: ${process.platform}`);if(role==='router')expect(thread.config).toHaveProperty('project_doc_max_bytes',0);else{expect(thread.config).not.toHaveProperty('project_doc_fallback_filenames');expect(thread.config).not.toHaveProperty('project_root_markers');}}
   });
   it('serializes attachment image data through the app-server user-input adapter',()=>{
     const image={mediaType:'image/png' as const,data:'iVBORw0KGgo='};

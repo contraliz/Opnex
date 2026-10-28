@@ -74,7 +74,12 @@ const deepSeekRecruitmentStageLaunches=new Set<DeepSeekRecruitmentStageLaunch>()
 const recruitmentSchedulerClaims=new Set<string>();
 const recruitmentWorkerLaunchClaims=new Set<string>();
 const qualityAuditClaims=new Map<string,string>();
+const qualityAuditClaimSettlements=new Map<string,Promise<void>>();
 const qualityCorrectionClaims=new Set<string>();
+const qualityAuditInterrupts=new Set<string>();
+type PendingQualityAuditStart={taskId:string;passId:string;roundId:string;turnId?:string};
+const pendingQualityAuditStarts=new Map<string,PendingQualityAuditStart[]>();
+const staleOrchestratorTurns=new Map<string,boolean>();
 let orchestratorShuttingDown=false;
 let deepSeekSdkLaunch:DeepSeekHarnessSdkLaunch|undefined;
 // Max-effort audit turns can make many sequential MCP calls. Keep the wait
@@ -117,6 +122,22 @@ function qualityAuditStartupIsCurrent(task:Task|undefined,passId:string,teamId:s
   if(qualityAuditClaims.get(claim)!==token||!task||task.currentPassId!==passId||task.phase==='cancelled')return false;
   const pass=task.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam,loop=pass?.qualityLoop,round=loop?.rounds.find(row=>row.roundId===roundId);
   return !!team&&team.teamId===teamId&&team.combinedReceipt?.status==='complete'&&!!loop?.enabled&&loop.status==='auditing'&&!!round&&round.teamId===teamId&&['starting','auditing'].includes(round.status);
+}
+type QACorrectionLaunch={passId:string;roundId:string;integrationHead:string;findingsFingerprint?:string;expectedStatus:'awaiting_corrections'};
+function qualityCorrectionLaunchIsCurrent(task:Task|undefined,expected:QACorrectionLaunch){
+  if(!task||task.currentPassId!==expected.passId||task.phase==='cancelled')return false;
+  const pass=task.passes?.find(row=>row.id===expected.passId),loop=pass?.qualityLoop,round=loop?.rounds.at(-1);
+  if(!pass||!loop?.enabled||!round||round.roundId!==expected.roundId||round.integrationHead.toLowerCase()!==expected.integrationHead.toLowerCase()||round.findingsFingerprint!==expected.findingsFingerprint||!round.findings?.length)return false;
+  return loop.status===expected.expectedStatus&&round.status==='awaiting_corrections'||loop.status==='correcting'&&round.status==='correcting'&&pass.recruitmentTeam?.teamId===round.teamId;
+}
+async function interruptInactiveQualityAuditTurn(taskId:string,passId:string,roundId:string,threadId:string,turnId:string){
+  const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),loop=pass?.qualityLoop,round=loop?.rounds.find(row=>row.roundId===roundId);
+  if(!round||round.threadId!==threadId||round.turnId&&round.turnId!==turnId)return;
+  if(task?.currentPassId===passId&&task.phase!=='cancelled'&&loop?.status==='auditing'&&['starting','auditing'].includes(round.status))return;
+  if(!['starting','auditing','interrupted','failed'].includes(round.status))return;
+  const key=`${taskId}:${passId}:${roundId}:${threadId}:${turnId}`;if(qualityAuditInterrupts.has(key))return;qualityAuditInterrupts.add(key);
+  if(qualityAuditInterrupts.size>256)qualityAuditInterrupts.delete(qualityAuditInterrupts.values().next().value!);
+  try{await agentCodex.interrupt(threadId,turnId);}catch{qualityAuditInterrupts.delete(key);}
 }
 function appServerForRole(_role:WorkflowRole){return agentCodex;}
 function routedPassIsCurrent(taskId:string,passId:string){const task=getTask(taskId);return !!task&&task.phase!=='cancelled'&&task.currentPassId===passId;}
@@ -357,32 +378,49 @@ async function startHardRoute(task:Task,reason?:string){
   const detail=reason||escalation?`\n\nROUTE ESCALATION / CONSERVATIVE FALLBACK:\n${reason||escalation?.reason}\nCOMPLETED ACTIONS (preserve; do not repeat):\n${JSON.stringify(escalation?.completedActions||[])}\nEVIDENCE:\n${JSON.stringify(escalation?.evidence||[])}`:'';
   await beginAssignment(task,undefined,`${request}${detail}`);
 }
-async function startOrchestrator(task:Task,payload:string,action:'assignment'|'review'|'agentmem_setup',allowDirectResponse=false) {
+async function interruptStaleOrchestratorTurn(taskId:string,threadId:string,turnId:string){
+  const key=`${threadId}:${turnId}`;
+  if(!staleOrchestratorTurns.has(key)){
+    staleOrchestratorTurns.set(key,false);
+    try{await agentCodex.interrupt(threadId,turnId);staleOrchestratorTurns.set(key,true);}catch{staleOrchestratorTurns.delete(key);}
+  }else if(!staleOrchestratorTurns.get(key))return;
+  await mutate(state=>{const task=state.tasks.find(row=>row.id===taskId);if(!task||task.activeRole!=='orchestrator'||task.activeTurnId!==turnId||roleThreadId(task,'orchestrator')!==threadId)return;task.activeTurnId=undefined;task.activeRole=undefined;task.activeModelId=undefined;task.activeEffort=undefined;});
+}
+async function startOrchestrator(task:Task,payload:string,action:'assignment'|'review'|'agentmem_setup',allowDirectResponse=false,qaCorrectionGuard?:QACorrectionLaunch) {
+  const isExpectedLaunchCurrent=()=>!qaCorrectionGuard||qualityCorrectionLaunchIsCurrent(getTask(task.id),qaCorrectionGuard);if(!isExpectedLaunchCurrent())return;
   const state=getState(); const modelId=state.settings.orchestratorModel; requireModel(modelId,state.settings.orchestratorEffort);
-  await ensureAgentAuth();
-  const pass=currentPass(task);if(pass?.agentContextVersion!==1)throw new Error('This pass predates the current Pseudoharness role configuration. Send a follow-up to start a fresh pass.');
-  const approvalPolicy=currentPass(task)?.approvalPolicy??state.settings.approvalPolicy;
-  const policy=await loadOwnedOrchestrationPolicy();
+  await ensureAgentAuth();if(!isExpectedLaunchCurrent())return;
+  let launchTask=qaCorrectionGuard?getTask(task.id):task;if(!launchTask||!isExpectedLaunchCurrent())return;
+  let pass=currentPass(launchTask);if(pass?.agentContextVersion!==1)throw new Error('This pass predates the current Pseudoharness role configuration. Send a follow-up to start a fresh pass.');
+  const approvalPolicy=pass?.approvalPolicy??state.settings.approvalPolicy;
+  const policy=await loadOwnedOrchestrationPolicy();if(!isExpectedLaunchCurrent())return;
   const input=buildOrchestratorInput(policy,payload);
-  const mcpConfig=pass?await agentMemModelConfig(task,'orchestrator',pass.id):undefined;
-  const skillsConfig=skillLibraryMcpServerConfig({taskId:task.id,role:'orchestrator'});
+  const mcpConfig=pass?await agentMemModelConfig(launchTask,'orchestrator',pass.id):undefined;if(!isExpectedLaunchCurrent())return;
+  if(qaCorrectionGuard){launchTask=getTask(task.id);if(!launchTask)return;pass=currentPass(launchTask);if(!pass)return;}
+  const skillsConfig=skillLibraryMcpServerConfig({taskId:launchTask.id,role:'orchestrator'});
   const recruitmentEnabled=action==='assignment'&&!allowDirectResponse;
-  if(!task.orchestratorThreadId) task.orchestratorThreadId=await agentCodex.startThread('orchestrator',task.userRoot,modelId,state.settings.orchestratorEffort,approvalPolicy,policy,recruitmentEnabled?recruitmentTool:undefined,mcpConfig,skillsConfig);
-  else if(!attachedThreads.has(task.orchestratorThreadId)) await agentCodex.resumeThread(task.orchestratorThreadId,approvalPolicy,'orchestrator',task.userRoot,policy,mcpConfig,skillsConfig,recruitmentEnabled?recruitmentTool:undefined);
-  attachedThreads.add(task.orchestratorThreadId);
-  await verifySkillMcpAvailability(task.orchestratorThreadId);
-  if(pass)await recordAgentMemMcpAvailability(task.id,pass.id,'orchestrator',task.orchestratorThreadId);
-  task.phase=action==='review'?'reviewing':'planning'; task.activeRole='orchestrator'; task.activeModelId=modelId;task.activeEffort=state.settings.orchestratorEffort;task.activeTurnId=undefined; task.error=undefined;task.allowDirectResponse=action==='assignment'&&allowDirectResponse;
-  await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
-  allowanceBaselines.set(task.orchestratorThreadId!,await readAllowanceSnapshot());
+  let orchestratorThreadId=launchTask.orchestratorThreadId;
+  if(!orchestratorThreadId){orchestratorThreadId=await agentCodex.startThread('orchestrator',launchTask.userRoot,modelId,state.settings.orchestratorEffort,approvalPolicy,policy,recruitmentEnabled?recruitmentTool:undefined,mcpConfig,skillsConfig);if(!isExpectedLaunchCurrent())return;}
+  else if(!attachedThreads.has(orchestratorThreadId)){await agentCodex.resumeThread(orchestratorThreadId,approvalPolicy,'orchestrator',launchTask.userRoot,policy,mcpConfig,skillsConfig,recruitmentEnabled?recruitmentTool:undefined);if(!isExpectedLaunchCurrent())return;}
+  if(!isExpectedLaunchCurrent())return;launchTask.orchestratorThreadId=orchestratorThreadId;attachedThreads.add(orchestratorThreadId);
+  await verifySkillMcpAvailability(orchestratorThreadId);if(!isExpectedLaunchCurrent())return;
+  if(pass){await recordAgentMemMcpAvailability(launchTask.id,pass.id,'orchestrator',orchestratorThreadId);if(!isExpectedLaunchCurrent())return;}
+  launchTask.phase=action==='review'?'reviewing':'planning'; launchTask.activeRole='orchestrator'; launchTask.activeModelId=modelId;launchTask.activeEffort=state.settings.orchestratorEffort;launchTask.activeTurnId=undefined; launchTask.error=undefined;launchTask.allowDirectResponse=action==='assignment'&&allowDirectResponse;
+  let stateApplied=false;await mutate(s=>{const current=s.tasks.find(x=>x.id===launchTask.id);if(!current||qaCorrectionGuard&&!qualityCorrectionLaunchIsCurrent(current,qaCorrectionGuard))return;Object.assign(current,launchTask);stateApplied=true;});
+  if(!stateApplied||!isExpectedLaunchCurrent())return;
+  const allowanceStart=await readAllowanceSnapshot();if(!isExpectedLaunchCurrent())return;allowanceBaselines.set(orchestratorThreadId,allowanceStart);
+  if(!isExpectedLaunchCurrent())return;
   const carried=attachmentUserInput(pass?.attachments||[]);const selected=pass?.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (explicitly authorized for this pass; immutable snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';const enrichedInput=`${input}${selected}${carried.text}`;
   const response=action==='review'
-    ? await agentCodex.reviewTurn(task.orchestratorThreadId,enrichedInput,modelId,state.settings.orchestratorEffort,approvalPolicy,carried.images)
-    : await agentCodex.startTurn(task.orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,task.userRoot,[],approvalPolicy,action==='agentmem_setup'||recruitmentEnabled?null:allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,undefined,carried.images);
-  const live=getTask(task.id); if(live&&live.phase==='cancelled')return;
-  const responseTurnId=response.turn?.id||response.turnId;if(responseTurnId){await bindAgentMemAuditTurn(task.id,pass.id,'orchestrator',task.orchestratorThreadId!,responseTurnId);if(action==='agentmem_setup')await mutate(s=>{const current=s.tasks.find(x=>x.id===task.id)?.passes?.find(x=>x.id===pass.id);if(current){current.agentmemSetupMode=current.agentmemSetupMode||'register';current.agentmemSetupTurnId=responseTurnId;}});}
-  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;t.activeTurnId=responseTurnId||undefined; t.activeRole='orchestrator';if(t.activeTurnId)beginReasoningTurn(t,'orchestrator',task.orchestratorThreadId!,t.activeTurnId,modelId,state.settings.orchestratorEffort);});
-  const id=response.turn?.id||response.turnId;if(id) await processDeferred(task.id,id);
+    ? await agentCodex.reviewTurn(orchestratorThreadId,enrichedInput,modelId,state.settings.orchestratorEffort,approvalPolicy,carried.images)
+    : await agentCodex.startTurn(orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,launchTask.userRoot,[],approvalPolicy,action==='agentmem_setup'||recruitmentEnabled?null:allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,undefined,carried.images);
+  const responseTurnId=response.turn?.id||response.turnId;
+  if(qaCorrectionGuard&&!isExpectedLaunchCurrent()){if(responseTurnId)await interruptStaleOrchestratorTurn(task.id,orchestratorThreadId,responseTurnId);return;}
+  const live=getTask(task.id);if(live&&live.phase==='cancelled')return;
+  if(responseTurnId){await bindAgentMemAuditTurn(task.id,pass.id,'orchestrator',orchestratorThreadId,responseTurnId);if(qaCorrectionGuard&&!isExpectedLaunchCurrent()){await interruptStaleOrchestratorTurn(task.id,orchestratorThreadId,responseTurnId);return;}if(action==='agentmem_setup'){await mutate(s=>{const current=s.tasks.find(x=>x.id===task.id)?.passes?.find(x=>x.id===pass.id);if(current){current.agentmemSetupMode=current.agentmemSetupMode||'register';current.agentmemSetupTurnId=responseTurnId;}});if(qaCorrectionGuard&&!isExpectedLaunchCurrent()){await interruptStaleOrchestratorTurn(task.id,orchestratorThreadId,responseTurnId);return;}}}
+  let turnStateApplied=false;await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||qaCorrectionGuard&&!qualityCorrectionLaunchIsCurrent(t,qaCorrectionGuard))return;t.activeTurnId=responseTurnId||undefined;t.activeRole='orchestrator';if(t.activeTurnId)beginReasoningTurn(t,'orchestrator',orchestratorThreadId,t.activeTurnId,modelId,state.settings.orchestratorEffort);turnStateApplied=true;});
+  if(!turnStateApplied||!isExpectedLaunchCurrent()){if(qaCorrectionGuard&&responseTurnId)await interruptStaleOrchestratorTurn(task.id,orchestratorThreadId,responseTurnId);return;}
+  if(responseTurnId){await processDeferred(task.id,responseTurnId);if(qaCorrectionGuard&&!isExpectedLaunchCurrent())await interruptStaleOrchestratorTurn(task.id,orchestratorThreadId,responseTurnId);}
 }
 async function beginAssignment(task:Task,context:any,userInput:string){
   const root=task.userRoot;
@@ -922,7 +960,7 @@ function qaFindingsFingerprint(findings:QAFinding[]){
 }
 async function startQualityAudit(taskId:string,passId:string){
   const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam,loop=pass?.qualityLoop;if(orchestratorShuttingDown||!task||!pass||!team||!loop?.enabled||team.combinedReceipt?.status!=='complete'||!['awaiting_audit','correcting'].includes(loop.status)||task.phase==='cancelled')return;
-  const claim=`${taskId}:${passId}`;if(qualityAuditClaims.has(claim))return;const token=randomUUID();qualityAuditClaims.set(claim,token);
+  const claim=`${taskId}:${passId}`;if(qualityAuditClaims.has(claim))return;const token=randomUUID();qualityAuditClaims.set(claim,token);let settleClaim!:()=>void;qualityAuditClaimSettlements.set(claim,new Promise<void>(resolve=>{settleClaim=resolve;}));
   const retryRound=loop.resumeAction==='audit'&&loop.rounds.at(-1)?.status==='failed'&&!loop.rounds.at(-1)?.turnId&&!loop.rounds.at(-1)?.resultStatus?loop.rounds.at(-1):undefined;
   let round:QAAuditRound|undefined,turnRequestStarted=false,retryable=true,turnIdForCleanup:string|undefined;
   try{
@@ -946,9 +984,9 @@ async function startQualityAudit(taskId:string,passId:string){
     const policy=await loadOwnedOrchestrationPolicy();if(!current())return;
     let threadId=round.threadId;
     if(threadId){
-      if(!attachedThreads.has(threadId)){await agentCodex.resumeThread(threadId,'on-request','orchestrator',team.integration.worktreeRoot,policy);if(!current())return;attachedThreads.add(threadId);}
+      if(!attachedThreads.has(threadId)){await agentCodex.resumeThread(threadId,'on-request','qa',team.integration.worktreeRoot,policy);if(!current())return;attachedThreads.add(threadId);}
     }else{
-      threadId=await agentCodex.startThread('orchestrator',team.integration.worktreeRoot,QUALITY_AUDITOR_MODEL,'high','on-request',policy);
+      threadId=await agentCodex.startThread('qa',team.integration.worktreeRoot,QUALITY_AUDITOR_MODEL,'high','on-request',policy);
       attachedThreads.add(threadId);
       let active=false;await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),currentPass=owner?.passes?.find(row=>row.id===passId),saved=currentPass?.qualityLoop?.rounds.find(row=>row.roundId===roundId);if(!saved||!currentPass)return;saved.threadId=threadId;active=qualityAuditStartupIsCurrent(owner,passId,team.teamId,roundId,claim,token);});if(!active)return;
     }
@@ -957,11 +995,12 @@ async function startQualityAudit(taskId:string,passId:string){
     const priorRounds=currentPass.qualityLoop?.rounds.filter(row=>row.roundId!==roundId)||[];
     const input=`Independently audit the integrated working tree at ${team.integration.worktreeRoot}, branch ${team.integration.branch}, commit ${head}. You are the QA auditor, gpt-6.1-terra with requested high reasoning; use read-only inspection. Compare actual code and available focused checks with the original user requirements and sealed assignments. Do not modify files, recruit workers, claim tests ran unless you ran them, or infer a clean result from worker receipts. Return the required structured qa_audit object with only actionable, evidence-backed findings that an execution team can fix. A clean audit has status no_actionable_issues and an empty findings array. A finding must cite concrete observed evidence and a required fix. Treat the previous audit rounds below as history; re-check current code rather than copying stale findings.\n\nORIGINAL USER REQUESTS:\n${JSON.stringify(currentPass.userInputs)}\n\nCURRENT SEALED ASSIGNMENT:\n${JSON.stringify(currentTask.assignment)}\n\nAPP-RECORDED WORKER RECEIPT BUNDLE:\n${JSON.stringify(team.workerReceiptBundle)}\n\nINTEGRATOR RECEIPT AND VERIFICATION:\n${JSON.stringify({receipt:team.integration.receipt,producer:team.integrationReceiptProducer,branch:team.integration.branch,headCommit:head})}\n\nPREVIOUS QA ROUNDS:\n${JSON.stringify(priorRounds.map(row=>({index:row.index,integrationHead:row.integrationHead,resultStatus:row.resultStatus,summary:row.summary,findings:row.findings})),null,2)}`;
     turnRequestStarted=true;
-    const response=await agentCodex.reviewTurn(threadId,input,QUALITY_AUDITOR_MODEL,'high','on-request',[],qaAuditJsonSchema);
+    const pendingStart:PendingQualityAuditStart={taskId,passId,roundId};const pending=pendingQualityAuditStarts.get(threadId)||[];pending.push(pendingStart);pendingQualityAuditStarts.set(threadId,pending);
+    let response:any;try{response=await agentCodex.reviewTurn(threadId,input,QUALITY_AUDITOR_MODEL,'high','on-request',[],qaAuditJsonSchema);}finally{const index=pending.indexOf(pendingStart);if(index>=0)pending.splice(index,1);if(!pending.length)pendingQualityAuditStarts.delete(threadId);}
     const turnId=response.turn?.id||response.turnId||getTask(taskId)?.passes?.find(row=>row.id===passId)?.qualityLoop?.rounds.find(row=>row.roundId===roundId)?.turnId;turnIdForCleanup=turnId;
-    let active=false;
-    await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),p=owner?.passes?.find(row=>row.id===passId),saved=p?.qualityLoop?.rounds.find(row=>row.roundId===roundId);if(!owner||!p||!saved)return;saved.threadId=threadId;if(turnId)saved.turnId=turnId;active=qualityAuditStartupIsCurrent(owner,passId,team.teamId,roundId,claim,token);if(active&&turnId){saved.status='auditing';saved.startedAt=new Date().toISOString();owner.activeRole='orchestrator';owner.activeTurnId=turnId;owner.activeModelId=QUALITY_AUDITOR_MODEL;owner.activeEffort='high';beginReasoningTurn(owner,'orchestrator',threadId!,turnId,QUALITY_AUDITOR_MODEL,'high');}});
-    if(!active){const saved=getTask(taskId)?.passes?.find(row=>row.id===passId)?.qualityLoop?.rounds.find(row=>row.roundId===roundId);if(turnId&&!(saved?.turnId===turnId&&saved?.status==='interrupted'))try{await agentCodex.interrupt(threadId,turnId);}catch{}return;}
+    let active=false,shouldInterrupt=false;
+    await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),p=owner?.passes?.find(row=>row.id===passId),saved=p?.qualityLoop?.rounds.find(row=>row.roundId===roundId);if(!owner||!p||!saved||saved.threadId&&saved.threadId!==threadId||turnId&&saved.turnId&&saved.turnId!==turnId)return;saved.threadId=threadId;active=qualityAuditStartupIsCurrent(owner,passId,team.teamId,roundId,claim,token);if(turnId&&!saved.turnId)saved.turnId=turnId;if(active&&turnId&&saved.turnId===turnId){saved.status='auditing';saved.startedAt=new Date().toISOString();owner.activeRole='orchestrator';owner.activeTurnId=turnId;owner.activeModelId=QUALITY_AUDITOR_MODEL;owner.activeEffort='high';beginReasoningTurn(owner,'orchestrator',threadId!,turnId,QUALITY_AUDITOR_MODEL,'high');}else if(turnId&&['starting','auditing','interrupted','failed'].includes(saved.status)){if(['starting','auditing','failed'].includes(saved.status)){const detail='A QA turn started after its saved audit state was no longer active.';saved.status='interrupted';saved.completedAt=new Date().toISOString();saved.error=detail;if(p.qualityLoop?.status==='needs_attention'&&p.qualityLoop.resumeAction==='audit'){p.qualityLoop.resumeAction=undefined;p.qualityLoop.terminalReason=detail;if(owner.currentPassId===passId&&owner.phase!=='cancelled'){owner.phase='needs_attention';owner.error=detail;}}}shouldInterrupt=true;}});
+    if(!active){if(turnId&&shouldInterrupt)await interruptInactiveQualityAuditTurn(taskId,passId,roundId,threadId,turnId);return;}
     if(!turnId)throw new Error('The QA audit request returned without a turn ID. Its provider state is unknown and cannot be retried safely.');
     await processDeferred(taskId,turnId);
   }catch(error){
@@ -970,9 +1009,9 @@ async function startQualityAudit(taskId:string,passId:string){
       const saved=round&&quality.rounds.find(row=>row.roundId===round!.roundId);if(quality.status==='auditing'&&(!saved||!['starting','auditing'].includes(saved.status)))return;if(quality.status!==loop.status&&quality.status!=='auditing')return;
       const mayRetry=!turnRequestStarted&&retryable;quality.status='needs_attention';quality.resumeAction=mayRetry?'audit':undefined;quality.terminalReason=`Independent QA audit could not start: ${detail}`;if(saved){saved.status='failed';saved.completedAt=new Date().toISOString();saved.error=detail;}owner.phase=mayRetry?'needs_attention':'reviewing';owner.activeRole=undefined;owner.activeTurnId=undefined;owner.activeModelId=undefined;owner.activeEffort=undefined;owner.error=quality.terminalReason;addMessage(owner,'system',quality.terminalReason);retryableFailure=mayRetry;needsFinalReview=!mayRetry;
     });
-    if(!retryableFailure&&turnRequestStarted){const saved=getTask(taskId)?.passes?.find(row=>row.id===passId)?.qualityLoop?.rounds.find(row=>row.roundId===round?.roundId);const threadId=saved?.threadId||round?.threadId,turnId=saved?.turnId||turnIdForCleanup;if(threadId&&turnId)try{await agentCodex.interrupt(threadId,turnId);}catch{}}
+    const capturedRound=round;if(!retryableFailure&&turnRequestStarted&&capturedRound){const saved=getTask(taskId)?.passes?.find(row=>row.id===passId)?.qualityLoop?.rounds.find(row=>row.roundId===capturedRound.roundId);const threadId=saved?.threadId||capturedRound.threadId,turnId=saved?.turnId||turnIdForCleanup;if(threadId&&turnId)await interruptInactiveQualityAuditTurn(taskId,passId,capturedRound.roundId,threadId,turnId);}
     if(needsFinalReview)await startFinalTeamReceiptReview(taskId,passId);
-  }finally{if(qualityAuditClaims.get(claim)===token)qualityAuditClaims.delete(claim);}
+  }finally{if(qualityAuditClaims.get(claim)===token)qualityAuditClaims.delete(claim);qualityAuditClaimSettlements.delete(claim);settleClaim();}
 }
 async function completeQualityAudit(taskId:string,passId:string,threadId:string,turnId:string,status:string,turn:any){
   const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),loop=pass?.qualityLoop,round=loop?.rounds.find(row=>row.threadId===threadId&&row.turnId===turnId);if(!task||!pass||!loop||!round)return;
@@ -998,15 +1037,17 @@ async function completeQualityAudit(taskId:string,passId:string,threadId:string,
     await startQualityCorrectionPlanning(taskId,passId,round);
   }catch(error){const detail=safeError(error);let applied=false;await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),p=owner?.passes?.find(row=>row.id===passId),quality=p?.qualityLoop,saved=quality?.rounds.find(row=>row.roundId===round.roundId);if(!owner||owner.currentPassId!==passId||owner.phase==='cancelled'||!quality||quality.status!=='auditing'||!saved||saved.status!=='auditing'||saved.threadId!==threadId||saved.turnId!==turnId)return;saved.status='failed';saved.completedAt=new Date().toISOString();saved.error=detail;quality.status='needs_attention';quality.resumeAction=undefined;quality.terminalReason=`The audit result could not be safely applied: ${detail}`;owner.phase='reviewing';owner.activeRole=undefined;owner.activeTurnId=undefined;owner.activeModelId=undefined;owner.activeEffort=undefined;owner.error=quality.terminalReason;addMessage(owner,'system',quality.terminalReason);applied=true;});if(applied)await startFinalTeamReceiptReview(taskId,passId);}
 }
-async function startQualityCorrectionPlanning(taskId:string,passId:string,round:QAAuditRound){
-  const claim=`${taskId}:${passId}`;if(qualityCorrectionClaims.has(claim))return;qualityCorrectionClaims.add(claim);
+async function startQualityCorrectionPlanning(taskId:string,passId:string,round:QAAuditRound,allowPaused=false){
+  const claim=`${taskId}:${passId}:${round.roundId}`;if(qualityCorrectionClaims.has(claim))return;qualityCorrectionClaims.add(claim);
   try{
-    const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),quality=pass?.qualityLoop;if(!task||!pass||!quality||!quality.enabled||!round.findings?.length||!['awaiting_corrections','paused'].includes(quality.status)||task.phase==='cancelled')return;
-    await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),saved=owner?.passes?.find(row=>row.id===passId),loop=saved?.qualityLoop;if(!owner||!saved||!loop)return;loop.status='awaiting_corrections';loop.resumeAction=undefined;owner.error=undefined;});
-    const fresh=getTask(taskId),currentPass=fresh?.passes?.find(row=>row.id===passId);if(!fresh||!currentPass)return;
+    const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),quality=pass?.qualityLoop,expectedPlannerStatus=quality?.status;if(!task||!pass||!quality||!quality.enabled||!round.findings?.length||quality.status!=='awaiting_corrections'&&!(allowPaused&&quality.status==='paused')||task.currentPassId!==passId||task.phase==='cancelled'||quality.rounds.at(-1)?.roundId!==round.roundId)return;
+    const launchGuard:QACorrectionLaunch={passId,roundId:round.roundId,integrationHead:round.integrationHead,findingsFingerprint:round.findingsFingerprint,expectedStatus:'awaiting_corrections'};let persisted=false;
+    await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),saved=owner?.passes?.find(row=>row.id===passId),loop=saved?.qualityLoop,currentRound=loop?.rounds.at(-1);if(!owner||!saved||!loop||owner.currentPassId!==passId||owner.phase==='cancelled'||loop.status!==expectedPlannerStatus||!currentRound||currentRound.roundId!==round.roundId||currentRound.status!=='awaiting_corrections'||currentRound.integrationHead!==round.integrationHead||currentRound.findingsFingerprint!==round.findingsFingerprint)return;loop.status='awaiting_corrections';loop.resumeAction=undefined;owner.error=undefined;persisted=true;});
+    if(!persisted||!qualityCorrectionLaunchIsCurrent(getTask(taskId),launchGuard))return;
+    const fresh=getTask(taskId),currentPass=fresh?.passes?.find(row=>row.id===passId);if(!fresh||!currentPass||!qualityCorrectionLaunchIsCurrent(fresh,launchGuard))return;
     const correctionPrompt=`The independent QA auditor found actionable issues in the integrated result. Plan one bounded correction team for all current findings. Do not answer the user or alter audit evidence. Split work only when findings are genuinely independent. Call recruit_workers exactly once with 1–9 concrete workers; each worker must include a short step, depends_on (prerequisite worker names, empty when independent), a bounded complete assignment, and effort max. The app creates unique branches/worktrees, starts independent steps together, merges prerequisite commits into dependent worktrees, and runs the existing integrator after all steps finish. Do not claim a correction until those receipts and the integration are recorded.\n\nORIGINAL USER REQUESTS:\n${JSON.stringify(currentPass.userInputs)}\n\nCURRENT INTEGRATED ASSIGNMENT:\n${JSON.stringify(fresh.assignment)}\n\nACTIONABLE QA FINDINGS TO FIX:\n${JSON.stringify(round.findings,null,2)}\n\nBASELINE:\n${JSON.stringify({branch:round.integrationBranch,head:round.integrationHead,teamId:currentPass.recruitmentTeam?.teamId})}\n\nThe task already has an app-owned AgentMem work lease if enabled; reuse it. Do not create a second task or wake another scheduler.`;
-    await startOrchestrator(fresh,correctionPrompt,'assignment',false);
-  }catch(error){const detail=safeError(error);await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),pass=owner?.passes?.find(row=>row.id===passId),loop=pass?.qualityLoop;if(!owner||!loop||owner.phase==='cancelled')return;loop.status='needs_attention';loop.terminalReason=`QA correction planning could not start: ${detail}`;owner.phase='reviewing';owner.error=loop.terminalReason;addMessage(owner,'system',loop.terminalReason);});await startFinalTeamReceiptReview(taskId,passId);}
+    await startOrchestrator(fresh,correctionPrompt,'assignment',false,launchGuard);if(!qualityCorrectionLaunchIsCurrent(getTask(taskId),launchGuard))return;
+  }catch(error){const detail=safeError(error);const current=getTask(taskId),latestPass=current?.passes?.find(row=>row.id===passId),latestLoop=latestPass?.qualityLoop,latestRound=latestLoop?.rounds.at(-1);if(!current||current.currentPassId!==passId||current.phase==='cancelled'||latestRound?.roundId!==round.roundId||latestLoop?.status!=='awaiting_corrections'||latestRound?.status!=='awaiting_corrections')return;let applied=false;await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),pass=owner?.passes?.find(row=>row.id===passId),loop=pass?.qualityLoop,saved=loop?.rounds.at(-1);if(!owner||!pass||!loop||owner.currentPassId!==passId||owner.phase==='cancelled'||loop.status!=='awaiting_corrections'||saved?.roundId!==round.roundId||saved.status!=='awaiting_corrections')return;loop.status='needs_attention';loop.terminalReason=`QA correction planning could not start: ${detail}`;owner.phase='reviewing';owner.error=loop.terminalReason;addMessage(owner,'system',loop.terminalReason);applied=true;});if(applied)await startFinalTeamReceiptReview(taskId,passId);}
   finally{qualityCorrectionClaims.delete(claim);}
 }
 function passProjection(task:Task,pass:TaskPass,threadId:string,turnId?:string):Task{
@@ -1017,19 +1058,27 @@ function savePassProjection(pass:TaskPass,projection:Task){pass.reasoningSummari
 function passRole(pass:TaskPass,threadId:string){return passThreadRole(pass,threadId);}
 async function onTurnStarted(params:any){
   const threadId=params?.threadId,turnId=params?.turn?.id;if(!threadId||!turnId)return;
-  let lateAuditTurn:{threadId:string;turnId:string}|undefined;
+  const staleKey=`${threadId}:${turnId}`;
+  if(staleOrchestratorTurns.has(staleKey)){
+    const owner=getState().tasks.find(task=>task.orchestratorThreadId===threadId||isCurrentPassThread(task,threadId));
+    if(owner)await interruptStaleOrchestratorTurn(owner.id,threadId,turnId);
+    return;
+  }
+  let lateAuditTurn:{taskId:string;passId:string;roundId:string;threadId:string;turnId:string}|undefined;
   await mutate(s=>{const t=s.tasks.find(x=>isCurrentPassThread(x,threadId)||passForThread(x,threadId));if(!t)return;
     const target=recruitmentTarget(t,threadId);if(target){const team=t.passes?.find(row=>row.id===target.pass.id)?.recruitmentTeam;if(t.phase!=='cancelled'&&team&&['running','context_plan','context_compose'].includes(target.record.status)){const record=team.workers.find(row=>row.threadId===threadId)||team.integration.threadId===threadId&&team.integration;if(record)record.activeTurnId=turnId;beginReasoningTurn(t,'worker',threadId,turnId,'gpt-6-luna',target.record.effort);}return;}
-    const auditPass=t.passes?.find(row=>row.qualityLoop?.rounds.some(round=>round.threadId===threadId)),loop=auditPass?.qualityLoop,round=loop?.rounds.find(row=>row.threadId===threadId);
+    const pending=pendingQualityAuditStarts.get(threadId);let pendingStart=pending?.find(row=>row.turnId===turnId);if(!pendingStart){pendingStart=pending?.find(row=>!row.turnId);if(pendingStart)pendingStart.turnId=turnId;}
+    const auditPasses=t.passes?.filter(row=>row.qualityLoop?.rounds.some(round=>round.threadId===threadId))||[],auditPass=pendingStart?t.passes?.find(row=>row.id===pendingStart.passId):auditPasses.find(row=>row.qualityLoop?.rounds.some(round=>round.threadId===threadId&&round.turnId===turnId))||auditPasses.find(row=>row.qualityLoop?.rounds.some(round=>round.threadId===threadId&&!round.turnId&&['starting','auditing'].includes(round.status)));
+    const loop=auditPass?.qualityLoop,auditRounds=loop?.rounds||[];const round=auditRounds.find(row=>row.threadId===threadId&&row.turnId===turnId)||(pendingStart?auditRounds.find(row=>row.roundId===pendingStart!.roundId):undefined)||auditRounds.find(row=>row.threadId===threadId&&!row.turnId&&['starting','auditing'].includes(row.status));
     if(round){const active=auditPass?.id===t.currentPassId&&loop?.status==='auditing'&&t.phase!=='cancelled'&&['starting','auditing'].includes(round.status);
-      if(active){round.turnId=turnId;round.status='auditing';round.startedAt=new Date().toISOString();t.activeTurnId=turnId;t.activeRole='orchestrator';t.activeModelId=round.model;t.activeEffort=round.requestedEffort;beginReasoningTurn(t,'orchestrator',threadId,turnId,round.model,round.requestedEffort);}
-      else if(!round.turnId&&['starting','auditing','interrupted','failed'].includes(round.status)){round.turnId=turnId;if(['starting','auditing','failed'].includes(round.status)){const detail='A late QA turn started after its saved audit state was no longer active.';round.status='interrupted';round.completedAt=new Date().toISOString();round.error=detail;if(loop?.status==='needs_attention'&&loop.resumeAction==='audit'){loop.resumeAction=undefined;loop.terminalReason=detail;if(t.currentPassId===auditPass?.id&&t.phase!=='cancelled'){t.phase='needs_attention';t.error=detail;}}}lateAuditTurn={threadId,turnId};}
+      if(active&&(!round.turnId||round.turnId===turnId)){if(!round.turnId)round.turnId=turnId;round.status='auditing';round.startedAt=new Date().toISOString();t.activeTurnId=turnId;t.activeRole='orchestrator';t.activeModelId=round.model;t.activeEffort=round.requestedEffort;beginReasoningTurn(t,'orchestrator',threadId,turnId,round.model,round.requestedEffort);}
+      else if(['starting','auditing','interrupted','failed'].includes(round.status)){if(!round.turnId)round.turnId=turnId;if(['starting','auditing','failed'].includes(round.status)){const detail='A late QA turn started after its saved audit state was no longer active.';round.status='interrupted';round.completedAt=new Date().toISOString();round.error=detail;if(loop?.status==='needs_attention'&&loop.resumeAction==='audit'){loop.resumeAction=undefined;loop.terminalReason=detail;if(t.currentPassId===auditPass?.id&&t.phase!=='cancelled'){t.phase='needs_attention';t.error=detail;}}}if(auditPass)lateAuditTurn={taskId:t.id,passId:auditPass.id,roundId:round.roundId,threadId,turnId};}
       return;
     }
     if(t.currentPassId&&isCurrentPassThread(t,threadId)){const role=roleForThread(t,threadId);if(role&&!t.activeTurnId&&t.phase!=='cancelled'){t.activeTurnId=turnId;t.activeRole=role;if(role!=='router')beginReasoningTurn(t,role,threadId,turnId);}return;}
     const pass=t.passes?.find(row=>[row.routerThreadId,row.directThreadId,row.simpleThreadId,row.orchestratorThreadId,row.workerThreadId].includes(threadId)),role=pass&&passRole(pass,threadId);if(pass&&role&&!pass.activeTurnId){pass.activeRole=role;pass.activeTurnId=turnId;if(role!=='router'){const projection=passProjection(t,pass,threadId,turnId);beginReasoningTurn(projection,role,threadId,turnId);savePassProjection(pass,projection);}}
   });
-  if(lateAuditTurn)try{await agentCodex.interrupt(lateAuditTurn.threadId,lateAuditTurn.turnId);}catch{}
+  if(lateAuditTurn)await interruptInactiveQualityAuditTurn(lateAuditTurn.taskId,lateAuditTurn.passId,lateAuditTurn.roundId,lateAuditTurn.threadId,lateAuditTurn.turnId);
 }
 async function onTurnDiffUpdated(params:any){void mutate(s=>{const task=s.tasks.find(row=>row.currentPassId&&row.activeTurnId===params?.turnId&&row.activeRole&&row[`${row.activeRole}ThreadId` as keyof Task]===params?.threadId);if(task){applyPassGitDiffUpdate(task,params);return;}if(typeof params?.threadId!=='string')return;const owner=s.tasks.find(row=>passForThread(row,params.threadId));const pass=owner?.passes?.find(row=>passThreadRole(row,params.threadId));if(!owner||!pass)return;const recruited=recruitmentTarget(owner,params.threadId);if(recruited?.record.activeTurnId!==params.turnId)return;const projection=passProjection(owner,pass,params.threadId,params.turnId);projection.workerThreadId=params.threadId;applyPassGitDiffUpdate(projection,params);pass.gitDiff=projection.gitDiff;});}
 function noteRouterToolInvocation(params:any){const threadId=params?.threadId;const item=params?.item||{};const t=typeof threadId==='string'?getState().tasks.find(x=>isCurrentPassThread(x,threadId)):undefined;if(t&&t.routerThreadId===threadId&&['commandExecution','fileChange','mcpToolCall','webSearchCall','dynamicToolCall','collabAgentToolCall'].includes(item.type))routerToolViolations.add(threadId);}
@@ -1532,12 +1581,17 @@ export async function pauseQualityLoop(taskId:string){
   if(auditing){threadId=audit?.threadId;turnId=audit?.turnId;}
   else{threadId=task.orchestratorThreadId;turnId=task.activeRole==='orchestrator'?task.activeTurnId:undefined;}
   await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),current=owner&&currentPass(owner),quality=current?.qualityLoop;if(!owner||!quality)return;quality.status='paused';quality.terminalReason='Paused by the user.';quality.resumeAction=auditing?'audit':'corrections';if(auditing){const round=quality.rounds.find(row=>row.roundId===auditRoundId);if(round){round.status='interrupted';round.completedAt=new Date().toISOString();round.error='The user paused this QA audit. Resume starts a new independent audit; no result was inferred.';}}owner.phase='reviewing';owner.activeRole=undefined;owner.activeTurnId=undefined;owner.activeModelId=undefined;owner.activeEffort=undefined;owner.error=undefined;addMessage(owner,'system','QA loop paused by the user. Resume continues with a fresh audit or the saved findings.');});
-  if(threadId&&turnId)try{await agentCodex.interrupt(threadId,turnId);}catch{}
+  if(threadId&&turnId){if(auditing&&auditRoundId)await interruptInactiveQualityAuditTurn(taskId,pass.id,auditRoundId,threadId,turnId);else try{await agentCodex.interrupt(threadId,turnId);}catch{}}
   return getTask(taskId)!;
 }
 export async function resumeQualityLoop(taskId:string){
-  const task=getTask(taskId),pass=task&&currentPass(task),loop=pass?.qualityLoop,retrying=loop?.status==='needs_attention'&&loop.resumeAction==='audit';if(!task||!pass||!loop?.enabled||!(['paused','paused_after_restart'].includes(loop.status)||retrying))throw new Error('This QA loop has no safe audit to resume or retry.');
-  if(qualityAuditClaims.has(`${taskId}:${pass.id}`)||task.activeTurnId||task.activeRole)throw new Error('The prior QA startup or review is still active. Wait for it to stop before retrying.');
+  let task=getTask(taskId),pass=task&&currentPass(task),loop=pass?.qualityLoop,retrying=loop?.status==='needs_attention'&&loop.resumeAction==='audit';if(!task||!pass||!loop?.enabled||!(['paused','paused_after_restart'].includes(loop.status)||retrying))throw new Error('This QA loop has no safe audit to resume or retry.');
+  const claim=`${taskId}:${pass.id}`;
+  if(retrying&&qualityAuditClaims.has(claim)){
+    const settling=qualityAuditClaimSettlements.get(claim);if(!settling)throw new Error('The prior QA startup is still finalizing. Retry again when its persisted state is stable.');await settling;
+    task=getTask(taskId);pass=task&&currentPass(task);loop=pass?.qualityLoop;retrying=loop?.status==='needs_attention'&&loop.resumeAction==='audit';if(!task||!pass||!loop?.enabled||!retrying)throw new Error('The prior QA startup changed the saved loop state; inspect it before starting another audit.');
+  }
+  if(qualityAuditClaims.has(claim)||task.activeTurnId||task.activeRole)throw new Error('The prior QA startup or review is still active. Wait for it to stop before retrying.');
   const action=loop.resumeAction;if(action==='audit'){
     if(!pass.recruitmentTeam||pass.recruitmentTeam.status!=='complete'||pass.recruitmentTeam.integration.status!=='complete')throw new Error('The saved integration is not complete; the QA audit cannot resume against it.');
     const latest=loop.rounds.at(-1);if(retrying&&latest?.status==='failed'&&(latest.turnId||latest.resultStatus))throw new Error('This QA round may already have reached the model. It cannot be retried safely; inspect the saved round and start a deliberate follow-up.');
@@ -1548,7 +1602,7 @@ export async function resumeQualityLoop(taskId:string){
     const round=loop.rounds.at(-1);if(!round||round.status!=='awaiting_corrections'||!round.findings?.length)throw new Error('There is no saved actionable QA finding set to resume.');
     if(pass.recruitmentTeam?.status!=='complete'||pass.recruitmentTeam.integration.status!=='complete')throw new Error('Correction workers were not all complete when the kernel stopped. Their worktrees remain preserved for inspection; this runtime will not duplicate recruitment automatically.');
     await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),current=owner&&currentPass(owner);if(owner&&current){owner.phase='reviewing';owner.error=undefined;}});
-    await startQualityCorrectionPlanning(taskId,pass.id,round);return getTask(taskId)!;
+    await startQualityCorrectionPlanning(taskId,pass.id,round,true);return getTask(taskId)!;
   }
   throw new Error('The paused QA loop has no safe saved action to resume. Inspect its recorded state before continuing.');
 }
@@ -1573,7 +1627,7 @@ export async function cancelTask(taskId:string){
     current.phase='cancelled';current.activeRole=undefined;current.activeTurnId=undefined;current.error=undefined;addMessage(current,'system','Task cancelled. Recruited workers were interrupted and their task-owned worktrees are preserved. Late Codex events will be ignored.');
   });
   for(const [threadId,session] of deepSeekSessionsToCancel){deepSeekRecruitmentSessions.delete(threadId);try{await session.runtime.cancel();}catch{}}
-  for(const item of allTurns)if(!deepSeekThreadIds.has(item.threadId))try{await agentCodex.interrupt(item.threadId,item.turnId);}catch{}
+  for(const item of allTurns)if(!deepSeekThreadIds.has(item.threadId)){const auditRound=getTask(taskId)?.passes?.find(row=>row.id===passId)?.qualityLoop?.rounds.find(row=>row.threadId===item.threadId&&row.turnId===item.turnId);if(auditRound)await interruptInactiveQualityAuditTurn(taskId,passId!,auditRound.roundId,item.threadId,item.turnId);else try{await agentCodex.interrupt(item.threadId,item.turnId);}catch{}}
   await waitForDeepSeekRecruitmentStages(taskId,passId);
   for(const approval of task.approvalRequests||[])try{agentCodex.respondServerRequest(approval.requestId,approvalResponse(approval.method,approval.mode||(approval as any).permissionRequest,'cancel'));}catch{}
   if(role&&thread&&passId){const allowanceEnd=await readAllowanceSnapshot();await mutate(state=>{const pass=state.tasks.find(row=>row.id===taskId)?.passes?.find(row=>row.id===passId);if(pass){markThreadTokenUsageUnavailable(pass,role,thread);applyAllowanceDelta(pass,role,thread,allowanceBaselines.get(thread)||null,allowanceEnd);}});void refreshThreadUsage(taskId,passId,role,thread);}
