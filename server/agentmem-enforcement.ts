@@ -11,7 +11,7 @@ function hasNoKnowledgeUpdateReason(receipt:Receipt){
   return receipt.knowledge.updated.some(note=>/no\s+(?:meaningful\s+)?(?:agentmem\s+)?(?:knowledge|kb)\s+(?:update|change|entry|record)\s+was\s+needed\s+because\s+.{8,}/i.test(note));
 }
 function hasNoResyncReason(receipt:Receipt){
-  return receipt.knowledge.updated.some(note=>/no\s+(?:repository\s+)?(?:index\s+)?resync\s+was\s+needed\s+because\s+.{8,}/i.test(note));
+  return receipt.knowledge.updated.some(note=>/no\s+(?:repository[\s-]+)?(?:index[\s-]+)?resync\s+was\s+needed\s+because\s+.{8,}/i.test(note));
 }
 function sameWorkspaceRoot(left:string|undefined,right:string|undefined){
   const normalize=(value:string|undefined)=>value?.replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase();
@@ -35,9 +35,12 @@ export function agentMemArtifactUsageGaps(audit:AgentMemAudit|undefined,pass:Tas
   const sourceChange=pass.turnSourceChanges?.find(row=>row.role===role&&row.threadId===threadId&&row.turnId===turnId);
   if(!sourceChange||sourceChange.status!=='verified')return [`A complete before/after workspace snapshot is unavailable for this artifact-producing turn. ${sourceChange?.reason||'The selected workspace change state is unverified.'}`];
   const changed=sourceChange.changedPaths.length>0||sourceChange.repositoryRevisionChanged;
-  const resync=calls.find(call=>call.service==='repository_index'&&call.operation==='write'&&call.method==='repository_resync'&&call.repositoryId===repositoryId);
+  const resyncs=calls.filter(call=>call.service==='repository_index'&&call.operation==='write'&&call.method==='repository_resync'&&call.repositoryId===repositoryId).sort((left,right)=>left.providerEventSequence!==undefined&&right.providerEventSequence!==undefined?right.providerEventSequence-left.providerEventSequence:Date.parse(right.updatedAt)-Date.parse(left.updatedAt));
+  const resync=resyncs[0];
   if(changed){
     if(!resync)return ['Repository files changed or the change snapshot was truncated, but the model did not complete a repository-index resync in this turn.'];
+    const deepSeekRun=[...(pass.recruitmentTeam?.workers||[]),...(pass.recruitmentTeam?[pass.recruitmentTeam.integration]:[])].find(record=>record.threadId===threadId)?.deepSeekPhaseRuns?.find(run=>run.turnId===turnId);
+    if(deepSeekRun&&(!Number.isSafeInteger(resync.providerEventSequence)||deepSeekRun.latestNonAgentMemToolSequence!==undefined&&resync.providerEventSequence!<=deepSeekRun.latestNonAgentMemToolSequence))return ['The DeepSeek repository-index resync did not occur after the last native or saved-skills tool call in this turn.'];
     const mutationTimes=[...pass.liveActivity||[]].filter(item=>item.threadId===threadId&&item.turnId===turnId&&item.kind==='tool'&&item.status==='completed'&&['commandExecution','fileChange'].includes(item.itemType)).map(item=>Date.parse(item.updatedAt));
     const codexDiff=pass.gitDiff?.turns?.find(row=>row.role===role&&row.threadId===threadId&&row.turnId===turnId);
     if(codexDiff)mutationTimes.push(Date.parse(codexDiff.capturedAt));

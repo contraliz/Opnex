@@ -113,6 +113,7 @@ app.post('/api/tasks/:id/delete',async(req,res)=>{try{await mutate(s=>{deleteTas
 app.post('/api/settings',async(req,res)=>{try{const settings=settingsSchema.parse(req.body);res.json({runtime:await saveSettings(settings)});}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/runtime/refresh',async(_req,res)=>res.json({runtime:await refreshConnections()}));
 app.post('/api/v1/kernel/shutdown',async(req,res)=>{
+  if(req.get('x-pseudoharness-token')!==nonce){res.status(403).json({error:'Local request origin or session token rejected.'});return;}
   if(shutdownRequested){res.status(409).json({error:'The kernel is already stopping.',code:'KERNEL_SHUTTING_DOWN'});return;}
   try{
     z.object({confirm:z.literal('stop-kernel')}).strict().parse(req.body);
@@ -145,8 +146,10 @@ function stopServer(){
   server.close(error=>{
     void (async()=>{
       if(shutdownTimer)clearTimeout(shutdownTimer);
-      try{await shutdown();}catch(shutdownError){console.error('Pseudoharness runtime shutdown failed:',errorMessage(shutdownError));}
       if(stateOwner)try{await mutate(state=>{pauseActiveTasksForKernelShutdown(state);});}catch(stateError){console.error('Pseudoharness could not persist kernel shutdown state:',errorMessage(stateError));}
+      // Persist the paused state before terminating owned provider processes so
+      // their rejected in-flight requests cannot be mistaken for failed jobs.
+      try{await shutdown();}catch(shutdownError){console.error('Pseudoharness runtime shutdown failed:',errorMessage(shutdownError));}
       try{if(kernelInstance)await removeKernelInstanceIfOwned(kernelInstance.instanceId);}catch{console.error('Pseudoharness kernel discovery record could not be removed.');}
       try{stateOwner?.release();}catch(releaseError){console.error('Could not release Pseudoharness state ownership:',errorMessage(releaseError));}
       process.exit(error?1:0);

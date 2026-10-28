@@ -118,6 +118,10 @@ describe('headless kernel HTTP boundary',()=>{
 
     const missingMutationVersion=await fetch(`${kernel.origin}/api/v1/projects/select`,{method:'POST',headers:{origin:kernel.origin,'content-type':'application/json','x-pseudoharness-token':initial.csrf},body:JSON.stringify({projectId:null})});
     expect(missingMutationVersion.status).toBe(426);
+    const missingShutdownToken=await fetch(`${kernel.origin}/api/v1/kernel/shutdown`,{method:'POST',headers:{...clientHeader,origin:kernel.origin,'content-type':'application/json'},body:JSON.stringify({confirm:'stop-kernel'})});
+    expect(missingShutdownToken.status).toBe(403);
+    const wrongShutdownToken=await fetch(`${kernel.origin}/api/v1/kernel/shutdown`,{method:'POST',headers:{...clientHeader,origin:kernel.origin,'content-type':'application/json','x-pseudoharness-token':'wrong'},body:JSON.stringify({confirm:'stop-kernel'})});
+    expect(wrongShutdownToken.status).toBe(403);
     const mutation=await fetch(`${kernel.origin}/api/v1/projects/select`,{method:'POST',headers:{...clientHeader,origin:kernel.origin,'content-type':'application/json','x-pseudoharness-token':initial.csrf},body:JSON.stringify({projectId:null})});
     expect(mutation.status).toBe(200);
     const resumedController=new AbortController();

@@ -95,6 +95,7 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     const profile = await prepareDeepSeekHarnessTaskProfile({
       dshHome,
       credentialStorePath,
+      provider: 'opencode-go',
       profileName: 'pseudoharness-test-worker',
       launch: launch(),
       mcpServers,
@@ -113,6 +114,8 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     expect(profile.launchEnvironment.DSH_HOME).toBe(dshHome);
     expect(profile.launchEnvironment.DSH_AGENTS_HOME).toBe(path.join(dshHome, 'pseudoharness-agents'));
     expect(patch).toContain('path:');
+    expect(patch).toContain('id: llm-pi-ai');
+    expect(patch).toContain('"opencode-go": {}');
     expect(patch).toContain("name: \"@deepseek-ai/dsh-mcp-client\"");
     expect(patch).toContain('!!js');
     expect(patch).not.toContain('SYNTHETIC_CREDENTIAL_SENTINEL');
@@ -144,6 +147,7 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     const options = {
       dshHome,
       credentialStorePath,
+      provider: 'opencode-go',
       profileName: 'pseudoharness-test-integrator',
       launch: launch(),
       mcpServers: [server('pseudoharness_skills', { PSEUDOHARNESS_SKILLS_TASK_ID: 'test-task' })],
@@ -168,6 +172,7 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     const base = {
       dshHome,
       credentialStorePath,
+      provider: 'opencode-go',
       profileName: 'pseudoharness-test-blocked',
       launch: launch(),
       spawnProcess: fakeDshProfileBootstrap().spawnProcess,
@@ -194,5 +199,7 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
       mcpServers: [{ ...server('agentmem'), serverName: 'external' as 'agentmem' }],
     })).rejects.toThrow('Only the existing scoped AgentMem and Pseudoharness Skills');
     await expect(prepareDeepSeekHarnessTaskProfile({ ...base, mcpServers: [] })).rejects.toThrow('At least one scoped');
+    await expect(prepareDeepSeekHarnessTaskProfile({ ...base, provider: 'deepseek-official', mcpServers: [server('pseudoharness_skills')] }))
+      .rejects.toThrow('Only the verified OpenCode Go provider route');
   });
 });

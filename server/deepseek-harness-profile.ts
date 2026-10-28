@@ -7,6 +7,8 @@ import { DeepSeekHarnessError, type DeepSeekHarnessSdkLaunch } from './deepseek-
 
 const PROFILE_TEMPLATE = 'sdk';
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client';
+const PI_AI_PLUGIN_ID = 'llm-pi-ai';
+const VERIFIED_PROVIDER_ROUTE = 'opencode-go';
 const ALLOWED_MCP_SERVER_NAMES = new Set(['agentmem', 'pseudoharness_skills']);
 const MAX_SERVER_CONFIG_BYTES = 16 * 1024;
 
@@ -23,6 +25,8 @@ export type DeepSeekHarnessTaskProfileOptions = {
   dshHome: string;
   /** The existing DSH credential file path. Its contents are never opened here. */
   credentialStorePath: string;
+  /** A provider route verified in the installed profile and catalog. */
+  provider: string;
   /** A task/role-owned profile identity, for example `pseudoharness-<id>-worker`. */
   profileName: string;
   launch: DeepSeekHarnessSdkLaunch;
@@ -94,6 +98,9 @@ export async function prepareDeepSeekHarnessTaskProfile(
   if (!/^pseudoharness-[a-z0-9-]{1,54}$/.test(profileName)) {
     throw new DeepSeekHarnessError('configuration', 'The isolated DSH profile must have a unique pseudoharness- task/role name.');
   }
+  if (options.provider !== VERIFIED_PROVIDER_ROUTE) {
+    throw new DeepSeekHarnessError('unsupported-capability', 'Only the verified OpenCode Go provider route is currently enabled for recruited DeepSeek Harness workers. No provider fallback was started.');
+  }
   if (path.basename(credentialStorePath).toLowerCase() !== '.credentials.yaml'
     || isPathWithin(dshHome, credentialStorePath)) {
     throw new DeepSeekHarnessError('configuration', 'The task profile must reference the existing DSH credential file by path outside its isolated task home; it will not copy credentials into the profile.');
@@ -114,7 +121,7 @@ export async function prepareDeepSeekHarnessTaskProfile(
   const agentsHome = path.join(dshHome, 'pseudoharness-agents');
   const profileDirectory = path.join(dshHome, 'profiles', profileName);
   const patchPath = path.join(profileDirectory, 'cordis.patch.yml');
-  const patch = renderProfilePatch(credentialStorePath, servers);
+  const patch = renderProfilePatch(credentialStorePath, servers, options.provider);
   const launchEnvironment: NodeJS.ProcessEnv = {
     DSH_HOME: dshHome,
     DSH_AGENTS_HOME: agentsHome,
@@ -216,12 +223,16 @@ function yamlString(value: string) {
   return JSON.stringify(value);
 }
 
-function renderProfilePatch(credentialStorePath: string, servers: readonly DeepSeekHarnessMcpServerConfig[]) {
+function renderProfilePatch(credentialStorePath: string, servers: readonly DeepSeekHarnessMcpServerConfig[], provider: string) {
   const rows = [
     '- id: credentials',
     '  config:',
     `    path: ${yamlString(credentialStorePath)}`,
     '    watch: true',
+    `- id: ${PI_AI_PLUGIN_ID}`,
+    '  config:',
+    '    providers:',
+    `      ${yamlString(provider)}: {}`,
     '- insert:',
   ];
   for (const server of servers) {
