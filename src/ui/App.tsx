@@ -14,6 +14,7 @@ import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitP
 import { formatBrowserAnnotation } from './browser-annotation';
 import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
 import type { AppState, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, LiveActivity, Project, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
+import { qualityLoopResumeAction } from '../../server/quality-loop-resume.js';
 const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
 
 const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
@@ -1127,8 +1128,9 @@ function QualityLoopPanel({state,onAction}:{state:NonNullable<TaskPass['qualityL
   const findings=latest?.findings||[];
   const canAccept=!!onAction&&findings.length>0&&['awaiting_corrections','needs_attention'].includes(state.status);
   const canPause=!!onAction&&['auditing','awaiting_corrections'].includes(state.status);
-  const canResume=!!onAction&&['paused','paused_after_restart'].includes(state.status);
-  const canRetry=!!onAction&&state.status==='needs_attention'&&state.resumeAction==='audit';
+  const resumeAction=qualityLoopResumeAction(state);
+  const canResume=!!onAction&&['paused','paused_after_restart'].includes(state.status)&&resumeAction!==undefined;
+  const canRetry=!!onAction&&state.status==='needs_attention'&&resumeAction==='audit';
   return <section className={`quality-loop-panel ${state.status}`} aria-label="Independent QA loop" data-qa-status={state.status}>
     <header><Sparkles size={15}/><strong>Independent QA loop</strong><span className={`quality-loop-status ${state.status}`}>{labels[state.status]||state.status}</span></header>
     <p>Each audit uses gpt-6.1-terra with high reasoning. Findings return to the orchestrator for worker corrections; the independent final receipt review remains separate.</p>
