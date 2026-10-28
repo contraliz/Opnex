@@ -92,13 +92,23 @@ describe('instruction-filtered Codex configuration sharing',()=>{
     expect(await readFile(other,'utf8')).toBe('do not expose');
   });
 
-  it('rejects an app-owned home reached through a linked parent directory',async()=>{
+  it('canonicalizes an app-owned home reached through a linked parent directory',async()=>{
     const {root,normalHome,agentHome}=await fixture(),linkedRoot=path.join(root,'linked-parent'),source=path.join(normalHome,'config.toml');
-    await writeFile(source,'[mcp_servers.fixture]\ncommand="fixture"\n');
+    const contents='[mcp_servers.fixture]\ncommand="fixture"\n';
+    await writeFile(source,contents);
     try{await symlink(root,linkedRoot,'junction');}
     catch(error){if(['EPERM','EACCES','ENOTSUP','EOPNOTSUPP','ENOSYS'].includes((error as NodeJS.ErrnoException).code??''))return;throw error;}
     const aliasedAgentHome=path.join(linkedRoot,path.basename(agentHome));
-    await expect(linkNormalCodexFile(normalHome,aliasedAgentHome,'config.toml',true)).rejects.toThrow('not a verified directory');
+    expect(await linkNormalCodexFile(normalHome,aliasedAgentHome,'config.toml',true)).toBe('hardlink');
+    expect(await readFile(path.join(agentHome,'config.toml'),'utf8')).toBe(contents);
+  });
+
+  it('rejects an app-owned home that is itself a directory link',async()=>{
+    const {root,normalHome,agentHome}=await fixture(),linkedAgentHome=path.join(root,'linked-agent'),source=path.join(normalHome,'config.toml');
+    await writeFile(source,'[mcp_servers.fixture]\ncommand="fixture"\n');
+    try{await symlink(agentHome,linkedAgentHome,'junction');}
+    catch(error){if(['EPERM','EACCES','ENOTSUP','EOPNOTSUPP','ENOSYS'].includes((error as NodeJS.ErrnoException).code??''))return;throw error;}
+    await expect(linkNormalCodexFile(normalHome,linkedAgentHome,'config.toml',true)).rejects.toThrow('not a verified directory');
     await expect(readFile(path.join(agentHome,'config.toml'),'utf8')).rejects.toMatchObject({code:'ENOENT'});
   });
 });

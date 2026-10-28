@@ -46,18 +46,6 @@ const missing=async(ops:CodexHomeFileOps,filename:string,normalHome:string,agent
   return 'missing' as const;
 };
 
-const hasReparseDirectoryComponent=async(ops:CodexHomeFileOps,directory:string)=>{
-  const parsed=path.parse(directory);
-  let current=parsed.root;
-  const components=directory.slice(parsed.root.length).split(path.sep).filter(Boolean);
-  for(const component of components){
-    current=path.join(current,component);
-    const entry=await ops.lstat(current);
-    if(!entry.isDirectory()||entry.isSymbolicLink())return true;
-  }
-  return false;
-};
-
 async function replaceVerifiedTemp(temp:string,destination:string,agentHome:string,ops:CodexHomeFileOps){
   let existing:Stats|undefined;
   try{existing=await ops.lstat(destination);}catch(error){if(!isCode(error,['ENOENT']))throw error;}
@@ -85,10 +73,10 @@ export async function linkNormalCodexFile(
   const allowed=filename==='config.toml'||!!profileName&&profilePattern.test(profileName)&&profileName!=='.'&&profileName!=='..'&&filename===`${profileName}.config.toml`;
   if(!allowed)throw new Error('Only the normal Codex config and the explicitly selected profile config may be exposed to the app-owned home.');
   const ops={...fileOps,...overrides} as CodexHomeFileOps;
-  const normalRoot=path.resolve(normalHome),agentRoot=path.resolve(agentHome);
-  const normalRootReal=await ops.realpath(normalRoot);
-  const [normalStat,agentStat]=await Promise.all([ops.lstat(normalRoot),ops.lstat(agentRoot)]);
-  if(!normalStat.isDirectory()||normalStat.isSymbolicLink()||!agentStat.isDirectory()||agentStat.isSymbolicLink()||await hasReparseDirectoryComponent(ops,agentRoot))throw new Error('The normal or app-owned Codex home is not a verified directory.');
+  const normalRoot=path.resolve(normalHome),requestedAgentRoot=path.resolve(agentHome);
+  const [normalRootReal,agentRoot]=await Promise.all([ops.realpath(normalRoot),ops.realpath(requestedAgentRoot)]);
+  const [normalStat,agentStat]=await Promise.all([ops.lstat(normalRoot),ops.lstat(requestedAgentRoot)]);
+  if(!normalStat.isDirectory()||normalStat.isSymbolicLink()||!agentStat.isDirectory()||agentStat.isSymbolicLink())throw new Error('The normal or app-owned Codex home is not a verified directory.');
   const source=path.join(normalRoot,filename),destination=path.join(agentRoot,filename);
   if(!samePath(path.dirname(destination),agentRoot)||!destination.toLowerCase().startsWith(`${agentRoot.toLowerCase()}${path.sep}`))throw new Error('The Codex config destination escaped its app-owned home.');
   let sourceStat:Stats;
