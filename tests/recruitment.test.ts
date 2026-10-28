@@ -67,17 +67,18 @@ function teamFixture(workerStatuses: Array<'queued'|'running'|'complete'|'failed
 
 describe('recruited worker team contracts and recovery', () => {
   it('enforces the 1–9 worker cap, complete assignments and supported efforts', () => {
-    const plan = (count: number, effort = 'high') => ({ workers: Array.from({ length: count }, (_, index) => ({ name: `Worker ${index}`, assignment, effort, skill_refs: [] })) });
+    const plan = (count: number, effort = 'max') => ({ workers: Array.from({ length: count }, (_, index) => ({ name: `Worker ${index}`, step: `Implement worker ${index}'s independent step`, depends_on: [], assignment, effort, skill_refs: [] })) });
     expect(recruitmentWorkersSchema.parse(plan(1)).workers).toHaveLength(1);
     expect(recruitmentWorkersSchema.parse(plan(9)).workers).toHaveLength(9);
     expect(recruitmentWorkersSchema.safeParse(plan(10)).success).toBe(false);
     expect(recruitmentWorkersSchema.safeParse(plan(2, 'low')).success).toBe(false);
+    expect(recruitmentWorkersSchema.safeParse(plan(2, 'high')).success).toBe(false);
     expect(recruitmentWorkersSchema.safeParse({ workers: [{ name: 'Missing assignment', effort: 'high', skill_refs: [] }] }).success).toBe(false);
   });
 
-  it('defaults worker effort to high when the model omits it', () => {
-    const { effort: _effort, ...worker } = { name: 'Default', assignment, effort: 'high', skill_refs: [] };
-    expect(recruitmentWorkersSchema.parse({ workers: [worker] }).workers[0].effort).toBe('high');
+  it('defaults worker effort to max when the model omits it', () => {
+    const { effort: _effort, ...worker } = { name: 'Default', step: 'Implement an independent step', depends_on: [], assignment, effort: 'max', skill_refs: [] };
+    expect(recruitmentWorkersSchema.parse({ workers: [worker] }).workers[0].effort).toBe('max');
   });
 
   it('keeps canonical project identity while rebasing only the worker filesystem scopes', () => {
