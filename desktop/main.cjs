@@ -90,7 +90,29 @@ async function startBackend(){const data=path.join(app.getPath('userData'),'loca
 
 function waitForBackendExit(timeoutMs){if(backendExitCode!==null)return Promise.resolve(true);return new Promise(resolve=>{const timer=setTimeout(()=>resolve(false),timeoutMs);backendExitPromise.then(()=>{clearTimeout(timer);resolve(true);});});}
 async function requestAppQuit(){if(quitInProgress)return;quitInProgress=true;try{if(kernelOwnership==='owned')await stopOwnedKernel({ownsKernel:true,origin,state:kernelShutdownState,isBackendExited:()=>backendExitCode!==null,waitForBackendExit});quitApproved=true;app.quit();}catch(error){dialog.showErrorBox('Pseudoharness could not quit safely',error instanceof Error?error.message:String(error));}finally{quitInProgress=false;}}
-function createSystemTray(){if(trayController)return;try{const image=nativeImage.createFromPath(path.join(projectRoot,'desktop','tray-icon.png'));if(image.isEmpty())throw new Error('The Pseudoharness tray mark could not be loaded.');trayController=createTrayController({Tray,Menu,image,openWindow:focusOrReopenAppWindow,quitApp:requestAppQuit});const tray=trayController.start();if(process.env.PSEUDOHARNESS_SMOKE_TEST==='1'){const labels=trayController.getMenu()?.items?.map(item=>item.label||item.type)||[];const bounds=tray.getBounds();if(labels.join('|')!=='Open Pseudoharness|separator|Quit'||bounds.width<=0||bounds.height<=0)throw new Error(`Native tray smoke failed: menu=${labels.join(', ')}, bounds=${JSON.stringify(bounds)}.`);console.log(`System tray smoke passed: tooltip Pseudoharness; menu ${labels.join(', ')}; bounds ${JSON.stringify(bounds)}.`);}}catch(error){trayController?.destroy();trayController=undefined;if(process.env.PSEUDOHARNESS_SMOKE_TEST==='1')throw error;console.error('Pseudoharness could not initialize the system tray:',error instanceof Error?error.message:String(error));}}
+function createSystemTray(){
+  if(trayController)return;
+  try{
+    const image=nativeImage.createFromPath(path.join(projectRoot,'desktop','tray-icon.png'));
+    if(image.isEmpty())throw new Error('The Pseudoharness tray mark could not be loaded.');
+    trayController=createTrayController({Tray,Menu,image,openWindow:focusOrReopenAppWindow,quitApp:requestAppQuit});
+    const tray=trayController.start();
+    if(process.env.PSEUDOHARNESS_SMOKE_TEST==='1'){
+      const labels=trayController.getMenu()?.items?.map(item=>item.label||item.type)||[];
+      const bounds=tray.getBounds();
+      const usableBounds=[bounds.x,bounds.y,bounds.width,bounds.height].every(Number.isFinite)
+        &&bounds.width>0
+        &&(process.platform==='darwin'?bounds.height>=0:bounds.height>0);
+      if(labels.join('|')!=='Open Pseudoharness|separator|Quit'||!usableBounds)throw new Error(`Native tray smoke failed: menu=${labels.join(', ')}, bounds=${JSON.stringify(bounds)}.`);
+      console.log(`System tray smoke passed: tooltip Pseudoharness; menu ${labels.join(', ')}; bounds ${JSON.stringify(bounds)}.`);
+    }
+  }catch(error){
+    trayController?.destroy();
+    trayController=undefined;
+    if(process.env.PSEUDOHARNESS_SMOKE_TEST==='1')throw error;
+    console.error('Pseudoharness could not initialize the system tray:',error instanceof Error?error.message:String(error));
+  }
+}
 
 async function createAppWindow(){
   mainWindow=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:620,frame:process.platform!=='win32',title:'Pseudoharness',backgroundColor:'#141414',show:process.env.PSEUDOHARNESS_SMOKE_TEST!=='1',webPreferences:{preload:path.join(projectRoot,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
