@@ -31,7 +31,7 @@ describe('packaged MCP helper runtime',()=>{
   });
   it('keeps the skills MCP config free of Electron RunAsNode and preserves explicit tool configuration',()=>{
     const config=skillLibraryMcpServerConfig({taskId:'task',role:'direct'});
-    expect(config.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE');expect(config.enabled_tools).toEqual(['skills_list','skills_search','skills_load','skills_read_file']);
+    expect(config.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE');expect(config.enabled_tools).toEqual(['skills_list','skills_search','skills_load','skills_read_file','skills_save']);
   });
   it('fails clearly for missing bundled runtime or helper instead of falling back to Electron or PATH',()=>{
     expect(()=>resolveMcpHelperLaunch({modulePath:'C:\\app\\resources\\app.asar\\dist-server\\agentmem.js',helperFile:'agentmem-mcp-gateway.js',platform:'win32',arch:'x64',packaged:true,resourcesPath:'C:\\app\\resources',fileExists:()=>false})).toThrow('bundled Node runtime is missing');
