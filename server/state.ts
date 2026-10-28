@@ -243,6 +243,21 @@ async function loadStateOnce(): Promise<State> {
   loaded = true;
   return structuredClone(current);
 }
+function recoverQualityLoopAfterRestart(pass:TaskPass,at:string){
+  const loop=pass.qualityLoop;if(!loop)return;
+  const running=loop.rounds.find(round=>round.status==='starting'||round.status==='auditing');
+  if(running){running.status='paused_after_restart';running.completedAt=at;running.error='The kernel restarted before this QA audit returned. Resume starts a new independent audit; no saved result was inferred.';loop.resumeAction='audit';loop.status='paused_after_restart';loop.terminalReason=running.error;return;}
+  const latest=loop.rounds.at(-1);
+  if(loop.status==='awaiting_corrections'&&latest?.status==='awaiting_corrections'&&latest.findings?.length){
+    loop.status='paused_after_restart';loop.resumeAction='corrections';loop.terminalReason='The kernel restarted after actionable QA findings were saved and before correction planning began. Resume will reuse the saved findings.';return;
+  }
+  if(loop.status==='awaiting_audit'&&pass.recruitmentTeam?.status==='complete'&&pass.recruitmentTeam.integration.status==='complete'){
+    loop.status='paused_after_restart';loop.resumeAction='audit';loop.terminalReason='The kernel restarted before the next QA audit began. Resume will audit the saved integration.';return;
+  }
+  if(loop.status==='correcting'){
+    loop.status='needs_attention';loop.resumeAction=undefined;loop.terminalReason='The kernel restarted while QA correction workers were running. Their saved branches and receipts were preserved, but this runtime cannot safely resume an interrupted provider session; inspect the team and start a deliberate follow-up.';
+  }
+}
 export function upgradeStoredState(value:any):State{
   let migratedProjects:Project[]=Array.isArray(value.projects)?value.projects.filter(isProject).map((row:any)=>({...row})):[];
   let selectedProjectId: string|null=typeof value.selectedProjectId==='string'?value.selectedProjectId:null;
@@ -270,12 +285,15 @@ export function upgradeStoredState(value:any):State{
     for(const pass of task.passes){pass.approvalPolicy=savedApprovalPolicy(pass.approvalPolicy??value.settings?.approvalPolicy);if(pass.agentContextVersion!==1)pass.agentContextVersion=0;}
     for(const message of task.messages||[])if(message.role==='user'&&message.submissionKind==='steering'&&message.deliveryStatus==='pending'){message.deliveryStatus='unconfirmed';const pass=task.passes.find(row=>row.id===message.passId);if(pass&&!pass.userMessageIds.includes(message.id)){pass.userInputs.push(message.text);pass.userMessageIds.push(message.id);pass.attachments=[...(pass.attachments||[]),...(message.attachments||[])];}if(!task.userMessages.includes(message.text))task.userMessages.push(message.text);}
     const current=task.passes.find(pass=>pass.id===task.currentPassId);
-    if(['intake','routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(t.phase)){
+    const wasActive=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(t.phase),recoveringRestart=wasActive||t.phase==='paused_after_restart';
+    if(wasActive){
       task.phase='paused_after_restart';task.activeRole=undefined;task.activeTurnId=undefined;task.approvalRequests=[];
       task.error=current?.agentContextVersion===1?'The process restarted during this turn. Resume explicitly after checking the Codex agent thread.':'This session used an older Codex thread and cannot be resumed with the current Pseudoharness role configuration. Send a follow-up to start a fresh pass.';
+    }
+    if(recoveringRestart){
       for(const turn of task.reasoningTurns||[])if(turn.status==='streaming')turn.status='interrupted';
       const interruptedAt=new Date().toISOString();for(const activity of task.liveActivity||[])if(activity.status==='running'){activity.status='interrupted';activity.updatedAt=interruptedAt;}
-      for(const pass of task.passes||[]){for(const context of pass.agentmemAudit?.contexts||[])if(context.status==='running'){context.status='interrupted';context.updatedAt=interruptedAt;}for(const call of pass.agentmemAudit?.calls||[])if(call.status==='running'){call.status='interrupted';call.updatedAt=interruptedAt;}for(const team of recruitmentTeamsForPass(pass))pauseRecruitmentTeamAfterRestart(team);const loop=pass.qualityLoop;if(loop){const running=loop.rounds.find(round=>round.status==='starting'||round.status==='auditing');if(running){running.status='paused_after_restart';running.completedAt=interruptedAt;running.error='The kernel restarted before this QA audit returned. Resume starts a new independent audit; no result was inferred.';loop.resumeAction='audit';loop.status='paused_after_restart';}else if(loop.status==='correcting'){loop.status='needs_attention';loop.terminalReason='The kernel restarted while QA correction workers were running. Their saved branches and receipts were preserved, but this runtime cannot safely resume an interrupted provider session; inspect the team and start a deliberate follow-up.';}}}
+      for(const pass of task.passes||[]){for(const context of pass.agentmemAudit?.contexts||[])if(context.status==='running'){context.status='interrupted';context.updatedAt=interruptedAt;}for(const call of pass.agentmemAudit?.calls||[])if(call.status==='running'){call.status='interrupted';call.updatedAt=interruptedAt;}for(const team of recruitmentTeamsForPass(pass))pauseRecruitmentTeamAfterRestart(team);if(pass.id===task.currentPassId)recoverQualityLoopAfterRestart(pass,interruptedAt);}
     }
     delete (task as any).reasoningRawContent;
     for(const pass of task.passes||[])delete (pass as any).reasoningRawContent;
@@ -290,7 +308,7 @@ export function pauseActiveTasksForKernelShutdown(state:State,at=new Date().toIS
   let paused=0;
   for(const task of state.tasks){
     const active=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(task.phase)||!!task.activeRole||!!task.activeTurnId||!!task.approvalRequests?.length;
-    if(!active)continue;
+    if(!active){if(task.phase==='paused_after_restart'){const pass=currentPass(task);if(pass)recoverQualityLoopAfterRestart(pass,at);syncCurrentPass(task);}continue;}
     const pass=currentPass(task);
     if(pass&&task.approvalRequests?.length)pass.interruptedApprovals=[...(pass.interruptedApprovals||[]),...structuredClone(task.approvalRequests)];
     task.phase='paused_after_restart';task.activeRole=undefined;task.activeTurnId=undefined;task.approvalRequests=[];
@@ -303,7 +321,7 @@ export function pauseActiveTasksForKernelShutdown(state:State,at=new Date().toIS
       for(const context of row.agentmemAudit?.contexts||[])if(context.status==='running'){context.status='interrupted';context.updatedAt=at;}
       for(const call of row.agentmemAudit?.calls||[])if(call.status==='running'){call.status='interrupted';call.updatedAt=at;}
       for(const team of recruitmentTeamsForPass(row))pauseRecruitmentTeamAfterRestart(team);
-      if(row.qualityLoop){const running=row.qualityLoop.rounds.find(round=>round.status==='starting'||round.status==='auditing');if(running){running.status='paused_after_restart';running.completedAt=at;running.error='The kernel restarted before this QA audit returned. Resume starts a new independent audit; no saved result was inferred.';row.qualityLoop.resumeAction='audit';row.qualityLoop.status='paused_after_restart';}else if(row.qualityLoop.status==='correcting'){row.qualityLoop.status='needs_attention';row.qualityLoop.terminalReason='The kernel restarted while QA correction workers were running. Their saved branches and receipts were preserved, but this runtime cannot safely resume an interrupted provider session; inspect the team and start a deliberate follow-up.';}}
+      if(row.id===task.currentPassId)recoverQualityLoopAfterRestart(row,at);
     }
     syncCurrentPass(task);paused++;
   }
