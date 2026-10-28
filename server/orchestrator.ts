@@ -17,7 +17,7 @@ import { attachmentUserInput, validateAttachments } from './attachments.js';
 import { lstat, mkdir, realpath, symlink } from 'node:fs/promises';
 import { linkNormalCodexFile } from './codex-home-config.js';
 import { stateDirectory } from './paths.js';
-import { qualityCorrectionPlannerBlocksResume, qualityCorrectionPlannerMayHaveBeenSent, qualityLoopResumeAction } from './quality-loop-resume.js';
+import { qualityCorrectionPlannerInFlight, qualityCorrectionPlannerMayHaveBeenSent, qualityLoopResumeAction } from './quality-loop-resume.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { loadConfiguredSkill, parseWorkerStructuredOutput, workerContextComposePrompt, workerContextPlanPrompt, workerExecutePrompt, workerOutcomeResponseFormatPrompt, workerScopeSummary, type WorkerContextPlan, type WorkerContextStatus, type WorkerStage } from './worker-staging.js';
 import { readGitHubWorkspace } from './github.js';
@@ -1650,7 +1650,7 @@ export async function pauseQualityLoop(taskId:string){
   return getTask(taskId)!;
 }
 export async function resumeQualityLoop(taskId:string){
-  let task=getTask(taskId),pass=task&&currentPass(task),loop=pass?.qualityLoop,action=qualityLoopResumeAction(loop),retrying=loop?.status==='needs_attention'&&action==='audit';if(!task||!pass||!loop?.enabled||!action)throw new Error(qualityCorrectionPlannerBlocksResume(loop?.correctionPlanner)?'The QA correction planner setup is still active or its turn may still be running. Resume is unavailable until setup settles or the exact turn is confirmed stopped.':'This QA loop has no safe audit to resume or retry.');
+  let task=getTask(taskId),pass=task&&currentPass(task),loop=pass?.qualityLoop,action=qualityLoopResumeAction(loop),retrying=loop?.status==='needs_attention'&&action==='audit';if(!task||!pass||!loop?.enabled||!action)throw new Error(qualityCorrectionPlannerInFlight(loop?.correctionPlanner)?'The QA correction planner setup is still active or its turn may still be running. Resume is unavailable until setup settles or the exact turn is confirmed stopped.':'This QA loop has no safe audit to resume or retry.');
   const claim=`${taskId}:${pass.id}`;
   if(retrying&&qualityAuditClaims.has(claim)){
     const settling=qualityAuditClaimSettlements.get(claim);if(!settling)throw new Error('The prior QA startup is still finalizing. Retry again when its persisted state is stable.');await settling;
@@ -1677,6 +1677,7 @@ export async function resumeQualityLoop(taskId:string){
 }
 export async function acceptQualityFindings(taskId:string,note=''){
   const task=getTask(taskId),pass=task&&currentPass(task),loop=pass?.qualityLoop,latest=loop?.rounds.at(-1);if(!task||!pass||!loop?.enabled||!latest?.findings?.length||!['awaiting_corrections','needs_attention'].includes(loop.status))throw new Error('There are no saved actionable QA findings available for user acceptance.');
+  if(qualityCorrectionPlannerInFlight(loop.correctionPlanner))throw new Error('The QA correction planner setup is still active or its turn may still be running. Wait for its confirmed outcome before accepting the findings.');
   const threadId=task.activeRole==='orchestrator'?task.orchestratorThreadId:undefined,turnId=task.activeRole==='orchestrator'?task.activeTurnId:undefined;
   await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),current=owner&&currentPass(owner),quality=current?.qualityLoop;if(!owner||!current||!quality)return;quality.status='user_accepted';quality.userAcceptedAt=new Date().toISOString();quality.userAcceptanceNote=note.trim()||'The user explicitly accepted the currently recorded QA findings.';quality.terminalReason=undefined;quality.resumeAction=undefined;owner.phase='reviewing';owner.activeRole=undefined;owner.activeTurnId=undefined;owner.activeModelId=undefined;owner.activeEffort=undefined;owner.error=undefined;addMessage(owner,'system',quality.userAcceptanceNote);});
   if(threadId&&turnId)try{await agentCodex.interrupt(threadId,turnId);}catch{}
