@@ -4,6 +4,7 @@ import { access, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:
 import os from 'node:os';
 import path from 'node:path';
 import {
+  cleanupPreparedRecruitmentWorktrees,
   mergeRecruitmentCommits,
   prepareRecruitmentWorktrees,
   readRecruitmentBranchHead,
@@ -217,5 +218,28 @@ describe('bounded recruitment Git worktrees', () => {
     });
     await expect(readFile(path.join(worker.worktreeRoot, 'shared.txt'), 'utf8')).rejects.toThrow();
     expect(run(repo, 'rev-parse', 'HEAD')).toBe(baseCommit);
+  });
+
+  it('removes an unchanged unsealed recruitment, its generated refs, and manifest-only task root', async () => {
+    const prepared=await prepare('stale-cleanup',['alpha','beta']);
+    expect(await cleanupPreparedRecruitmentWorktrees(prepared,worktrees)).toEqual([]);
+    const branches=[prepared.integration.branch,...prepared.workers.map(worker=>worker.branch)];
+    const remaining=run(repo,'for-each-ref','--format=%(refname:short)','refs/heads/recruitment');
+    expect(remaining.split(/\r?\n/).filter(Boolean)).toEqual([]);
+    expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(1);
+    for(const branch of branches)await expect(readRecruitmentBranchHead(repo,branch)).rejects.toThrow();
+    await expect(realpath(prepared.taskRoot)).rejects.toThrow();
+  });
+
+  it('preserves all prepared resources when a generated branch ref no longer has its initial tip', async () => {
+    const prepared=await prepare('stale-modified',['alpha']);const worker=prepared.workers[0];
+    await writeFile(path.join(repo,'later.txt'),'a different committed tip\n');run(repo,'add','later.txt');run(repo,'commit','-m','different tip');const changedTip=run(repo,'rev-parse','HEAD');
+    run(repo,'update-ref',`refs/heads/${worker.branch}`,changedTip);
+    const errors=await cleanupPreparedRecruitmentWorktrees(prepared,worktrees);
+    expect(errors.join(' ')).toContain('no longer points at its initial commit');
+    expect(await readRecruitmentBranchHead(repo,worker.branch)).toBe(changedTip);
+    expect((await readFile(path.join(worker.worktreeRoot,'shared.txt'),'utf8')).replace(/\r\n/g,'\n')).toBe('base\n');
+    await expect(readFile(path.join(prepared.taskRoot,'.pseudoharness-recruitment.json'),'utf8')).resolves.toContain(worker.branch);
+    expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(3);
   });
 });
