@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -229,6 +229,21 @@ describe('bounded recruitment Git worktrees', () => {
     expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(1);
     for(const branch of branches)await expect(readRecruitmentBranchHead(repo,branch)).rejects.toThrow();
     await expect(realpath(prepared.taskRoot)).rejects.toThrow();
+  });
+
+  it('retires successfully created worktrees and the initial ref left by a failed later add', async () => {
+    const taskRoot=path.join(worktrees,'partial-cleanup'),workerBranch='recruitment/partial-cleanup/worker-alpha',hook=path.join(repo,'.git','hooks','post-checkout');
+    await writeFile(hook,`#!/bin/sh\ngit update-ref refs/heads/${workerBranch} "$2"\n`);await chmod(hook,0o755);
+    await expect(prepareRecruitmentWorktrees({canonicalRoot:repo,taskRoot,baseRef:baseCommit,integrationBranch:'recruitment/partial-cleanup/integration',workers:[{workerId:'alpha',branch:workerBranch}]})).rejects.toThrow(/Worktree preparation failed.*retired/);
+    expect(run(repo,'for-each-ref','--format=%(refname:short)','refs/heads/recruitment')).toBe('');expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(1);await expect(realpath(taskRoot)).rejects.toThrow();await expect(readRecruitmentBranchHead(repo,workerBranch)).rejects.toThrow();
+  });
+
+  it('preserves a changed branch ref and reports incomplete cleanup after a later add fails', async () => {
+    await writeFile(path.join(repo,'foreign.txt'),'foreign branch tip\n');run(repo,'add','foreign.txt');run(repo,'commit','-m','foreign branch tip');const foreignHead=run(repo,'rev-parse','HEAD');
+    const taskRoot=path.join(worktrees,'partial-changed'),workerBranch='recruitment/partial-changed/worker-alpha',hook=path.join(repo,'.git','hooks','post-checkout');
+    await writeFile(hook,`#!/bin/sh\ngit update-ref refs/heads/${workerBranch} ${foreignHead}\n`);await chmod(hook,0o755);
+    await expect(prepareRecruitmentWorktrees({canonicalRoot:repo,taskRoot,baseRef:baseCommit,integrationBranch:'recruitment/partial-changed/integration',workers:[{workerId:'alpha',branch:workerBranch}]})).rejects.toThrow(/Worktree preparation failed.*branch recruitment\/partial-changed\/worker-alpha no longer points at its initial commit/);
+    expect(await readRecruitmentBranchHead(repo,workerBranch)).toBe(foreignHead);expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(2);await expect(readFile(path.join(taskRoot,'.pseudoharness-recruitment.json'),'utf8')).resolves.toContain(workerBranch);
   });
 
   it('preserves all prepared resources when a generated branch ref no longer has its initial tip', async () => {
