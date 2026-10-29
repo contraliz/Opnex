@@ -11,7 +11,7 @@ const nodeModules=path.join(root,'node_modules');
 const [nodeMajor,nodeMinor]=process.versions.node.split('.').map(Number);
 const supportedNode=nodeMajor>22||(nodeMajor===22&&nodeMinor>=12);
 if(!supportedNode){
-  console.error(`Pseudoharness source builds require Node.js 22.12.0 or newer; detected ${process.versions.node}. Install a supported Node.js version, then run npm ci --include=dev from the repository root.`);
+  console.error(`Opnex source builds require Node.js 22.12.0 or newer; detected ${process.versions.node}. Install a supported Node.js version, then run npm ci --include=dev from the repository root.`);
 }
 
 const missing=[];

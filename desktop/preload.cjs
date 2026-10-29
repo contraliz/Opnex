@@ -35,5 +35,8 @@ const bridge={
     onEvent:callback=>{const listener=(_event,payload)=>callback(payload);ipcRenderer.on('pseudoharness:browser-event',listener);return()=>ipcRenderer.removeListener('pseudoharness:browser-event',listener);},
   },
 };
-if(process.env.PSEUDOHARNESS_INTERACTION_TEST==='1')bridge.interactionTest={state:()=>ipcRenderer.invoke('pseudoharness:interaction-state'),resize:size=>ipcRenderer.invoke('pseudoharness:interaction-resize',size)};
-contextBridge.exposeInMainWorld('pseudoharnessDesktop',Object.freeze(bridge));
+if(process.env.OPNEX_INTERACTION_TEST==='1'||process.env.PSEUDOHARNESS_INTERACTION_TEST==='1')bridge.interactionTest={state:()=>ipcRenderer.invoke('pseudoharness:interaction-state'),resize:size=>ipcRenderer.invoke('pseudoharness:interaction-resize',size)};
+// Preserve the prior bridge name for existing local clients and expose the current product name for new code.
+const frozenBridge=Object.freeze(bridge);
+contextBridge.exposeInMainWorld('opnexDesktop',frozenBridge);
+contextBridge.exposeInMainWorld('pseudoharnessDesktop',frozenBridge);

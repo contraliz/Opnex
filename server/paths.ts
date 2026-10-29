@@ -16,7 +16,8 @@ export function defaultDataDirectory({platform=process.platform,home=os.homedir(
 }
 
 export function stateDirectory(env:NodeJS.ProcessEnv=process.env,platform:Platform=process.platform,home=os.homedir()){
-  const override=env.PSEUDOHARNESS_DATA_DIR;
+  // Keep the original data-folder spelling so existing settings, sessions, skills, and browser data remain discoverable.
+  const override=env.OPNEX_DATA_DIR||env.PSEUDOHARNESS_DATA_DIR;
   if(!override)return defaultDataDirectory({platform,home,env});
   const paths=platform==='win32'?path.win32:path.posix;
   return paths.resolve(override);

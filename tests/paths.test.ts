@@ -16,4 +16,8 @@ describe('portable per-user state locations',()=>{
   it('resolves an explicit state override independently of the launch directory',()=>{
     expect(stateDirectory({PSEUDOHARNESS_DATA_DIR:'D:\\app-state'},'win32','C:\\Users\\demo')).toBe('D:\\app-state');
   });
+  it('prefers the Opnex state override while retaining the legacy environment name',()=>{
+    expect(stateDirectory({OPNEX_DATA_DIR:'D:\\opnex-state',PSEUDOHARNESS_DATA_DIR:'D:\\app-state'},'win32','C:\\Users\\demo')).toBe('D:\\opnex-state');
+    expect(stateDirectory({PSEUDOHARNESS_DATA_DIR:'D:\\app-state'},'win32','C:\\Users\\demo')).toBe('D:\\app-state');
+  });
 });

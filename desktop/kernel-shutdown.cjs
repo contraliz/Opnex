@@ -22,7 +22,7 @@ async function stopOwnedKernel({ ownsKernel, origin, fetchImpl = fetch, state, i
       });
     } catch (error) {
       if (isBackendExited()) return;
-      throw new Error(`The managed Pseudoharness kernel could not be reached: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`The managed Opnex kernel could not be reached: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     const snapshotBody = await responseJson(snapshot);
@@ -60,7 +60,7 @@ async function stopOwnedKernel({ ownsKernel, origin, fetchImpl = fetch, state, i
 
   if (isBackendExited()) return;
   if (!await waitForBackendExit(timeoutMs)) {
-    const error = new Error('The kernel accepted shutdown but has not exited yet. Keep Pseudoharness open and try Quit again after it finishes stopping.');
+    const error = new Error('The kernel accepted shutdown but has not exited yet. Keep Opnex open and try Quit again after it finishes stopping.');
     error.code = 'KERNEL_EXIT_TIMEOUT';
     throw error;
   }

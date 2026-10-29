@@ -35,7 +35,8 @@ async function encodeAttachments(files:FileList|null,existing:TaskAttachment[]):
   return Promise.all(selected.map(async file=>{const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return{name:file.name,type:file.type,size:file.size,data:btoa(binary)};}));
 }
 export default function App() {
-  const windowControls = window.pseudoharnessDesktop?.windowControls;
+  const desktopBridge = window.opnexDesktop || window.pseudoharnessDesktop;
+  const windowControls = desktopBridge?.windowControls;
   const [windowMaximized, setWindowMaximized] = useState(false);
   const [state, setState] = useState<AppState | null>(null);
   const [runtime, setRuntime] = useState<Runtime | null>(null);
@@ -79,7 +80,7 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(296);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   useEffect(()=>{
-    const frame=requestAnimationFrame(()=>window.dispatchEvent(new Event('pseudoharness:shell-layout')));
+    const frame=requestAnimationFrame(()=>window.dispatchEvent(new Event('opnex:shell-layout')));
     return()=>cancelAnimationFrame(frame);
   },[sidebarCollapsed,sidebarWidth]);
   const [retryingPassId, setRetryingPassId] = useState('');
@@ -108,7 +109,7 @@ export default function App() {
   const models = useMemo(() => runtime?.codex.models || [], [runtime]);
   const selectedProject = state?.projects?.find(project => project.id === state.selectedProjectId) || null;
   const applyKernelSnapshot=(value:any)=>{
-    if(value.protocolVersion!==undefined&&value.protocolVersion!==KERNEL_PROTOCOL_VERSION){setError('The client and local kernel use different protocol versions. Reload Pseudoharness to reconnect.');return false;}
+    if(value.protocolVersion!==undefined&&value.protocolVersion!==KERNEL_PROTOCOL_VERSION){setError('The client and local kernel use different protocol versions. Reload Opnex to reconnect.');return false;}
     const incomingId=typeof value.kernelInstanceId==='string'?value.kernelInstanceId:'';
     const incomingRevision=Number.isSafeInteger(value.cursor)?value.cursor:Number.isSafeInteger(value.state?.revision)?value.state.revision:undefined;
     const previous=kernelCursor.current;
@@ -155,8 +156,8 @@ export default function App() {
   const selectProject = async(id:string|null) => {setState(current=>current?{...current,selectedProjectId:id}:current);try{await queueContextSelection('/api/projects/select',{projectId:id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}catch(cause){setError(String(cause));await refresh();}};
   const toggleProjectExpanded = (id:string) => {const current=projectExpandedRef.current;const expanded=!current.includes(id);const next=expanded?[...current,id]:current.filter(value=>value!==id);projectExpandedRef.current=next;setState(value=>value?{...value,expandedProjectIds:next}:value);projectExpansionQueue.current=projectExpansionQueue.current.then(()=>api(`/api/projects/${id}/expanded`,{expanded})).then(()=>undefined).catch(cause=>setError(String(cause)));};
   const moveSessionToProject = async(taskId:string,projectId:string|null)=>{try{await api('/api/tasks/'+taskId+'/project',{projectId});setProjectMoveError('');await refresh();}catch(cause){setProjectMoveError(String(cause));}};
-  const dragSession = (event:React.DragEvent<HTMLDivElement>,task:Task)=>{event.dataTransfer.setData('application/x-pseudoharness-session-project',task.id);event.dataTransfer.effectAllowed='move';};
-  const dropSessionInto = (event:React.DragEvent<HTMLElement>,projectId:string|null)=>{const id=event.dataTransfer.getData('application/x-pseudoharness-session-project');if(!id)return;event.preventDefault();event.stopPropagation();setProjectDropTarget(null);void moveSessionToProject(id,projectId);};
+  const dragSession = (event:React.DragEvent<HTMLDivElement>,task:Task)=>{event.dataTransfer.setData('application/x-opnex-session-project',task.id);event.dataTransfer.effectAllowed='move';};
+  const dropSessionInto = (event:React.DragEvent<HTMLElement>,projectId:string|null)=>{const id=event.dataTransfer.getData('application/x-opnex-session-project');if(!id)return;event.preventDefault();event.stopPropagation();setProjectDropTarget(null);void moveSessionToProject(id,projectId);};
   const closeSettings = () => setSettingsOpen(false);
   const openSessionDialog = useCallback((kind: 'rename' | 'delete', taskId: string) => {
     setSessionDialog({ kind, taskId });
@@ -265,7 +266,7 @@ export default function App() {
     tabDropTargetRef.current = null;
     setTabDropTarget(null);
   };
-  const readDraggedTab = (dataTransfer: DataTransfer) => dataTransfer.getData('application/x-pseudoharness-workspace-tab') || dataTransfer.getData('application/x-pseudoharness-session-tab');
+  const readDraggedTab = (dataTransfer: DataTransfer) => dataTransfer.getData('application/x-opnex-workspace-tab') || dataTransfer.getData('application/x-opnex-session-tab');
   const tabUnderPointer = (event: React.DragEvent<HTMLElement>) => {
     const target = event.target as HTMLElement | null;
     const fromTarget = target?.closest<HTMLElement>('[data-workspace-tab]') || target?.closest<HTMLElement>('[data-session-tab]');
@@ -284,7 +285,7 @@ export default function App() {
   };
   const allowTabDrop = (event: React.DragEvent<HTMLElement>) => {
     const types = Array.from(event.dataTransfer.types);
-    if (types.includes('application/x-pseudoharness-workspace-tab') || types.includes('application/x-pseudoharness-session-tab')) {
+    if (types.includes('application/x-opnex-workspace-tab') || types.includes('application/x-opnex-session-tab')) {
       event.preventDefault();
       event.dataTransfer.dropEffect = 'move';
       const target = tabUnderPointer(event);
@@ -341,7 +342,7 @@ export default function App() {
     setFocusedPaneId(targetPaneId);
   };
   const dropPane = (event: React.DragEvent<HTMLElement>, paneId: string) => {
-    const mode = event.dataTransfer.getData('application/x-pseudoharness-workspace');
+    const mode = event.dataTransfer.getData('application/x-opnex-workspace');
     if (mode) {
       const kind = workspaceKindForMode(mode);
       if (kind) {
@@ -623,7 +624,7 @@ export default function App() {
       if(event.isComposing||event.keyCode===229||event.getModifierState('AltGraph'))return;
       if(event.key==='Escape'){if(projectEditor){event.preventDefault();setProjectEditor(null);return;}if(shortcutsOpen){event.preventDefault();setShortcutsOpen(false);return;}if(settingsOpen){event.preventDefault();closeSettings();return;}if(sessionDialogOpen){event.preventDefault();closeSessionDialog();return;}return;}
       if(projectEditor||shortcutsOpen||settingsOpen||sessionDialogOpen)return;
-      const isMac=window.pseudoharnessDesktop?.platform==='darwin'||navigator.platform.toLocaleLowerCase().includes('mac');const mod=isMac?event.metaKey:event.ctrlKey;if(!mod||isMac&&event.ctrlKey||!isMac&&event.metaKey)return;
+      const isMac=desktopBridge?.platform==='darwin'||navigator.platform.toLocaleLowerCase().includes('mac');const mod=isMac?event.metaKey:event.ctrlKey;if(!mod||isMac&&event.ctrlKey||!isMac&&event.metaKey)return;
       const key=event.key.toLowerCase();const allowedAlt=event.altKey&&key==='p';if(event.altKey&&!allowedAlt)return;const target=event.target instanceof HTMLElement?event.target:null;const formControl=!!target&&/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);const editable=!!target?.isContentEditable;const composerEditor=!!target?.closest('.cm-editor');
       if((formControl||editable)&&!composerEditor)return;
       if(composerEditor&&(key==='b'||event.shiftKey&&(event.key==='ArrowUp'||event.key==='ArrowDown')))return;
@@ -639,12 +640,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', onShortcut);
   }, [projectEditor,shortcutsOpen,settingsOpen,sessionDialogOpen,panes,focusedPaneId,state?.tasks]);
 
-  if (loading) return <div className="boot"><div className="brand-mark">P</div><span>Starting Pseudoharness</span></div>;
+  if (loading) return <div className="boot"><img className="boot-brand" src="/opnex-icon-grid-1_5-margin.svg" alt="Opnex"/><span>Starting Opnex</span></div>;
   const matchingTasks=(state?.tasks||[]).filter(task=>!query.trim()||task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0));
   const renderSessionRows=(tasks:Task[])=>tasks.map(task=><SessionRow key={task.id} task={task} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onMoveStart={dragSession} projects={state?.projects||[]} onMove={moveSessionToProject}/>);
   const orderedProjects=[...(state?.projects||[])].sort((a,b)=>Number(b.pinned)-Number(a.pinned)||a.name.localeCompare(b.name));
   const unclassifiedTasks=matchingTasks.filter(task=>!task.projectId||!(state?.projects||[]).some(project=>project.id===task.projectId));
-  const projectSessionSection=(project:Project)=>{const tasks=matchingTasks.filter(task=>task.projectId===project.id);const expanded=(state?.expandedProjectIds||[]).includes(project.id);const shown=showAllProjects[project.id]?tasks:tasks.slice(0,5);return <section className={`project-session-group ${expanded?'expanded':''} ${projectDropTarget===project.id?'is-drop-target':''}`} key={project.id} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))setProjectDropTarget(project.id);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,project.id)}><div className="project-group-heading"><button className="project-expand" aria-label={`${expanded?'Collapse':'Expand'} ${project.name}`} aria-expanded={expanded} onClick={()=>toggleProjectExpanded(project.id)}>{expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>{project.name}</span><small>{tasks.length}</small></button><button className="project-group-pin" aria-label={`${project.pinned?'Unpin':'Pin'} ${project.name}`} title={project.pinned?'Unpin project':'Pin project'} onClick={()=>void api(`/api/projects/${project.id}/pin`,{pinned:!project.pinned}).then(refresh).catch(cause=>setError(String(cause)))}><Pin size={12}/></button><button className="project-group-edit" aria-label={`Configure ${project.name}`} title={`Configure ${project.name}`} onClick={()=>openProjectEditor(project)}><Settings2 size={13}/></button></div>{expanded&&<div className="project-session-rows">{renderSessionRows(shown)}{tasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,[project.id]:!current[project.id]}))}>{showAllProjects[project.id]?'Show recent five':`Show all ${tasks.length} sessions`}</button>}{!tasks.length&&<span className="project-empty">Drop a session here</span>}</div>}</section>;};
+  const projectSessionSection=(project:Project)=>{const tasks=matchingTasks.filter(task=>task.projectId===project.id);const expanded=(state?.expandedProjectIds||[]).includes(project.id);const shown=showAllProjects[project.id]?tasks:tasks.slice(0,5);return <section className={`project-session-group ${expanded?'expanded':''} ${projectDropTarget===project.id?'is-drop-target':''}`} key={project.id} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget(project.id);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,project.id)}><div className="project-group-heading"><button className="project-expand" aria-label={`${expanded?'Collapse':'Expand'} ${project.name}`} aria-expanded={expanded} onClick={()=>toggleProjectExpanded(project.id)}>{expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>{project.name}</span><small>{tasks.length}</small></button><button className="project-group-pin" aria-label={`${project.pinned?'Unpin':'Pin'} ${project.name}`} title={project.pinned?'Unpin project':'Pin project'} onClick={()=>void api(`/api/projects/${project.id}/pin`,{pinned:!project.pinned}).then(refresh).catch(cause=>setError(String(cause)))}><Pin size={12}/></button><button className="project-group-edit" aria-label={`Configure ${project.name}`} title={`Configure ${project.name}`} onClick={()=>openProjectEditor(project)}><Settings2 size={13}/></button></div>{expanded&&<div className="project-session-rows">{renderSessionRows(shown)}{tasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,[project.id]:!current[project.id]}))}>{showAllProjects[project.id]?'Show recent five':`Show all ${tasks.length} sessions`}</button>}{!tasks.length&&<span className="project-empty">Drop a session here</span>}</div>}</section>;};
   const unclassifiedExpanded=(state?.expandedProjectIds??['unclassified']).includes('unclassified');
 
   const paneComposer = (tab: string, task: Task | null, paneId:string) => {
@@ -715,14 +716,14 @@ export default function App() {
             tabDragSuppressUntil.current={tab,until:Date.now()+600};
             clearTabDrop();
             setDraggedTab(tab);
-            event.dataTransfer.setData('application/x-pseudoharness-workspace-tab', tab);
-            event.dataTransfer.setData('application/x-pseudoharness-session-tab', tab);
+            event.dataTransfer.setData('application/x-opnex-workspace-tab', tab);
+            event.dataTransfer.setData('application/x-opnex-session-tab', tab);
             event.dataTransfer.effectAllowed = 'move';
           }}
           onDragEnd={() => finishTabDrag(tab)}
           onPointerCancel={()=>{clearTabDrop();setDraggedTab(null);setDropTarget(null);tabDragSuppressUntil.current=null;}}
           onDragOver={event => {
-            if (Array.from(event.dataTransfer.types).some(type => type === 'application/x-pseudoharness-workspace-tab' || type === 'application/x-pseudoharness-session-tab')) {
+            if (Array.from(event.dataTransfer.types).some(type => type === 'application/x-opnex-workspace-tab' || type === 'application/x-opnex-session-tab')) {
               event.preventDefault();
               tabDropTargetRef.current = tab;
               setTabDropTarget(tab);
@@ -760,7 +761,7 @@ export default function App() {
     const column = index * 2 + 1;
     const onDragOver = (event: React.DragEvent<HTMLElement>) => {
       const types = Array.from(event.dataTransfer.types);
-      if (types.includes('application/x-pseudoharness-workspace-tab') || types.includes('application/x-pseudoharness-session-tab')) {
+      if (types.includes('application/x-opnex-workspace-tab') || types.includes('application/x-opnex-session-tab')) {
         event.preventDefault();
         clearTabDrop();
         const rect = event.currentTarget.getBoundingClientRect();
@@ -820,19 +821,20 @@ export default function App() {
 
   return <div className={'app-shell ' + (windowControls ? 'has-custom-chrome ' : '') + (sidebarCollapsed ? 'sidebar-collapsed ' : '') + (sidebarResizing ? 'sidebar-resizing' : '')} style={{ '--sidebar-width': sidebarCollapsed ? '0px' : sidebarWidth + 'px' } as React.CSSProperties}>
     <nav className="activity-rail" aria-label="App navigation">
+      <img className="opnex-brand-mark" src="/opnex-icon-grid-1_5-margin.svg" alt="Opnex" />
       <button className="rail-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title="Toggle sidebar (Ctrl/Cmd+B)" aria-keyshortcuts="Control+B Meta+B" aria-expanded={!sidebarCollapsed} aria-controls="primary-sidebar" onClick={() => setSidebarCollapsed(value => !value)}><PanelLeft size={17} /></button>
       <button role="tab" aria-label="Sessions" onClick={() => {
         const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
         if (workspaceTabKind(pane.activeTab) !== 'session') activateSessionTab(pane.tabs.find(tab => workspaceTabKind(tab) === 'session') || 'new:0');
       }}><FileText size={17} /></button>
       <button role="tab" draggable aria-label="Browser" aria-current={panes.some(pane => workspaceTabKind(pane.activeTab) === 'browser') ? 'page' : undefined}
-        onDragStart={event => { event.dataTransfer.setData('application/x-pseudoharness-workspace', 'browser'); event.dataTransfer.effectAllowed = 'move'; }}
+        onDragStart={event => { event.dataTransfer.setData('application/x-opnex-workspace', 'browser'); event.dataTransfer.effectAllowed = 'move'; }}
         onClick={() => {
           const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
           openWorkspaceTab('browser', pane.id, pane.activeTab);
         }}><Globe size={17} /></button>
       <button role="tab" draggable aria-label="Git" title="Git (Ctrl/Cmd+Shift+G)" aria-keyshortcuts="Control+Shift+G Meta+Shift+G" aria-current={panes.some(pane => workspaceTabKind(pane.activeTab) === 'git') ? 'page' : undefined}
-        onDragStart={event => { event.dataTransfer.setData('application/x-pseudoharness-workspace', 'git'); event.dataTransfer.effectAllowed = 'move'; }}
+        onDragStart={event => { event.dataTransfer.setData('application/x-opnex-workspace', 'git'); event.dataTransfer.effectAllowed = 'move'; }}
         onClick={() => {
           const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
           openWorkspaceTab('git', pane.id, pane.activeTab);
@@ -850,10 +852,10 @@ export default function App() {
         <button className="icon-btn" aria-label="Search sessions" onClick={() => document.querySelector<HTMLInputElement>('.session-search')?.focus()}><Search size={15} /></button>
       </div>
       <input className="session-search" type="search" aria-label="Search sessions" placeholder="Filter sessions" value={query} onChange={event => setQuery(event.target.value)} />
-      <nav className="task-list project-task-list" aria-label="Sessions" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))event.preventDefault();}}>
+      <nav className="task-list project-task-list" aria-label="Sessions" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}}>
         {orderedProjects.filter(project=>project.pinned).map(projectSessionSection)}
         {orderedProjects.filter(project=>!project.pinned).map(projectSessionSection)}
-        <section className={`project-session-group unclassified-group ${projectDropTarget==='unclassified'?'is-drop-target':''}`} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))setProjectDropTarget('unclassified');}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-pseudoharness-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,null)}><div className="project-group-heading"><button className="project-expand" aria-label={`${unclassifiedExpanded?'Collapse':'Expand'} Unclassified`} aria-expanded={unclassifiedExpanded} onClick={()=>toggleProjectExpanded('unclassified')}>{unclassifiedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>Unclassified</span><small>{unclassifiedTasks.length}</small></button></div>{unclassifiedExpanded&&<div className="project-session-rows">{renderSessionRows(showAllProjects.unclassified?unclassifiedTasks:unclassifiedTasks.slice(0,5))}{unclassifiedTasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,unclassified:!current.unclassified}))}>{showAllProjects.unclassified?'Show recent five':`Show all ${unclassifiedTasks.length} sessions`}</button>}</div>}</section>
+        <section className={`project-session-group unclassified-group ${projectDropTarget==='unclassified'?'is-drop-target':''}`} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget('unclassified');}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,null)}><div className="project-group-heading"><button className="project-expand" aria-label={`${unclassifiedExpanded?'Collapse':'Expand'} Unclassified`} aria-expanded={unclassifiedExpanded} onClick={()=>toggleProjectExpanded('unclassified')}>{unclassifiedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>Unclassified</span><small>{unclassifiedTasks.length}</small></button></div>{unclassifiedExpanded&&<div className="project-session-rows">{renderSessionRows(showAllProjects.unclassified?unclassifiedTasks:unclassifiedTasks.slice(0,5))}{unclassifiedTasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,unclassified:!current.unclassified}))}>{showAllProjects.unclassified?'Show recent five':`Show all ${unclassifiedTasks.length} sessions`}</button>}</div>}</section>
       </nav>
       {projectMoveError&&<div className="project-move-error" role="alert">{projectMoveError}<button className="icon-btn" aria-label="Dismiss move error" onClick={()=>setProjectMoveError('')}><X size={13}/></button></div>}
       <div className="sidebar-bottom"><button className="project-mini" aria-label={selectedProject?.name||rootLabel(state?.settings.projectRoot)+' project settings'} onClick={()=>selectedProject?openProjectEditor(selectedProject):openSettings}><Folder size={15} /><span className="project-mini-text">{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span></button></div>
@@ -896,9 +898,9 @@ export default function App() {
         <header className="topbar">{panes.length===1&&renderPaneTabs(rootPane,0,false)}<div className="topbar-project-context"><label><span className="sr-only">Project for new sessions</span><select ref={projectSelectorRef} aria-label="Project for new sessions" title="Choose project (Ctrl/Cmd+Alt+P)" aria-keyshortcuts="Control+Alt+P Meta+Alt+P" value={state?.selectedProjectId||''} onChange={event=>void selectProject(event.currentTarget.value||null)}><option value="">Unclassified · legacy default</option>{(state?.projects||[]).map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label><span className={'topbar-project-connection '+(runtime?.codex.state==='connected'?'connected':'')}><i aria-hidden="true"/>{runtime?.codex.state==='connected'?'Connected':'Offline'}</span></div></header>
         <div className={'workspace-content mode-tasks ' + (panes.length > 1 ? 'has-session-panes has-side-session ' : '') + (draggedTab ? 'dragging-session' : '')}
           style={{ gridTemplateColumns: panes.flatMap((pane, index) => index < panes.length - 1 ? ['minmax(0,' + pane.weight + 'fr)', '5px'] : ['minmax(0,' + pane.weight + 'fr)']).join(' '), transition: 'grid-template-columns 180ms cubic-bezier(.2,.75,.25,1)' }}
-          onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('application/x-pseudoharness-workspace')) event.preventDefault(); }}
+          onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('application/x-opnex-workspace')) event.preventDefault(); }}
           onDrop={event => {
-            const mode = event.dataTransfer.getData('application/x-pseudoharness-workspace');
+            const mode = event.dataTransfer.getData('application/x-opnex-workspace');
             const kind = workspaceKindForMode(mode);
             if (kind) {
               event.preventDefault();
@@ -1107,7 +1109,7 @@ function RunReceipt({pass:p,taskId}:{pass:TaskPass;taskId:string}){
   const receipt=p.receipt;
   return <div className="run-receipt-content">
     <div className={`receipt-status ${receipt?.status||'unavailable'}`}>{receipt?.status||'No worker receipt'}</div>
-    {!receipt?<p className="receipt-unavailable">This pass has no Pseudoharness worker receipt to summarize.</p>:<>
+    {!receipt?<p className="receipt-unavailable">This pass has no Opnex worker receipt to summarize.</p>:<>
       <PassGitDiff key={`${taskId}:${p.id}`} taskId={taskId} passId={p.id}/>
       {p.receiptProvenance?<p className="receipt-provenance">Produced by {p.receiptProvenance.producerRole} · turn {p.receiptProvenance.turnId} · {p.receiptProvenance.artifactRefs.length} artifact references</p>:<p className="receipt-provenance">Producer and turn provenance is unavailable for this historical receipt.</p>}
       {(p.agentReceipts?.length||0)>1&&<section className="agent-receipt-history"><b>Receipts from artifact-producing turns</b>{p.agentReceipts!.map(record=><details key={`${record.producerRole}:${record.threadId}:${record.turnId}`}><summary>{record.producerRole} · turn {record.turnId} · {record.receipt.status}</summary><p>{record.receipt.result}</p><div><b>Artifact references</b>{list(record.artifactRefs)}</div><div><b>Knowledge and index updates</b>{list(record.receipt.knowledge.updated)}</div></details>)}</section>}

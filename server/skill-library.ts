@@ -27,7 +27,7 @@ function database(){
     opened.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;');
     restrictSkillDatabasePermissions(next);
     const version=Number(opened.prepare('PRAGMA user_version').get()?.user_version||0);
-    if(version>2)throw new Error(`The skills database is newer than this version of Pseudoharness can read (schema ${version}).`);
+    if(version>2)throw new Error(`The skills database is newer than this version of Opnex can read (schema ${version}).`);
     if(version===0){opened.exec(`BEGIN IMMEDIATE; CREATE TABLE skills(id TEXT PRIMARY KEY, current_revision TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)));
       CREATE TABLE skill_versions(skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE, revision TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, instructions TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(skill_id,revision));
       CREATE TABLE skill_files(skill_id TEXT NOT NULL, revision TEXT NOT NULL, relative_path TEXT NOT NULL, content BLOB NOT NULL, PRIMARY KEY(skill_id,revision,relative_path), FOREIGN KEY(skill_id,revision) REFERENCES skill_versions(skill_id,revision) ON DELETE CASCADE);
@@ -58,7 +58,7 @@ function normalizeFiles(files:unknown):{path:string;content:Buffer}[]{
 function versionInput(input:{name:unknown;description:unknown;instructions:unknown;source?:unknown;files?:unknown}){
   const name=validateText(input.name,'Skill name',120),description=typeof input.description==='string'?input.description.trim().slice(0,1000):'';
   const instructions=validateText(input.instructions,'Instructions',MAX_SKILL_INSTRUCTIONS);
-  const source=typeof input.source==='string'?input.source.trim().slice(0,500):'Created in Pseudoharness';
+  const source=typeof input.source==='string'?input.source.trim().slice(0,500):'Created in Opnex';
   const files=normalizeFiles(input.files);const material=JSON.stringify({name,description,instructions,source,files:files.map(file=>[file.path,createHash('sha256').update(file.content).digest('hex')])});
   const revision=createHash('sha256').update(material).digest('hex');return {name,description,instructions,source,files,revision};
 }

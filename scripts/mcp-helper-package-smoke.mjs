@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,16 +13,16 @@ const repositoryRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'
 async function findPackagedResources(root,depth=0){
   if(depth>6)return undefined;
   let entries;try{entries=await readdir(root,{withFileTypes:true});}catch{return undefined;}
-  if(path.basename(root).toLowerCase()==='resources'&&entries.some(entry=>entry.name==='pseudoharness-node'&&entry.isDirectory()))return root;
+  if(path.basename(root).toLowerCase()==='resources'&&entries.some(entry=>['opnex-node','pseudoharness-node'].includes(entry.name)&&entry.isDirectory()))return root;
   for(const entry of entries){if(entry.isDirectory()){const found=await findPackagedResources(path.join(root,entry.name),depth+1);if(found)return found;}}
 }
-const packagedResources=process.env.PSEUDOHARNESS_PACKAGED_RESOURCES||await findPackagedResources(path.join(repositoryRoot,'desktop-release'));
+const packagedResources=process.env.OPNEX_PACKAGED_RESOURCES||process.env.PSEUDOHARNESS_PACKAGED_RESOURCES||await findPackagedResources(path.join(repositoryRoot,'desktop-release'));
 if(!packagedResources)throw new Error('No packaged app Resources folder with the bundled helper runtime was found.');
 const resourcesPath=path.resolve(packagedResources);
-process.env.PSEUDOHARNESS_PACKAGED_APP='1';process.env.PSEUDOHARNESS_RESOURCES_PATH=resourcesPath;
+process.env.OPNEX_PACKAGED_APP='1';process.env.PSEUDOHARNESS_PACKAGED_APP='1';process.env.OPNEX_RESOURCES_PATH=resourcesPath;process.env.PSEUDOHARNESS_RESOURCES_PATH=resourcesPath;
 const temp=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-mcp-package-smoke-'));
 const data=path.join(temp,'app-data'),taskId='packaged-smoke-task',passId='packaged-smoke-pass';
-await mkdir(data,{recursive:true});await writeFile(path.join(data,'state.json'),JSON.stringify({tasks:[{id:taskId,currentPassId:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn',passes:[{id:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn'}]}]}));process.env.PSEUDOHARNESS_DATA_DIR=data;
+await mkdir(data,{recursive:true});await writeFile(path.join(data,'state.json'),JSON.stringify({tasks:[{id:taskId,currentPassId:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn',passes:[{id:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn'}]}]}));process.env.OPNEX_DATA_DIR=data;process.env.PSEUDOHARNESS_DATA_DIR=data;
 const inheritedEnv=Object.fromEntries(['PATH','SystemRoot','WINDIR','TEMP','TMP','HOME'].flatMap(key=>process.env[key]===undefined?[]:[[key,process.env[key]]]));
 
 async function connect(config,extraEnv={}){
@@ -36,7 +37,9 @@ let failures=0;
 try{
   const skill=await createSkill({name:'Packaged runtime smoke skill',description:'Temporary isolated packaging check',instructions:'This synthetic body exists only inside this temporary smoke-test profile.',source:'Packaged smoke fixture'});
   const config=skillLibraryMcpServerConfig({taskId,role:'direct'});
-  const target=`${process.platform}-${process.arch}`,packagedNode=path.join(resourcesPath,'pseudoharness-node',target,process.platform==='win32'?'node.exe':'node');
+  const target=`${process.platform}-${process.arch}`,runtimeRoot=['opnex-node','pseudoharness-node'].map(name=>path.join(resourcesPath,name,target,process.platform==='win32'?'node.exe':'node')).find(file=>existsSync(file));
+  if(!runtimeRoot)throw new Error(`No Opnex helper runtime was found for ${target}.`);
+  const packagedNode=runtimeRoot;
   if(config.command!==packagedNode)throw new Error(`The packaged skills server did not resolve to the staged ${target} Node executable.`);
   const {client}=await connect(config);
   try{

@@ -35,8 +35,8 @@ function asMessage(value:unknown):string|undefined{
 
 function statusFallback(status:number){
   if(status===400)return 'The request contains invalid or missing information. Check the values and try again.';
-  if(status===401||status===403)return 'The local request was rejected. Reload Pseudoharness and try again.';
-  if(status===404)return 'That local service route is unavailable. Restart Pseudoharness and reload the page.';
+  if(status===401||status===403)return 'The local request was rejected. Reload Opnex and try again.';
+  if(status===404)return 'That local service route is unavailable. Restart Opnex and reload the page.';
   if(status===409)return 'The request conflicts with the current task state. Refresh and try again.';
   if(status>=500)return 'The local service could not complete the request. Check the local server and retry.';
   return `The local service rejected the request (HTTP ${status}).`;
@@ -46,15 +46,15 @@ async function readJson(response:Response):Promise<any>{
   const contentType=response.headers.get('content-type')||'';
   const text=await response.text().catch(()=> '');
   const looksLikeHtml=contentType.toLowerCase().includes('text/html')||/^\s*<!doctype\s+html|^\s*<html\b/i.test(text);
-  if(looksLikeHtml)throw new ApiError(`The local server returned its web page instead of an API response (HTTP ${response.status}). Restart Pseudoharness and reload so its UI and backend versions match.`,response.status,'STALE_BACKEND');
+  if(looksLikeHtml)throw new ApiError(`The local server returned its web page instead of an API response (HTTP ${response.status}). Restart Opnex and reload so its UI and backend versions match.`,response.status,'STALE_BACKEND');
   if(!text.trim()){
     if(!response.ok)throw new ApiError(statusFallback(response.status),response.status,'HTTP_ERROR');
-    throw new ApiError(`The local service returned an empty response (HTTP ${response.status}). Restart Pseudoharness and try again.`,response.status,'EMPTY_RESPONSE');
+    throw new ApiError(`The local service returned an empty response (HTTP ${response.status}). Restart Opnex and try again.`,response.status,'EMPTY_RESPONSE');
   }
   let payload:unknown;
   try{payload=JSON.parse(text);}catch{
     if(!response.ok){const plain=text.trim();const isPlainText=contentType.toLowerCase().includes('text/plain');if(response.status<500&&isPlainText&&plain.length<300&&!['{','}','[',']'].some(character=>plain.includes(character)))throw new ApiError(plain,response.status,'HTTP_ERROR');throw new ApiError(statusFallback(response.status),response.status,'HTTP_ERROR');}
-    throw new ApiError(`The local service returned unreadable data (HTTP ${response.status}). Restart Pseudoharness and try again.`,response.status,'INVALID_RESPONSE');
+    throw new ApiError(`The local service returned unreadable data (HTTP ${response.status}). Restart Opnex and try again.`,response.status,'INVALID_RESPONSE');
   }
   if(!response.ok){
     const message=asMessage(payload);
@@ -67,7 +67,7 @@ async function localFetch(url:string,init?:RequestInit){
   const headers={...((init?.headers||{}) as Record<string,string>),'x-pseudoharness-protocol-version':String(KERNEL_PROTOCOL_VERSION)};
   const commandUrl=url.startsWith('/api/')&&!url.startsWith('/api/v1/')?`/api/v1/${url.slice('/api/'.length)}`:url;
   try{return await fetch(commandUrl,{...init,headers});}
-  catch(error){throw new ApiError('Could not reach the local Pseudoharness service. Check that it is running, then retry.',undefined,'LOCAL_SERVICE_UNREACHABLE',{cause:error});}
+  catch(error){throw new ApiError('Could not reach the local Opnex service. Check that it is running, then retry.',undefined,'LOCAL_SERVICE_UNREACHABLE',{cause:error});}
 }
 
 export async function bootstrap(){const r=await localFetch('/api/v1/snapshot');const j=await readJson(r);token=j.csrf;return j;}

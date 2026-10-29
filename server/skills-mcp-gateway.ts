@@ -6,8 +6,8 @@ import path from 'node:path';
 import { createSkill, loadSkillForAgent, readSkillFile, searchSkillDescriptions, updateSkill } from './skill-library.js';
 import { stateDirectory } from './paths.js';
 
-const taskId=process.env.PSEUDOHARNESS_SKILLS_TASK_ID||'';
-const role=process.env.PSEUDOHARNESS_SKILLS_ROLE||'';
+const taskId=process.env.OPNEX_SKILLS_TASK_ID||process.env.PSEUDOHARNESS_SKILLS_TASK_ID||'';
+const role=process.env.OPNEX_SKILLS_ROLE||process.env.PSEUDOHARNESS_SKILLS_ROLE||'';
 const writableRoles=['direct','simple','orchestrator','worker'];
 const activePhases=['direct_running','simple_running','planning','worker_running','reviewing'];
 async function currentPassContext(){
@@ -50,10 +50,10 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
       if(!writableRoles.includes(role))throw new Error('This role cannot save skills.');
       const rawId=typeof args.skill_id==='string'?args.skill_id:'';const skillId=rawId.replace(/^library:/,'');let skill;
       if(skillId){if(typeof args.expected_revision!=='string'||!/^[a-f0-9]{64}$/.test(args.expected_revision))throw new Error('Updating a saved skill requires the exact revision returned by skills_load.');skill=await updateSkill(skillId,{name:args.name,description:args.description,instructions:args.instructions},args.expected_revision,{taskId,passId,role});}
-      else{if(args.expected_revision!==undefined)throw new Error('A new saved skill cannot have an expected_revision.');skill=await createSkill({name:args.name,description:args.description,instructions:args.instructions,source:`Saved by Pseudoharness ${role} agent`},{taskId,passId,role});}
+      else{if(args.expected_revision!==undefined)throw new Error('A new saved skill cannot have an expected_revision.');skill=await createSkill({name:args.name,description:args.description,instructions:args.instructions,source:`Saved by Opnex ${role} agent`},{taskId,passId,role});}
       return {content:[{type:'text',text:JSON.stringify({id:`library:${skill.id}`,revision:skill.revision,name:skill.name,description:skill.description,source:skill.source,saved_at:new Date().toISOString()})}]};
     }
     throw new Error('Choose a supported skills tool.');
   }catch(error){return {isError:true,content:[{type:'text',text:error instanceof Error?error.message:'The saved skill request failed.'}]};}
 });
-void server.connect(new StdioServerTransport()).catch(error=>{process.stderr.write(`Pseudoharness skills MCP: ${error instanceof Error?error.message:'startup failed'}\n`);process.exitCode=1;});
+void server.connect(new StdioServerTransport()).catch(error=>{process.stderr.write(`Opnex skills MCP: ${error instanceof Error?error.message:'startup failed'}\n`);process.exitCode=1;});

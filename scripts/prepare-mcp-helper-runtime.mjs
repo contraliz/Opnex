@@ -13,7 +13,7 @@ export const NODE_RUNTIME_SHA256={
 };
 
 const repositoryRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const outputRoot=path.join(repositoryRoot,'node_modules','.cache','pseudoharness-mcp-runtime');
+const outputRoot=path.join(repositoryRoot,'node_modules','.cache','opnex-mcp-runtime');
 
 function run(command,args,cwd){return new Promise((resolve,reject)=>{
   const child=spawn(command,args,{cwd,windowsHide:true,stdio:'ignore'});
@@ -40,7 +40,7 @@ async function stageTarget(target){
   const nodePlatform=platform==='win32'?'win-x64':`darwin-${arch}`;
   const archiveName=`node-v${NODE_RUNTIME_VERSION}-${nodePlatform}${extension}`;
   const archiveRoot=`node-v${NODE_RUNTIME_VERSION}-${nodePlatform}`;
-  const temp=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-mcp-runtime-'));
+  const temp=await mkdtemp(path.join(os.tmpdir(),'opnex-mcp-runtime-'));
   try{
     const archive=path.join(temp,archiveName);
     await fetchArchive(archiveName,archive);

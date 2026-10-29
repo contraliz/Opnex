@@ -27,6 +27,6 @@ Treat automated measurements as leads. Examine their definitions and context bef
 
 Give a prioritized list of findings. For each, include the affected screen and environment, preconditions, reproducible steps when available, expected and actual behavior or appearance, impact, and direct screenshot or other evidence. Distinguish reproducible defects from subjective design suggestions and uncertain intent. Describe what was actually tested, what remains untested, and any missing capabilities or measurement limitations. Incorporate user corrections and check related areas for the same class of issue. Never promise that the audit finds every issue.
 
-## Pseudoharness audits
+## Opnex audits
 
-When the target is this repository, read [the Pseudoharness audit map](references/pseudoharness.md) before testing. It lists the actual workspace destinations, important overlays, and the hidden QA-MCP convention. Keep the general evidence and visual-inspection rules above in force.
+When the target is this repository, read [the Opnex audit map](references/opnex.md) before testing. It lists the actual workspace destinations, important overlays, and the hidden QA-MCP convention. Keep the general evidence and visual-inspection rules above in force.

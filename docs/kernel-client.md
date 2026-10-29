@@ -1,6 +1,6 @@
 # Headless kernel and client contract
 
-Pseudoharness runs as one local execution kernel per writable state directory. The kernel owns persisted projects, settings, sessions, approval requests, recruited worker teams, provider sessions, worktrees, receipts, and recovery. Browser pages and the Electron window are clients: closing or reconnecting a page does not schedule, resume, or cancel model work.
+Opnex runs as one local execution kernel per writable state directory. The kernel owns persisted projects, settings, sessions, approval requests, recruited worker teams, provider sessions, worktrees, receipts, and recovery. Browser pages and the Electron window are clients: closing or reconnecting a page does not schedule, resume, or cancel model work.
 
 ## Start a browser client without Electron
 
@@ -12,15 +12,15 @@ npm run build
 npm start
 ```
 
-Open <http://127.0.0.1:4174>. The server binds to `127.0.0.1`. `PORT` changes its port; `PSEUDOHARNESS_DATA_DIR` chooses another absolute local state directory. Each distinct state directory has one kernel owner. A second process pointed at an owned directory reports `STATE_DIRECTORY_IN_USE`; separate directories can run independent profiles. Do not expose the listener to a network.
+Open <http://127.0.0.1:4174>. The server binds to `127.0.0.1`. `PORT` changes its port; `OPNEX_DATA_DIR` chooses another absolute local state directory. The former `PSEUDOHARNESS_DATA_DIR` setting remains supported. Each distinct state directory has one kernel owner. A second process pointed at an owned directory reports `STATE_DIRECTORY_IN_USE`; separate directories can run independent profiles. Do not expose the listener to a network.
 
 The development web page uses the same local API boundary through Vite's proxy. Electron starts the same server as a headless utility process, then attaches the window to it. The kernel writes its loopback address and a startup proof to `kernel-instance.json`; Electron reads that record from the profile's app-data directory. When another shell is launched for the same profile, it attaches only after the challenge response matches the recorded kernel instance. A stale discovery record is ignored and replaced by the kernel that successfully claims the state lock.
 
-Closing the Electron window disconnects that client and leaves the shell and kernel available from the Pseudoharness system tray. The tray's **Open Pseudoharness** action restores the existing window or creates a new one without starting another kernel. **Quit** stops a kernel launched by that shell through the versioned shutdown API, waits for its managed process to exit, and then closes the shell; a shell attached to an independently running kernel only disconnects. The **Stop Pseudoharness kernel** Settings action remains an explicit, confirmed shutdown: it persists the paused state, terminates owned provider processes, closes all event streams, releases profile ownership, and disconnects every client. Process termination or restart also pauses active work; the kernel never silently replays a turn or emits a replacement completion wake.
+Closing the Electron window disconnects that client and leaves the shell and kernel available from the Opnex system tray. The tray's **Open Opnex** action restores the existing window or creates a new one without starting another kernel. **Quit** stops a kernel launched by that shell through the versioned shutdown API, waits for its managed process to exit, and then closes the shell; a shell attached to an independently running kernel only disconnects. The **Stop Opnex kernel** Settings action remains an explicit, confirmed shutdown: it persists the paused state, terminates owned provider processes, closes all event streams, releases profile ownership, and disconnects every client. Process termination or restart also pauses active work; the kernel never silently replays a turn or emits a replacement completion wake.
 
 ## Protocol version 1
 
-Every `/api/v1/*` request must supply `x-pseudoharness-protocol-version: 1`. EventSource clients pass `?protocol=1`, because the browser API does not let them set request headers. A missing, stale, or unsupported version returns HTTP 426 with `PROTOCOL_VERSION_MISMATCH`. The existing `/api/*` routes remain available for legacy clients. Version 1 maps supported commands onto those same server-side validators and handlers; it does not give the page authority to write state directly.
+Every `/api/v1/*` request must supply `x-pseudoharness-protocol-version: 1`. This versioned protocol header and the matching `X-Pseudoharness-Protocol-Version` response header retain their established names across the Opnex rebrand for client compatibility. EventSource clients pass `?protocol=1`, because the browser API does not let them set request headers. A missing, stale, or unsupported version returns HTTP 426 with `PROTOCOL_VERSION_MISMATCH`. The existing `/api/*` routes remain available for legacy clients. Version 1 maps supported commands onto those same server-side validators and handlers; it does not give the page authority to write state directly.
 
 The first client request is `GET /api/v1/snapshot`. It returns:
 

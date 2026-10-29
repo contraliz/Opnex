@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import packagedLauncher from '../desktop/packaged-launcher.cjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-desktop-smoke-'));
+const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'opnex-desktop-smoke-'));
 const profileDirectory = path.join(tempDirectory, 'source-profile');
 const packagedProfileDirectory = path.join(tempDirectory, 'packaged-profile');
 await Promise.all([mkdir(profileDirectory), mkdir(packagedProfileDirectory)]);
@@ -19,8 +19,8 @@ let verifiedCookie = false;
 const observedRequests = [];
 const testServer = createServer((request, response) => {
   observedRequests.push({ url: request.url, cookie: request.headers.cookie ?? '' });
-  if (request.url === '/seed') response.setHeader('Set-Cookie', 'pseudoharness-smoke=session-restored; HttpOnly; SameSite=Lax; Max-Age=3600; Path=/');
-  if (request.url === '/verify') verifiedCookie = /(?:^|;\s*)pseudoharness-smoke=session-restored(?:;|$)/.test(request.headers.cookie ?? '');
+  if (request.url === '/seed') response.setHeader('Set-Cookie', 'opnex-smoke=session-restored; HttpOnly; SameSite=Lax; Max-Age=3600; Path=/');
+  if (request.url === '/verify') verifiedCookie = /(?:^|;\s*)opnex-smoke=session-restored(?:;|$)/.test(request.headers.cookie ?? '');
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   response.end('<!doctype html><title>Browser session smoke</title><p>Profile persistence check</p>');
 });
@@ -30,9 +30,11 @@ async function launchSmoke(url, profile, launcher) {
     cwd: projectRoot,
     env: {
       ...process.env,
+      OPNEX_ELECTRON_DATA_DIR: profile,
       PSEUDOHARNESS_ELECTRON_DATA_DIR: profile,
+      OPNEX_SMOKE_TEST: '1',
       PSEUDOHARNESS_SMOKE_TEST: '1',
-      ...(url ? { PSEUDOHARNESS_SMOKE_URL: url } : {}),
+      ...(url ? { OPNEX_SMOKE_URL: url, PSEUDOHARNESS_SMOKE_URL: url } : {}),
     },
     stdio: 'inherit',
     windowsHide: true,
@@ -86,7 +88,7 @@ async function waitForKernelHealth(origin, child, timeoutMs = 20_000) {
     } catch {}
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  throw new Error('The isolated external Pseudoharness kernel did not become healthy.');
+  throw new Error('The isolated external Opnex kernel did not become healthy.');
 }
 
 async function stopExternalKernel(origin, child) {
@@ -114,15 +116,19 @@ async function verifyAttachedKernelQuit(profile) {
   await mkdir(dataDirectory, { recursive: true });
   const port = await unusedLoopbackPort();
   const origin = `http://127.0.0.1:${port}`;
-  const externalKernel = spawn(process.execPath, [path.join(projectRoot, 'bin', 'pseudoharness.js')], {
+  const startupSecret = randomBytes(32).toString('hex');
+  const externalKernel = spawn(process.execPath, [path.join(projectRoot, 'bin', 'opnex.js')], {
     cwd: projectRoot,
     env: {
       ...process.env,
       NODE_ENV: 'production',
       PORT: String(port),
+      OPNEX_DATA_DIR: dataDirectory,
       PSEUDOHARNESS_DATA_DIR: dataDirectory,
+      OPNEX_DESKTOP: '1',
       PSEUDOHARNESS_DESKTOP: '1',
-      PSEUDOHARNESS_STARTUP_SECRET: randomBytes(32).toString('hex'),
+      OPNEX_STARTUP_SECRET: startupSecret,
+      PSEUDOHARNESS_STARTUP_SECRET: startupSecret,
     },
     stdio: 'ignore',
     windowsHide: true,
@@ -158,7 +164,7 @@ try {
   const smokeOrigin = `http://127.0.0.1:${address.port}`;
   const launchers = [{ label: 'source', executable: process.execPath, args: [electronCli, appEntry], profile: profileDirectory }];
   if (process.argv.includes('--packaged')) {
-    const packagedDir = path.resolve(process.env.PSEUDOHARNESS_PACKAGED_DIR ?? path.join(projectRoot, 'desktop-release'));
+    const packagedDir = path.resolve(process.env.OPNEX_PACKAGED_DIR ?? process.env.PSEUDOHARNESS_PACKAGED_DIR ?? path.join(projectRoot, 'desktop-release'));
     const packaged = findPackagedLauncher(packagedDir);
     if (!packaged) throw new Error(`Packaged Electron application for ${process.platform}/${process.arch} was not found in ${packagedDir}.`);
     launchers.push({ label: 'packaged', ...packaged, profile: packagedProfileDirectory });
