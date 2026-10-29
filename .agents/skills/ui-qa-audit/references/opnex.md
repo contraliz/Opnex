@@ -1,6 +1,6 @@
-# Pseudoharness audit map
+# Opnex audit map
 
-Use this reference when auditing the Pseudoharness repository. Source paths below are repository-relative.
+Use this reference when auditing the Opnex repository. Source paths below are repository-relative.
 
 ## Visibility and fixtures
 
@@ -25,13 +25,13 @@ Additional dialog implementations live in `src/ui/App.tsx` and `src/ui/SettingsD
 
 ## Required emphasis
 
-1. **Settings from every workspace kind:** open it from Sessions, Browser, Git, and Skills. Inspect the complete scrollable contents and options, not only the top. Check at normal and short supported web sizes (for example 1440×900 and 900×620), page-specific overlay visibility and scroll preservation, field validation, Save persistence, Cancel discarding edits, close/Escape, focus containment and restoration, and nested DirectoryPicker stacking/Escape return. Open each ChoicePopover and verify Escape dismisses only that topmost menu while Settings stays open. Do not assume Cancel semantics: reopen and confirm the draft was discarded. Do not click “Stop Pseudoharness kernel” during an audit; it pauses active work and disconnects clients.
+1. **Settings from every workspace kind:** open it from Sessions, Browser, Git, and Skills. Inspect the complete scrollable contents and options, not only the top. Check at normal and short supported web sizes (for example 1440×900 and 900×620), page-specific overlay visibility and scroll preservation, field validation, Save persistence, Cancel discarding edits, close/Escape, focus containment and restoration, and nested DirectoryPicker stacking/Escape return. Open each ChoicePopover and verify Escape dismisses only that topmost menu while Settings stays open. Do not assume Cancel semantics: reopen and confirm the draft was discarded. Do not click “Stop Opnex kernel” during an audit; it pauses active work and disconnects clients.
    - Check custom control-label alignment as well as behavior: the AgentMem auto-setup checkbox should share a row with its title and keep help below it, while ordinary Settings field labels remain stacked. Inspect custom provider fieldsets and legends for themed borders, spacing, wrapping, and overflow.
 2. **Sessions/home:** include first-run and empty state, configured project state, multiple projects/sessions, navigation, composer actions and pickers, rich/long content, receipts both collapsed and expanded, project and session dialogs, keyboard shortcuts, and scroll at supported sizes. Use labeled safe fixtures for loading, errors, activity/tool, streaming, and approval states only when the state can be represented faithfully. Do not send a real provider turn to manufacture a state.
    - Inspect the project-to-session hierarchy in expanded and collapsed states. Count visible guide lines for named projects and Unclassified, with empty, one-child, and multi-child groups; check selected and hovered rows, child-text inset, and whether a collapsed group leaves an orphan guide.
 3. **Browser:** verify address and toolbar states with a local fixture. Report the Electron WebContents body, browser profiles, native menus, split layering, and desktop resizing as blocked when they cannot be seen through the hidden web stage; never infer them from a placeholder.
 4. **Git and Skills:** visit each Git subview, and exercise each safe Skills action. Separate isolated local Git behavior from authenticated/remote behavior. Treat OS file/folder import pickers as blocked when opening them would violate the hidden-window constraint.
 
-## Pseudoharness state-recovery boundary
+## Opnex state-recovery boundary
 
 `server/state.ts` pauses persisted in-flight tasks on startup, removes active turns and approval requests, and records interrupted approvals. A state file containing an active or approval fixture therefore does not prove those live UI states were rendered. If a safe faithful state cannot be maintained without a provider turn or app modification, document the specific limit and leave that row unverified.

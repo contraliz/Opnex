@@ -217,15 +217,15 @@ async function loadStateOnce(): Promise<State> {
   let source:string;
   try { source=await readFile(statePath, 'utf8'); }
   catch(error) {
-    if((error as NodeJS.ErrnoException).code!=='ENOENT')throw new Error(`Could not read Pseudoharness local state at ${statePath}. Check that the file is readable; its contents were left unchanged.`,{cause:error});
+    if((error as NodeJS.ErrnoException).code!=='ENOENT')throw new Error(`Could not read Opnex local state at ${statePath}. Check that the file is readable; its contents were left unchanged.`,{cause:error});
     loaded=true;
     return structuredClone(current);
   }
   let value:any;
   try { value=JSON.parse(source); }
-  catch(error) { throw new Error(`Pseudoharness local state at ${statePath} is malformed. Preserve or repair this file before restarting; it will not be replaced automatically.`,{cause:error}); }
+  catch(error) { throw new Error(`Opnex local state at ${statePath} is malformed. Preserve or repair this file before restarting; it will not be replaced automatically.`,{cause:error}); }
   if (!hasSupportedStoredShape(value)) {
-    throw new Error(`Pseudoharness local state at ${statePath} has an unsupported format. Preserve or restore a supported state file before restarting; it will not be replaced automatically.`);
+    throw new Error(`Opnex local state at ${statePath} has an unsupported format. Preserve or restore a supported state file before restarting; it will not be replaced automatically.`);
   }
   try {
     const containedRawReasoning=value.tasks.some((task:any)=>Array.isArray(task.reasoningRawContent)&&task.reasoningRawContent.length>0||Array.isArray(task.passes)&&task.passes.some((pass:any)=>Array.isArray(pass.reasoningRawContent)&&pass.reasoningRawContent.length>0));
@@ -240,7 +240,7 @@ async function loadStateOnce(): Promise<State> {
     if(containedRawReasoning||JSON.stringify(current)!==JSON.stringify(value)){const tmp=`${statePath}.${randomUUID()}.tmp`;await writeFile(tmp,JSON.stringify(current,null,2),{mode:0o600});await rename(tmp,statePath);}
   } catch(error) {
     current=structuredClone(defaults);
-    throw new Error(`Pseudoharness local state at ${statePath} could not be migrated safely. Preserve or repair this file before restarting; it will not be replaced automatically.`,{cause:error});
+    throw new Error(`Opnex local state at ${statePath} could not be migrated safely. Preserve or repair this file before restarting; it will not be replaced automatically.`,{cause:error});
   }
   loaded = true;
   return structuredClone(current);
@@ -298,7 +298,7 @@ export function upgradeStoredState(value:any):State{
     const wasActive=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(t.phase),recoveringRestart=wasActive||t.phase==='paused_after_restart';
     if(wasActive){
       task.phase='paused_after_restart';task.activeRole=undefined;task.activeTurnId=undefined;task.approvalRequests=[];
-      task.error=current?.agentContextVersion===1?'The process restarted during this turn. Resume explicitly after checking the Codex agent thread.':'This session used an older Codex thread and cannot be resumed with the current Pseudoharness role configuration. Send a follow-up to start a fresh pass.';
+      task.error=current?.agentContextVersion===1?'The process restarted during this turn. Resume explicitly after checking the Codex agent thread.':'This session used an older Codex thread and cannot be resumed with the current Opnex role configuration. Send a follow-up to start a fresh pass.';
     }
     if(recoveringRestart){
       for(const turn of task.reasoningTurns||[])if(turn.status==='streaming')turn.status='interrupted';

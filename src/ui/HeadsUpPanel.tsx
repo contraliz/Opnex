@@ -134,7 +134,7 @@ function codexThreadHref(threadId: string) {
 }
 
 function openCodexThread(threadId: string) {
-  const desktop = (window as Window & { pseudoharnessDesktop?: { openCodexThread?: (id: string) => Promise<boolean> } }).pseudoharnessDesktop;
+  const desktop = window.opnexDesktop || window.pseudoharnessDesktop;
   return desktop?.openCodexThread?.(threadId);
 }
 

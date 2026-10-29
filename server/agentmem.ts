@@ -72,7 +72,7 @@ export class AgentMem {
     this.env={...(configuredEnv as Record<string,string>)};
     for(const key of Object.keys(this.env))if(typeof process.env[key]==='string')this.env[key]=process.env[key]!;
     // Preserve explicit AgentMem data-root isolation even when set only on the
-    // Pseudoharness launcher rather than in Codex's MCP env table.
+    // Opnex launcher rather than in Codex's MCP env table.
     for(const key of ['AGENTMEM_DATA_DIR','AGENTMEM_MEMORY_ROOT'])if(typeof process.env[key]==='string')this.env[key]=process.env[key]!;
   }
   async modelMcpServerConfig(projectId:string,workspaceRoot:string,repositoryRoot=workspaceRoot){
@@ -92,13 +92,15 @@ export class AgentMem {
     if(setupMode==='ready'&&!repository)throw new Error('The selected AgentMem project has no repository index registered for this exact workspace.');
     const modulePath=fileURLToPath(import.meta.url),launch=resolveMcpHelperLaunch({modulePath,helperFile:modulePath.endsWith('.ts')?'agentmem-mcp-gateway.ts':'agentmem-mcp-gateway.js'});
     const setupTools=setupMode==='register'?['projects','repository_register']:setupMode==='repository'?['repository_register']:[];
-    return {command:launch.command,args:launch.args,cwd:launch.cwd,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes',...setupTools],env:{PSEUDOHARNESS_AGENTMEM_PROJECT_ID:projectId,PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:repository?.repository_id||'',PSEUDOHARNESS_AGENTMEM_SETUP_MODE:setupMode,PSEUDOHARNESS_AGENTMEM_COMMAND:this.command,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify(this.args),PSEUDOHARNESS_AGENTMEM_CONFIG_ENV:JSON.stringify(this.env)}};
+    const agentEnv={PROJECT_ID:projectId,PROJECT_ROOT:path.resolve(workspaceRoot),REPOSITORY_ID:repository?.repository_id||'',SETUP_MODE:setupMode,COMMAND:this.command,ARGS:JSON.stringify(this.args),CONFIG_ENV:JSON.stringify(this.env)};
+    const env=Object.fromEntries(Object.entries(agentEnv).flatMap(([key,value])=>[[`OPNEX_AGENTMEM_${key}`,value],[`PSEUDOHARNESS_AGENTMEM_${key}`,value]]));
+    return {command:launch.command,args:launch.args,cwd:launch.cwd,enabled:true,enabled_tools:['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','update_project_brief','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync','index_project','check_project_changes',...setupTools],env};
   }
   async setupMode(projectId:string,expectedRoot:string):Promise<AgentMemSetupMode>{
     if(!projectId||!expectedRoot)throw new Error('Choose an AgentMem project ID and project root.');
     const projects=await this.projectRows();const idMatch=projects.find(project=>project.id===projectId);const rootMatch=projects.find(project=>typeof project.sourceRoot==='string'&&rootKey(project.sourceRoot)===rootKey(expectedRoot));
     if(idMatch&&(!idMatch.sourceRoot||rootKey(idMatch.sourceRoot)!==rootKey(expectedRoot)))throw new Error('AgentMem project root does not match the selected project root.');
-    if(rootMatch&&rootMatch.id!==projectId)throw new Error(`This root is already registered as AgentMem project "${rootMatch.id}". Select that ID; Pseudoharness will not rebind it.`);
+    if(rootMatch&&rootMatch.id!==projectId)throw new Error(`This root is already registered as AgentMem project "${rootMatch.id}". Select that ID; Opnex will not rebind it.`);
     if(!idMatch)return 'register';
     const result:any=await this.call('repository_list',{project_id:projectId});const repositories=Array.isArray(result?.repositories)?result.repositories:[];
     return repositories.some((row:any)=>typeof row?.root==='string'&&rootKey(row.root)===rootKey(expectedRoot))?'ready':'repository';

@@ -20,7 +20,7 @@ export async function loadOwnedOrchestrationPolicy() {
       if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
     }
   }
-  throw new Error('Pseudoharness policy/CODEX_DELEGATION_POLICY.md is missing. Refusing to run an orchestrator turn without its owned policy.');
+  throw new Error('Opnex policy/CODEX_DELEGATION_POLICY.md is missing. Refusing to run an orchestrator turn without its owned policy.');
 }
 
 export function buildOrchestratorInput(policy:string,payload:string) {

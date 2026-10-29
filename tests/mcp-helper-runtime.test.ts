@@ -19,14 +19,20 @@ describe('packaged MCP helper runtime',()=>{
     expect(override.args[1]).toBe('tsx');
   });
   it('uses a bundled architecture-specific runtime and unpacked helper modules when packaged',()=>{
-    const available=new Set(['C:\\app\\resources\\pseudoharness-node\\win32-x64\\node.exe','C:\\app\\resources\\app.asar.unpacked\\dist-server\\skills-mcp-gateway.js']);
+    const available=new Set(['C:\\app\\resources\\opnex-node\\win32-x64\\node.exe','C:\\app\\resources\\app.asar.unpacked\\dist-server\\skills-mcp-gateway.js']);
     const launch=resolveMcpHelperLaunch({modulePath:'C:\\app\\resources\\app.asar\\dist-server\\skill-library-mcp-config.js',helperFile:'skills-mcp-gateway.js',platform:'win32',arch:'x64',packaged:true,resourcesPath:'C:\\app\\resources',fileExists:file=>available.has(file)});
-    expect(launch).toEqual({command:'C:\\app\\resources\\pseudoharness-node\\win32-x64\\node.exe',args:['C:\\app\\resources\\app.asar.unpacked\\dist-server\\skills-mcp-gateway.js'],cwd:'C:\\app\\resources\\app.asar.unpacked',packaged:true});
+    expect(launch).toEqual({command:'C:\\app\\resources\\opnex-node\\win32-x64\\node.exe',args:['C:\\app\\resources\\app.asar.unpacked\\dist-server\\skills-mcp-gateway.js'],cwd:'C:\\app\\resources\\app.asar.unpacked',packaged:true});
+  });
+  it('keeps reading the former bundled-runtime directory from existing installations',()=>{
+    const oldRuntime='C:\\app\\resources\\pseudoharness-node\\win32-x64\\node.exe';
+    const helper='C:\\app\\resources\\app.asar.unpacked\\dist-server\\skills-mcp-gateway.js';
+    const launch=resolveMcpHelperLaunch({modulePath:'C:\\app\\resources\\app.asar\\dist-server\\skill-library-mcp-config.js',helperFile:'skills-mcp-gateway.js',platform:'win32',arch:'x64',packaged:true,resourcesPath:'C:\\app\\resources',fileExists:file=>file===oldRuntime||file===helper});
+    expect(launch.command).toBe(oldRuntime);
   });
   it('selects the matching macOS Node executable for either packaged architecture',()=>{
     for(const arch of ['x64','arm64']){
-      const launch=resolveMcpHelperLaunch({modulePath:'/Applications/Pseudoharness.app/Contents/Resources/app.asar/dist-server/agentmem.js',helperFile:'agentmem-mcp-gateway.js',platform:'darwin',arch,packaged:true,resourcesPath:'/Applications/Pseudoharness.app/Contents/Resources',fileExists:()=>true});
-      expect(launch.command).toBe(`/Applications/Pseudoharness.app/Contents/Resources/pseudoharness-node/darwin-${arch}/node`);expect(launch.args[0]).toBe('/Applications/Pseudoharness.app/Contents/Resources/app.asar.unpacked/dist-server/agentmem-mcp-gateway.js');
+      const launch=resolveMcpHelperLaunch({modulePath:'/Applications/Opnex.app/Contents/Resources/app.asar/dist-server/agentmem.js',helperFile:'agentmem-mcp-gateway.js',platform:'darwin',arch,packaged:true,resourcesPath:'/Applications/Opnex.app/Contents/Resources',fileExists:()=>true});
+      expect(launch.command).toBe(`/Applications/Opnex.app/Contents/Resources/opnex-node/darwin-${arch}/node`);expect(launch.args[0]).toBe('/Applications/Opnex.app/Contents/Resources/app.asar.unpacked/dist-server/agentmem-mcp-gateway.js');
     }
   });
   it('keeps the skills MCP config free of Electron RunAsNode and preserves explicit tool configuration',()=>{

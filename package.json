@@ -1,9 +1,10 @@
 {
-  "name": "pseudoharness",
+  "name": "opnex",
   "version": "1.1.2",
   "description": "Local Codex delegation harness with app-server and AgentMem integrations",
   "main": "dist-server/index.js",
   "bin": {
+    "opnex": "bin/opnex.js",
     "pseudoharness": "bin/pseudoharness.js"
   },
   "files": [
@@ -33,7 +34,7 @@
     "desktop:interaction-smoke": "npm run build && node scripts/electron-annotation-smoke.mjs",
     "desktop:package": "npm run build && node scripts/prepare-mcp-helper-runtime.mjs && electron-builder --publish never && node scripts/desktop-smoke.mjs --packaged && node scripts/mcp-helper-package-smoke.mjs",
     "build": "node scripts/clean-build.mjs && tsc -p tsconfig.server.json && vite build",
-    "start": "node bin/pseudoharness.js",
+    "start": "node bin/opnex.js",
     "package": "npm run build && node scripts/package.mjs",
     "lint": "oxlint --deny-warnings --ignore-path .eslintignore src server tests scripts bin vite.config.ts",
     "test": "vitest run",

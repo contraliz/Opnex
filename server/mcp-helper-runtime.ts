@@ -25,16 +25,17 @@ function moduleSpecifier(value:string,platform:string){
 /** Resolve the standalone helper runtime without relying on Electron's RunAsNode fuse. */
 export function resolveMcpHelperLaunch(options:McpHelperRuntimeOptions):McpHelperLaunch{
   const platform=options.platform||process.platform,arch=options.arch||process.arch,paths=platformPath(platform);
-  const packaged=options.packaged??process.env.PSEUDOHARNESS_PACKAGED_APP==='1';
+  const packaged=options.packaged??(process.env.OPNEX_PACKAGED_APP??process.env.PSEUDOHARNESS_PACKAGED_APP)==='1';
   const moduleDirectory=paths.dirname(options.modulePath);
   if(packaged){
-    const resourcesPath=options.resourcesPath||process.env.PSEUDOHARNESS_RESOURCES_PATH;
-    if(!resourcesPath)throw new Error(`Pseudoharness could not locate its installed app resources for ${options.helperFile}. Restart the app after reinstalling it.`);
-    const runtimeDirectory=paths.join(resourcesPath,'pseudoharness-node',`${platform}-${arch}`);
-    const executable=paths.join(runtimeDirectory,platform==='win32'?'node.exe':'node');
-    if(!(options.fileExists||existsSync)(executable))throw new Error(`The bundled Node runtime is missing for ${platform}/${arch} (${executable}). Reinstall Pseudoharness to restore its local helper runtime.`);
+    const resourcesPath=options.resourcesPath||process.env.OPNEX_RESOURCES_PATH||process.env.PSEUDOHARNESS_RESOURCES_PATH;
+    if(!resourcesPath)throw new Error(`Opnex could not locate its installed app resources for ${options.helperFile}. Restart the app after reinstalling it.`);
+    const runtimeNames=['opnex-node','pseudoharness-node'];
+    const executableName=platform==='win32'?'node.exe':'node';
+    const executable=runtimeNames.map(name=>paths.join(resourcesPath,name,`${platform}-${arch}`,executableName)).find(file=>(options.fileExists||existsSync)(file))||paths.join(resourcesPath,'opnex-node',`${platform}-${arch}`,executableName);
+    if(!(options.fileExists||existsSync)(executable))throw new Error(`The bundled Node runtime is missing for ${platform}/${arch} (${executable}). Reinstall Opnex to restore its local helper runtime.`);
     const helper=paths.join(resourcesPath,'app.asar.unpacked','dist-server',options.helperFile);
-    if(!(options.fileExists||existsSync)(helper))throw new Error(`The packaged ${options.helperFile} helper is missing (${helper}). Reinstall Pseudoharness to restore its local tools.`);
+    if(!(options.fileExists||existsSync)(helper))throw new Error(`The packaged ${options.helperFile} helper is missing (${helper}). Reinstall Opnex to restore its local tools.`);
     return {command:executable,args:[helper],cwd:paths.join(resourcesPath,'app.asar.unpacked'),packaged:true};
   }
 

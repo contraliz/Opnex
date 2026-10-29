@@ -3,6 +3,7 @@ dist/
 dist-server/
 *.log
 .env*
+.opnex/
 .pseudoharness/
 tmp/
 playwright-report/

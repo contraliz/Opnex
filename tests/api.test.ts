@@ -48,6 +48,6 @@ describe('browser API session recovery',()=>{
   it('explains when a stale server serves the app page for an unavailable API route',async()=>{
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('<!doctype html><html></html>',{status:200,headers:{'content-type':'text/html; charset=utf-8'}})));
     vi.resetModules();const api=await import('../src/ui/api.js');
-    await expect(api.api('/api/directories?path=D%3A%5Cworkspace')).rejects.toThrow('Restart Pseudoharness and reload so its UI and backend versions match.');
+    await expect(api.api('/api/directories?path=D%3A%5Cworkspace')).rejects.toThrow('Restart Opnex and reload so its UI and backend versions match.');
   });
 });

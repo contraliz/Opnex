@@ -37,9 +37,9 @@ describe('desktop system tray', () => {
     const { controller } = trayHarness();
     const tray = controller.start();
     expect(controller.start()).toBe(tray);
-    expect(tray.tooltip).toBe('Pseudoharness');
+    expect(tray.tooltip).toBe('Opnex');
     expect(tray.image).toBe('brand-mark');
-    expect(controller.getMenu().map((item: any) => item.label ?? item.type)).toEqual(['Open Pseudoharness', 'separator', 'Quit']);
+    expect(controller.getMenu().map((item: any) => item.label ?? item.type)).toEqual(['Open Opnex', 'separator', 'Quit']);
   });
 
   it('routes tray clicks and Open to the same window restore callback', () => {

@@ -6,13 +6,14 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { AGENTMEM_MODEL_TOOLS, scopeAgentMemToolArgs, scopeAgentMemToolSchema } from './agentmem-mcp-scope.js';
 import path from 'node:path';
 
-const projectId=process.env.PSEUDOHARNESS_AGENTMEM_PROJECT_ID||'';
-const projectRoot=process.env.PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT||'';
-let repositoryId=process.env.PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID||'';
-const setupMode=(process.env.PSEUDOHARNESS_AGENTMEM_SETUP_MODE||'ready') as 'register'|'repository'|'ready';
-const command=process.env.PSEUDOHARNESS_AGENTMEM_COMMAND||'';
-const args=JSON.parse(process.env.PSEUDOHARNESS_AGENTMEM_ARGS||'[]') as string[];
-const configuredEnvValue=JSON.parse(process.env.PSEUDOHARNESS_AGENTMEM_CONFIG_ENV||'{}') as unknown;
+const appEnv=(name:string)=>process.env[`OPNEX_AGENTMEM_${name}`]??process.env[`PSEUDOHARNESS_AGENTMEM_${name}`];
+const projectId=appEnv('PROJECT_ID')||'';
+const projectRoot=appEnv('PROJECT_ROOT')||'';
+let repositoryId=appEnv('REPOSITORY_ID')||'';
+const setupMode=(appEnv('SETUP_MODE')||'ready') as 'register'|'repository'|'ready';
+const command=appEnv('COMMAND')||'';
+const args=JSON.parse(appEnv('ARGS')||'[]') as string[];
+const configuredEnvValue=JSON.parse(appEnv('CONFIG_ENV')||'{}') as unknown;
 async function main(){
   if(!projectId||!projectRoot||!command||!Array.isArray(args)||!args.every((value:unknown)=>typeof value==='string')||!configuredEnvValue||typeof configuredEnvValue!=='object'||Array.isArray(configuredEnvValue)||Object.entries(configuredEnvValue).some(([key,value])=>!key.trim()||typeof value!=='string')||setupMode==='ready'&&!repositoryId)throw new Error('The selected AgentMem project/repository binding is incomplete.');
   const client=new Client({name:'pseudoharness-agentmem-scope',version:'1.0.0'});
@@ -41,7 +42,7 @@ async function main(){
   server.setRequestHandler(ListToolsRequestSchema,async request=>{
     const response=await client.listTools(request.params?.cursor?{cursor:request.params.cursor}:{});
     const setupTools=new Set(setupMode==='register'?['projects','repository_register']:setupMode==='repository'?['repository_register']:[]);
-    return {...response,tools:response.tools.filter(tool=>AGENTMEM_MODEL_TOOLS.has(tool.name)&&(tool.name!=='projects'&&tool.name!=='repository_register'||setupTools.has(tool.name))).map(tool=>({...tool,inputSchema:scopeAgentMemToolSchema(tool.inputSchema,tool.name,setupMode),...(tool.name==='projects'?{description:'Initialize the AgentMem KB selected in Pseudoharness Settings. Only action=register is allowed; Pseudoharness supplies the exact selected project ID and root and rejects existing ID/root bindings.'}:{}),...(tool.name==='repository_register'?{description:'Register the repository index for the exact project root selected in Pseudoharness Settings. The project ID and root are supplied and cannot be changed.'}:{})}))};
+    return {...response,tools:response.tools.filter(tool=>AGENTMEM_MODEL_TOOLS.has(tool.name)&&(tool.name!=='projects'&&tool.name!=='repository_register'||setupTools.has(tool.name))).map(tool=>({...tool,inputSchema:scopeAgentMemToolSchema(tool.inputSchema,tool.name,setupMode),...(tool.name==='projects'?{description:'Initialize the AgentMem KB selected in Opnex Settings. Only action=register is allowed; Opnex supplies the exact selected project ID and root and rejects existing ID/root bindings.'}:{}),...(tool.name==='repository_register'?{description:'Register the repository index for the exact project root selected in Opnex Settings. The project ID and root are supplied and cannot be changed.'}:{})}))};
   });
   server.setRequestHandler(CallToolRequestSchema,async request=>{
     const name=request.params?.name||'';
@@ -62,4 +63,4 @@ async function main(){
   process.on('SIGTERM',()=>void close());process.on('SIGINT',()=>void close());
 }
 
-void main().catch(error=>{process.stderr.write(`Pseudoharness AgentMem MCP gateway: ${error instanceof Error?error.message:'startup failed'}\n`);process.exitCode=1;});
+void main().catch(error=>{process.stderr.write(`Opnex AgentMem MCP gateway: ${error instanceof Error?error.message:'startup failed'}\n`);process.exitCode=1;});

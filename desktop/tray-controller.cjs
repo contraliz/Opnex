@@ -10,9 +10,9 @@ function createTrayController({ Tray, Menu, image, openWindow, quitApp }) {
     if (tray && !tray.isDestroyed()) return tray;
 
     tray = new Tray(image);
-    tray.setToolTip('Pseudoharness');
+    tray.setToolTip('Opnex');
     menu = Menu.buildFromTemplate([
-      { label: 'Open Pseudoharness', click: open },
+      { label: 'Open Opnex', click: open },
       { type: 'separator' },
       { label: 'Quit', click: () => { void quitApp(); } },
     ]);

@@ -1,11 +1,11 @@
 ---
-name: pseudoharness-release
-description: Build and distribute Pseudoharness desktop releases for Windows and macOS when the user explicitly requests a specific release or asset replacement.
+name: opnex-release
+description: Build and distribute Opnex desktop releases for Windows and macOS when the user explicitly requests a specific release or asset replacement.
 ---
 
-# Pseudoharness desktop release
+# Opnex desktop release
 
-Use this skill for a specifically authorized Pseudoharness Windows/macOS release build or replacement of existing release downloads. A code fix, CI completion, prior release request, or loading this skill does not authorize a build, tag, publication, or asset replacement. Confirm the user named the intended version and whether this is a new release or replacement before any release mutation.
+Use this skill for a specifically authorized Opnex Windows/macOS release build or replacement of existing release downloads. A code fix, CI completion, prior release request, or loading this skill does not authorize a build, tag, publication, or asset replacement. Confirm the user named the intended version and whether this is a new release or replacement before any release mutation.
 
 Read the current [`release.yml`](../../../.github/workflows/release.yml), [`electron-builder.yml`](../../../electron-builder.yml), [`package.json`](../../../package.json), Windows installer smoke, and matching `docs/releases/vX.Y.Z.md` before acting. Treat the workflow as publishing: tag pushes trigger it automatically; `workflow_dispatch` requires an existing target tag and its publish job overwrites matching release assets after package jobs pass. Do not dispatch or push a `v*` tag unless the user explicitly authorized that particular release. The project decision `DEC-0006` records this boundary.
 

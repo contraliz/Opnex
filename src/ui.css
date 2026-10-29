@@ -87,7 +87,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   transition: opacity .12s ease-out, transform .13s cubic-bezier(.2,.75,.25,1), padding .13s ease-out, border-color .13s ease-out;
 }
 .brand-row { flex: 0 0 38px; display: flex; align-items: center; gap: 10px; padding: 0 8px; margin-bottom: 14px; }
-.brand-mark { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--raised); color: var(--text); font-size: 17px; font-weight: 600; }
+.boot-brand { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 8px; }
 .brand-name { color: var(--text); font-size: 17px; font-weight: 620; letter-spacing: -.35px; }
 .sidebar-collapse { margin-left: auto; }
 .new-task { min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 13px; border: 1px solid var(--accent); border-radius: var(--radius-control); background: var(--accent); color: #191623; text-align: left; cursor: pointer; font-size: 13px; font-weight: 580; transition: background .15s ease; }
@@ -859,6 +859,7 @@ body { min-width: 640px; min-height: 520px; }
 .activity-rail button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
 .activity-rail button:hover,.activity-rail button[aria-current="page"] { background: #303030; color: var(--text); }
 .activity-rail .rail-toggle { margin-bottom: 4px; }
+.opnex-brand-mark { width: 28px; height: 28px; flex: 0 0 28px; margin: 2px 0 5px; border-radius: 6px; }
 .rail-spacer { flex: 1; }
 .sidebar { grid-column: 2; grid-row: 1; padding: 7px 8px 8px; border-right: 1px solid var(--border); background: #262626; }
 .sidebar-tools { height: 31px; flex: 0 0 31px; display: flex; align-items: center; gap: 1px; margin-bottom: 3px; }

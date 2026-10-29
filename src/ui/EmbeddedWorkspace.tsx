@@ -10,7 +10,7 @@ const DEFAULT_BROWSER_URL='https://www.google.com/';
 type Props={mode:'browser'|'github';task:Task|null;placement:'full'|'side';docked:boolean;workspaceId?:string;active?:boolean;sidebarCollapsed?:boolean;sidebarWidth?:number;initialUrl?:string;projectRoot?:string;onOpenBrowserTab?:(url?:string)=>void;onSummary?:()=>void;onAnnotation?:(annotation:BrowserAnnotation,comment:string)=>void};
 
 export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active=true,sidebarCollapsed=false,sidebarWidth=0,initialUrl,projectRoot,onOpenBrowserTab,onAnnotation}:Props){
-  const bridge=window.pseudoharnessDesktop?.browser;
+  const bridge=(window.opnexDesktop||window.pseudoharnessDesktop)?.browser;
   const hostId=workspaceId||`browser:${task?.id||'legacy'}`;
   const [page,setPage]=useState<EmbeddedBrowserTab|null>(null);
   const [address,setAddress]=useState(initialUrl||DEFAULT_BROWSER_URL);
@@ -119,13 +119,13 @@ export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active
     if(rootRef.current)observer?.observe(rootRef.current);
     if(hostRef.current)observer?.observe(hostRef.current);
     window.addEventListener('resize',schedule);
-    window.addEventListener('pseudoharness:shell-layout',schedule);
+    window.addEventListener('opnex:shell-layout',schedule);
     shell?.addEventListener('transitionrun',onShellTransition);
     shell?.addEventListener('transitionend',onShellTransition);
     shell?.addEventListener('transitioncancel',onShellTransition);
     rootRef.current?.addEventListener('transitionend',schedule);
     rootRef.current?.addEventListener('animationend',schedule);
-    return()=>{observer?.disconnect();window.removeEventListener('resize',schedule);window.removeEventListener('pseudoharness:shell-layout',schedule);shell?.removeEventListener('transitionrun',onShellTransition);shell?.removeEventListener('transitionend',onShellTransition);shell?.removeEventListener('transitioncancel',onShellTransition);rootRef.current?.removeEventListener('transitionend',schedule);rootRef.current?.removeEventListener('animationend',schedule);cancelAnimationFrame(raf);if(settleTimer)window.clearTimeout(settleTimer);};
+    return()=>{observer?.disconnect();window.removeEventListener('resize',schedule);window.removeEventListener('opnex:shell-layout',schedule);shell?.removeEventListener('transitionrun',onShellTransition);shell?.removeEventListener('transitionend',onShellTransition);shell?.removeEventListener('transitioncancel',onShellTransition);rootRef.current?.removeEventListener('transitionend',schedule);rootRef.current?.removeEventListener('animationend',schedule);cancelAnimationFrame(raf);if(settleTimer)window.clearTimeout(settleTimer);};
   },[active,annotation,bridge,docked,hostId,mode,placement,sidebarCollapsed,sidebarWidth]);
 
   const navigate=async(value=address)=>{

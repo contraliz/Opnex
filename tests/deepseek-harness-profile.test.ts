@@ -124,6 +124,7 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     expect(patch).not.toContain('D:\\programming\\pseudoharness\\server\\gateway.ts');
     const envName = `PSEUDOHARNESS_DSH_MCP_CONFIG_${createHash('sha256').update('agentmem').digest('hex').slice(0, 16).toUpperCase()}`;
     const runtimeConfig = JSON.parse(profile.launchEnvironment[envName] ?? '{}');
+    expect(profile.launchEnvironment[envName.replace(/^PSEUDOHARNESS_/, 'OPNEX_')]).toBe(profile.launchEnvironment[envName]);
     expect(runtimeConfig).toMatchObject({
       serverName: 'agentmem',
       transport: 'stdio',
@@ -198,7 +199,7 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     await expect(prepareDeepSeekHarnessTaskProfile({
       ...base,
       mcpServers: [{ ...server('agentmem'), serverName: 'external' as 'agentmem' }],
-    })).rejects.toThrow('Only the existing scoped AgentMem and Pseudoharness Skills');
+    })).rejects.toThrow('Only the existing scoped AgentMem and Opnex Skills');
     await expect(prepareDeepSeekHarnessTaskProfile({ ...base, mcpServers: [] })).rejects.toThrow('At least one scoped');
     await expect(prepareDeepSeekHarnessTaskProfile({ ...base, provider: 'deepseek-official', mcpServers: [server('pseudoharness_skills')] }))
       .rejects.toThrow('Only the verified OpenCode Go provider route');

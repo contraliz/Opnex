@@ -30,7 +30,7 @@ export type DeepSeekHarnessTaskProfileOptions = {
   /** A task/role-owned profile identity, for example `pseudoharness-<id>-worker`. */
   profileName: string;
   launch: DeepSeekHarnessSdkLaunch;
-  /** Only Pseudoharness-owned scoped stdio gateways are admitted. */
+  /** Only Opnex-owned scoped stdio gateways are admitted. */
   mcpServers: readonly DeepSeekHarnessMcpServerConfig[];
   spawnProcess?: typeof spawn;
 };
@@ -143,6 +143,7 @@ export async function prepareDeepSeekHarnessTaskProfile(
       throw new DeepSeekHarnessError('configuration', `The ${server.serverName} MCP gateway configuration exceeds the safe per-process limit.`);
     }
     launchEnvironment[variable] = serialized;
+    launchEnvironment[opnexEnvironmentNameFor(server.serverName)] = serialized;
   }
 
   mkdirSync(dshHome, { recursive: true, mode: 0o700 });
@@ -188,12 +189,12 @@ function isPathWithin(root: string, candidate: string) {
 
 function validateMcpServers(servers: readonly DeepSeekHarnessMcpServerConfig[]) {
   if (!Array.isArray(servers) || servers.length === 0) {
-    throw new DeepSeekHarnessError('configuration', 'At least one scoped Pseudoharness MCP gateway must be configured for this DSH profile.');
+    throw new DeepSeekHarnessError('configuration', 'At least one scoped Opnex MCP gateway must be configured for this DSH profile.');
   }
   const seen = new Set<string>();
   for (const server of servers) {
     if (!server || !ALLOWED_MCP_SERVER_NAMES.has(server.serverName)) {
-      throw new DeepSeekHarnessError('configuration', 'Only the existing scoped AgentMem and Pseudoharness Skills MCP gateways can be registered in this task profile.');
+      throw new DeepSeekHarnessError('configuration', 'Only the existing scoped AgentMem and Opnex Skills MCP gateways can be registered in this task profile.');
     }
     if (seen.has(server.serverName)) {
       throw new DeepSeekHarnessError('configuration', `The ${server.serverName} MCP gateway is listed more than once.`);
@@ -217,6 +218,10 @@ function validateMcpServers(servers: readonly DeepSeekHarnessMcpServerConfig[]) 
 function environmentNameFor(serverName: string) {
   const suffix = createHash('sha256').update(serverName).digest('hex').slice(0, 16).toUpperCase();
   return `PSEUDOHARNESS_DSH_MCP_CONFIG_${suffix}`;
+}
+
+function opnexEnvironmentNameFor(serverName: string) {
+  return environmentNameFor(serverName).replace(/^PSEUDOHARNESS_/, 'OPNEX_');
 }
 
 function yamlString(value: string) {

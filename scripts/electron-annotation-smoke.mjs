@@ -8,9 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const temp=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-electron-annotation-'));
-const repo=path.join(temp,'fixture-repo');const data=path.join(temp,'electron-data');const output=process.env.PSEUDOHARNESS_ELECTRON_OUTPUT?path.resolve(process.env.PSEUDOHARNESS_ELECTRON_OUTPUT):await mkdtemp(path.join(os.tmpdir(),'pseudoharness-electron-annotation-evidence-'));
-const keepAppOpen=process.env.PSEUDOHARNESS_ELECTRON_KEEP_OPEN==='1';
+const temp=await mkdtemp(path.join(os.tmpdir(),'opnex-electron-annotation-'));
+const repo=path.join(temp,'fixture-repo');const data=path.join(temp,'electron-data');const output=process.env.OPNEX_ELECTRON_OUTPUT||process.env.PSEUDOHARNESS_ELECTRON_OUTPUT?path.resolve(process.env.OPNEX_ELECTRON_OUTPUT||process.env.PSEUDOHARNESS_ELECTRON_OUTPUT):await mkdtemp(path.join(os.tmpdir(),'opnex-electron-annotation-evidence-'));
+const keepAppOpen=(process.env.OPNEX_ELECTRON_KEEP_OPEN||process.env.PSEUDOHARNESS_ELECTRON_KEEP_OPEN)==='1';
 let emulatedViewport=false;
 await mkdir(repo,{recursive:true});await mkdir(path.join(data,'local-state'),{recursive:true});await mkdir(output,{recursive:true});
 const git=(args)=>execFileSync('git',args,{cwd:repo,stdio:'ignore',windowsHide:true});
@@ -22,7 +22,7 @@ async function resizeApp(client,width,height){
   const emulate=async()=>{await client.send('Emulation.setDeviceMetricsOverride',{width:targetWidth,height:targetHeight,deviceScaleFactor:1,mobile:false});emulatedViewport=true;await waitFor(()=>evalValue(client,'innerWidth'),value=>value===targetWidth,`${width}×${height}px emulated Electron viewport`,3000);};
   if(emulatedViewport&&width<1440){await emulate();await sleep(100);return;}
   if(emulatedViewport){await client.send('Emulation.clearDeviceMetricsOverride');emulatedViewport=false;}
-  const before=await evalValue(client,'innerWidth');await evalValue(client,`window.pseudoharnessDesktop.interactionTest.resize({width:${width},height:${height}})`);
+  const before=await evalValue(client,`window.opnexDesktop.interactionTest.resize({width:${width},height:${height}})`);
   if(Math.abs(before-targetWidth)<3){await sleep(100);return;}
   let prior=before,stable=0,changed=false;
   try{await waitFor(()=>evalValue(client,'innerWidth'),value=>{if(value!==before)changed=true;if(value===prior)stable++;else stable=0;prior=value;return changed&&stable>=2;},`${width}×${height}px Electron viewport`,2000);}
@@ -175,7 +175,7 @@ try{
   fixtureServer=createServer((_request,response)=>{response.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});response.end('<!doctype html><meta name="viewport" content="width=device-width"><title>Local annotation fixture</title><main><h1 id="annotation-target">Fixture target heading</h1><p>Harmless local fixture text for annotation testing.</p><button id="fixture-button">Fixture click target</button></main><style>body{font:22px sans-serif;background:#fff;color:#111;margin:48px}main{max-width:820px;margin:auto;padding:24px;border:1px solid #aaa}button{padding:12px}</style>');});
   await new Promise((resolve,reject)=>{fixtureServer.once('error',reject);fixtureServer.listen(0,'127.0.0.1',resolve);});const fixtureUrl=`http://127.0.0.1:${fixtureServer.address().port}/page`;
   const portServer=net.createServer();await new Promise((resolve,reject)=>{portServer.once('error',reject);portServer.listen(0,'127.0.0.1',resolve);});const cdpPort=portServer.address().port;await new Promise(resolve=>portServer.close(resolve));
-  const electronExecutable=path.join(root,'node_modules','electron','dist',process.platform==='win32'?'electron.exe':'electron');child=spawn(electronExecutable,[path.join(root,'desktop','main.cjs')],{cwd:root,env:{...process.env,PSEUDOHARNESS_ELECTRON_DATA_DIR:data,PSEUDOHARNESS_INTERACTION_TEST:'1',PSEUDOHARNESS_CDP_PORT:String(cdpPort)},stdio:keepAppOpen?'ignore':'inherit',windowsHide:true});if(keepAppOpen)child.unref();
+  const electronExecutable=path.join(root,'node_modules','electron','dist',process.platform==='win32'?'electron.exe':'electron');child=spawn(electronExecutable,[path.join(root,'desktop','main.cjs')],{cwd:root,env:{...process.env,OPNEX_ELECTRON_DATA_DIR:data,PSEUDOHARNESS_ELECTRON_DATA_DIR:data,OPNEX_INTERACTION_TEST:'1',PSEUDOHARNESS_INTERACTION_TEST:'1',OPNEX_CDP_PORT:String(cdpPort),PSEUDOHARNESS_CDP_PORT:String(cdpPort)},stdio:keepAppOpen?'ignore':'inherit',windowsHide:true});if(keepAppOpen)child.unref();
   const targets=async()=>{const response=await fetch(`http://127.0.0.1:${cdpPort}/json/list`);return response.ok?response.json():[];};
   const list=await waitFor(targets,value=>value.some(target=>target.type==='page'&&target.url.startsWith('http://127.0.0.1:')),'Electron DevTools page');
   const appTarget=list.find(target=>target.type==='page'&&!target.url.includes(`/page`));appClient=await cdp(appTarget);await appClient.send('Runtime.enable');await appClient.send('Page.bringToFront');

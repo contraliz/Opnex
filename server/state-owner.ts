@@ -5,7 +5,7 @@ import { stateDirectory } from './paths.js';
 
 export type StateDirectoryOwner={release:()=>void};
 export class StateDirectoryInUseError extends Error{
-  constructor(directory:string,cause:unknown){super(`The Pseudoharness state directory at ${directory} is already in use by another process. Close that instance or choose a different PSEUDOHARNESS_DATA_DIR.`,{cause});this.name='StateDirectoryInUseError';}
+  constructor(directory:string,cause:unknown){super(`The Opnex state directory at ${directory} is already in use by another process. Close that instance or choose a different OPNEX_DATA_DIR (PSEUDOHARNESS_DATA_DIR remains supported).`,{cause});this.name='StateDirectoryInUseError';}
 }
 
 /** Keep an OS-managed SQLite write lock for the lifetime of the state owner.
@@ -25,7 +25,7 @@ export function acquireStateDirectoryOwner(directory=stateDirectory()):StateDire
     if(code==='SQLITE_BUSY'||code==='SQLITE_LOCKED'||/database is (?:locked|busy)/i.test(error instanceof Error?error.message:'')){
       throw new StateDirectoryInUseError(directory,error);
     }
-    throw new Error(`Could not claim the Pseudoharness state directory at ${directory}. Check that it is writable and restart.`,{cause:error});
+    throw new Error(`Could not claim the Opnex state directory at ${directory}. Check that it is writable and restart.`,{cause:error});
   }
   let released=false;
   return {release(){if(released)return;released=true;try{db.exec('ROLLBACK');}finally{db.close();}}};

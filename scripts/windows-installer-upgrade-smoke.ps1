@@ -2,9 +2,9 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $package = Get-Content (Join-Path $repoRoot 'package.json') -Raw | ConvertFrom-Json
-$newSetup = Join-Path $repoRoot "desktop-release\Pseudoharness Setup $($package.version).exe"
+$newSetup = Join-Path $repoRoot "desktop-release\Opnex Setup $($package.version).exe"
 $runnerTemp = (Resolve-Path $env:RUNNER_TEMP).Path
-$testRoot = Join-Path $runnerTemp "pseudoharness-installer-smoke-$([guid]::NewGuid().ToString('N'))"
+$testRoot = Join-Path $runnerTemp "opnex-installer-smoke-$([guid]::NewGuid().ToString('N'))"
 
 if ($testRoot -match '\s') {
   throw "RUNNER_TEMP must not contain spaces for NSIS /D path testing: $runnerTemp"
@@ -18,7 +18,8 @@ if ($LASTEXITCODE -ne 0) {
   throw 'The packaged Windows elevation manifest check failed.'
 }
 
-$oldSetup = $env:PSEUDOHARNESS_LEGACY_SETUP
+$oldSetup = $env:OPNEX_LEGACY_SETUP
+if (-not $oldSetup) { $oldSetup = $env:PSEUDOHARNESS_LEGACY_SETUP }
 if (-not $oldSetup -or -not (Test-Path -LiteralPath $oldSetup -PathType Leaf)) {
   throw 'The original v1.1.1 per-user installer was not rebuilt from the immutable v1.1.1 tag.'
 }
@@ -56,7 +57,7 @@ function Invoke-Setup([string] $setupPath, [string] $installPath) {
 }
 
 function Invoke-Uninstall([string] $installPath) {
-  $uninstaller = Join-Path $installPath 'Uninstall Pseudoharness.exe'
+  $uninstaller = Join-Path $installPath 'Uninstall Opnex.exe'
   if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
     throw "Uninstaller was not created at $uninstaller"
   }
@@ -73,7 +74,7 @@ function Assert-Uninstalled([string] $installPath, [string] $displayName, [strin
       # NSIS cannot remove its currently running uninstaller; the task-owned test root is cleaned afterward.
       $remainingFiles = @(
         Get-ChildItem -LiteralPath $installPath -Force -ErrorAction SilentlyContinue |
-          Where-Object Name -ne 'Uninstall Pseudoharness.exe'
+          Where-Object Name -ne 'Uninstall Opnex.exe'
       )
     }
     $remainingEntries = @(Get-UninstallEntries $registryRoot $displayName)
@@ -98,12 +99,12 @@ try {
 
   # A clean current-version install must register per-machine and can be removed without deleting user data.
   Invoke-Setup $newSetup $cleanInstall
-  if (-not (Test-Path -LiteralPath (Join-Path $cleanInstall 'Pseudoharness.exe') -PathType Leaf)) {
+  if (-not (Test-Path -LiteralPath (Join-Path $cleanInstall 'Opnex.exe') -PathType Leaf)) {
     throw 'Clean install did not place the application in the requested isolated directory.'
   }
-  Get-UninstallEntry 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall' "Pseudoharness $($package.version)" | Out-Null
+  Get-UninstallEntry 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall' "Opnex $($package.version)" | Out-Null
   Invoke-Uninstall $cleanInstall
-  Assert-Uninstalled $cleanInstall "Pseudoharness $($package.version)" 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+  Assert-Uninstalled $cleanInstall "Opnex $($package.version)" 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 
   # Install the last release in per-user mode, then upgrade in place to per-machine.
   Invoke-Setup $oldSetup $legacyInstall
@@ -116,10 +117,10 @@ try {
   }
 
   Invoke-Setup $newSetup $upgradeInstall
-  if (-not (Test-Path -LiteralPath (Join-Path $upgradeInstall 'Pseudoharness.exe') -PathType Leaf)) {
+  if (-not (Test-Path -LiteralPath (Join-Path $upgradeInstall 'Opnex.exe') -PathType Leaf)) {
     throw 'Upgrade did not place the application in the requested per-machine directory.'
   }
-  Get-UninstallEntry 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall' "Pseudoharness $($package.version)" | Out-Null
+  Get-UninstallEntry 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall' "Opnex $($package.version)" | Out-Null
   if (@(Get-UninstallEntries 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' 'Pseudoharness 1.1.1').Count -ne 0) {
     throw 'Upgrade left the old per-user uninstall entry behind.'
   }
@@ -128,7 +129,7 @@ try {
   }
 
   Invoke-Uninstall $upgradeInstall
-  Assert-Uninstalled $upgradeInstall "Pseudoharness $($package.version)" 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+  Assert-Uninstalled $upgradeInstall "Opnex $($package.version)" 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
   if ((Get-Content -LiteralPath $skillsDatabase -Raw) -ne $markerText -or (Get-Content -LiteralPath $marker -Raw) -ne $markerText) {
     throw 'Uninstall changed or removed saved-skill/app-data test markers.'
   }
@@ -145,7 +146,7 @@ finally {
   $resolvedRunnerTemp = [System.IO.Path]::GetFullPath($runnerTemp).TrimEnd('\') + '\'
   $resolvedTestRoot = [System.IO.Path]::GetFullPath($testRoot)
   if (-not $resolvedTestRoot.StartsWith($resolvedRunnerTemp, [StringComparison]::OrdinalIgnoreCase) -or
-      -not (Split-Path -Leaf $resolvedTestRoot).StartsWith('pseudoharness-installer-smoke-', [StringComparison]::Ordinal)) {
+      -not (Split-Path -Leaf $resolvedTestRoot).StartsWith('opnex-installer-smoke-', [StringComparison]::Ordinal)) {
     throw "Refusing to remove a test path outside this run's temporary directory: $resolvedTestRoot"
   }
   if (Test-Path -LiteralPath $resolvedTestRoot) {

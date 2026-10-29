@@ -1,5 +1,6 @@
 appId: org.pseudoharness.desktop
-productName: Pseudoharness
+# Keep the stable application ID for existing-installation upgrade compatibility.
+productName: Opnex
 directories:
   output: desktop-release
 files:
@@ -37,8 +38,8 @@ asarUnpack:
   - node_modules/json-schema-traverse/**
   - node_modules/require-from-string/**
 extraResources:
-  - from: node_modules/.cache/pseudoharness-mcp-runtime
-    to: pseudoharness-node
+  - from: node_modules/.cache/opnex-mcp-runtime
+    to: opnex-node
     filter:
       - '**/*'
 extraMetadata:
@@ -46,11 +47,13 @@ extraMetadata:
 electronFuses:
   runAsNode: false
 win:
+  icon: desktop/opnex.ico
   target:
     - target: nsis
       arch:
         - x64
 mac:
+  icon: desktop/opnex.icns
   target:
     - target: zip
       arch:

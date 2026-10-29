@@ -254,9 +254,9 @@ export function resolveDeepSeekHarnessPermission(request: DeepSeekHarnessPermiss
     });
   }
   const policyMessage = request.approvalPolicy === 'on-request'
-    ? 'DeepSeek Harness cannot run this writable task under the selected on-request policy because Pseudoharness cannot answer its SDK approval requests. The task was not started and its permissions were not changed. Use a provider with a Pseudoharness approval route, or explicitly select the existing Full Access policy only when this task permits unrestricted runtime access and does not require enforced filesystem confinement.'
+    ? 'DeepSeek Harness cannot run this writable task under the selected on-request policy because Opnex cannot answer its SDK approval requests. The task was not started and its permissions were not changed. Use a provider with a Opnex approval route, or explicitly select the existing Full Access policy only when this task permits unrestricted runtime access and does not require enforced filesystem confinement.'
     : request.approvalPolicy === 'untrusted'
-      ? 'DeepSeek Harness cannot run this writable task under the selected untrusted policy because the installed SDK has no matching Pseudoharness approval response. The task was not started and its permissions were not changed. Use a provider with a matching policy, or explicitly select the existing Full Access policy only when this task permits unrestricted runtime access and does not require enforced filesystem confinement.'
+      ? 'DeepSeek Harness cannot run this writable task under the selected untrusted policy because the installed SDK has no matching Opnex approval response. The task was not started and its permissions were not changed. Use a provider with a matching policy, or explicitly select the existing Full Access policy only when this task permits unrestricted runtime access and does not require enforced filesystem confinement.'
       : 'DeepSeek Harness has no native preset that matches the selected never policy without changing the task’s effective sandbox. The task was not started and its permissions were not changed. Use a provider with a lossless policy mapping.';
   throw new DeepSeekHarnessError(
     'unsupported-capability',
@@ -410,7 +410,7 @@ async function terminateProcessTree(child: ChildProcessWithoutNullStreams) {
 
 /**
  * One task-owned process and one persisted session against the installed DSH SDK
- * JSON-RPC profile. It deliberately does not implement Pseudoharness lifecycle,
+ * JSON-RPC profile. It deliberately does not implement Opnex lifecycle,
  * approval routing, assignment validation, or filesystem confinement.
  */
 export class DeepSeekHarnessSdkRuntime extends EventEmitter {
@@ -588,7 +588,7 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
       if (typeof message.method === 'string' && message.id !== undefined) {
         // The installed SDK currently sends no client-directed calls. Reject unknown
         // requests instead of leaving an approval or capability request unresolved.
-        this.respondServerError(message.id, -32601, 'Pseudoharness does not implement this DeepSeek Harness SDK request.');
+        this.respondServerError(message.id, -32601, 'Opnex does not implement this DeepSeek Harness SDK request.');
         this.emit('unsupportedServerRequest', { method: message.method });
         continue;
       }
@@ -602,7 +602,7 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
             message: 'DeepSeek Harness requested an approval, but its SDK has no approval response method. The worker cannot continue under this policy.',
           });
           // Fail closed. Do not leave the worker waiting for an approval in a UI
-          // Pseudoharness cannot answer, and never treat an approval as granted.
+          // Opnex cannot answer, and never treat an approval as granted.
           void this.cancel();
         }
         continue;

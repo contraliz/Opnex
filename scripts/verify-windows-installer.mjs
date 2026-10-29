@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import * as PE from 'pe-library';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const outputDir = path.resolve(process.argv[2] ?? process.env.PSEUDOHARNESS_PACKAGED_DIR ?? path.join(repoRoot, 'desktop-release'));
+const outputDir = path.resolve(process.argv[2] ?? process.env.OPNEX_PACKAGED_DIR ?? process.env.PSEUDOHARNESS_PACKAGED_DIR ?? path.join(repoRoot, 'desktop-release'));
 const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-const setupPath = path.join(outputDir, `Pseudoharness Setup ${packageJson.version}.exe`);
-const appPath = path.join(outputDir, 'win-unpacked', 'Pseudoharness.exe');
+const setupPath = path.join(outputDir, `Opnex Setup ${packageJson.version}.exe`);
+const appPath = path.join(outputDir, 'win-unpacked', 'Opnex.exe');
 
 function readManifest(executablePath) {
   const executable = PE.NtExecutable.from(fs.readFileSync(executablePath), { ignoreCert: true });
@@ -26,7 +26,7 @@ if (!/<requestedExecutionLevel\b[^>]*\blevel=["']requireAdministrator["']/.test(
 
 const appManifest = readManifest(appPath);
 if (!/<requestedExecutionLevel\b[^>]*\blevel=["']asInvoker["']/.test(appManifest)) {
-  throw new Error('The installed Pseudoharness app must run as the signed-in user.');
+  throw new Error('The installed Opnex app must run as the signed-in user.');
 }
 
-console.log('Windows setup requests administrator permission; Pseudoharness itself runs as the signed-in user.');
+console.log('Windows setup requests administrator permission; Opnex itself runs as the signed-in user.');
