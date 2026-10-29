@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, readFile, readdir, realpath, rmdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -394,6 +394,82 @@ export async function removeRecruitmentWorktree(options: {
   if (!recorded) throw new RecruitmentGitError('Cleanup target is not listed in the task ownership record.');
   const safePath = await validateOwnedLocation(projectRoot, taskRoot, target, branch);
   await git(projectRoot, ['worktree', 'remove', '--force', safePath]);
+}
+
+type ListedWorktree={path:string;branch?:string};
+function listedWorktrees(output:string):ListedWorktree[]{
+  const rows:ListedWorktree[]=[];let current:ListedWorktree|undefined;
+  for(const line of output.split(/\r?\n/)){
+    if(line.startsWith('worktree ')){if(current)rows.push(current);current={path:path.resolve(line.slice('worktree '.length))};}
+    else if(current&&line.startsWith('branch '))current.branch=line.slice('branch '.length);
+  }
+  if(current)rows.push(current);return rows;
+}
+const samePath=(left:string,right:string)=>path.resolve(left).toLowerCase()===path.resolve(right).toLowerCase();
+
+/** Retires only an unsealed, pristine recruitment whose complete manifest still matches preparation. */
+export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecruitmentWorktrees,expectedTaskParent:string):Promise<string[]>{
+  const preserve=(reason:string)=>[`Prepared recruitment cleanup was skipped or incomplete: ${reason}. Its remaining worktrees, branches, and ownership record were preserved.`];
+  let projectRoot:string,taskRoot:string,taskParent:string,manifest:TaskManifest,manifestText:string;
+  const targets=[{branch:prepared.integration.branch,worktreeRoot:prepared.integration.worktreeRoot},...prepared.workers.map(row=>({branch:row.branch,worktreeRoot:row.worktreeRoot}))];
+  try{
+    projectRoot=(await validateRecruitmentProject(prepared.canonicalRoot,'HEAD')).projectRoot;
+    taskParent=await realpath(expectedTaskParent);
+    const taskEntry=await lstat(prepared.taskRoot);if(!taskEntry.isDirectory()||taskEntry.isSymbolicLink())return preserve('the task root is not a regular owned directory');
+    taskRoot=await realpath(prepared.taskRoot);
+    if(!samePath(taskRoot,prepared.taskRoot)||!samePath(path.dirname(taskRoot),taskParent)||!samePath(path.dirname(path.resolve(prepared.taskRoot)),taskParent))return preserve('the task root escaped its exact generated parent');
+    if(!/^[0-9a-f]{40,64}$/i.test(prepared.baseCommit))return preserve('the preparation result has no full initial commit SHA');
+    manifestText=await readFile(path.join(taskRoot,TASK_MANIFEST),'utf8');manifest=await readTaskManifest(projectRoot,taskRoot);
+    const expectedWorkers=[...prepared.workers].sort((a,b)=>a.workerId.localeCompare(b.workerId));const recordedWorkers=[...manifest.workers].sort((a,b)=>a.workerId.localeCompare(b.workerId));
+    if(!samePath(manifest.canonicalRoot,projectRoot)||manifest.integration.branch!==prepared.integration.branch||!samePath(manifest.integration.worktreeRoot,prepared.integration.worktreeRoot)||recordedWorkers.length!==expectedWorkers.length||recordedWorkers.some((row,index)=>row.workerId!==expectedWorkers[index].workerId||row.branch!==expectedWorkers[index].branch||!samePath(row.worktreeRoot,expectedWorkers[index].worktreeRoot)))return preserve('the task ownership manifest no longer exactly matches this preparation');
+    if(new Set(targets.map(row=>row.branch)).size!==targets.length||new Set(targets.map(row=>path.resolve(row.worktreeRoot).toLowerCase())).size!==targets.length)return preserve('the prepared branches or worktree paths are not unique');
+    for(const row of targets){validateRecruitmentBranch(row.branch);if(!samePath(path.dirname(row.worktreeRoot),taskRoot))return preserve(`worktree ${row.worktreeRoot} is not a direct child of its task root`);}
+    const worktrees=listedWorktrees((await git(projectRoot,['worktree','list','--porcelain'])).stdout);
+    for(const row of targets){
+      const safePath=await validateOwnedLocation(projectRoot,taskRoot,row.worktreeRoot,row.branch);
+      if(!samePath(safePath,row.worktreeRoot))return preserve(`worktree ${row.worktreeRoot} resolved to a different path`);
+      if((await commitAt(safePath)).toLowerCase()!==prepared.baseCommit.toLowerCase())return preserve(`worktree ${row.worktreeRoot} no longer points at its initial commit`);
+      if((await git(safePath,['status','--porcelain','--untracked-files=all'])).stdout)return preserve(`worktree ${row.worktreeRoot} contains uncommitted or untracked changes`);
+      const branchHead=(await git(projectRoot,['rev-parse','--verify','--quiet','--end-of-options',`refs/heads/${row.branch}^{commit}`])).stdout;
+      if(branchHead.toLowerCase()!==prepared.baseCommit.toLowerCase())return preserve(`branch ${row.branch} no longer points at its initial commit`);
+      const attachments=worktrees.filter(item=>item.branch===`refs/heads/${row.branch}`);
+      if(attachments.length!==1||!samePath(attachments[0].path,safePath))return preserve(`branch ${row.branch} is checked out at an unexpected worktree`);
+    }
+  }catch(error){return preserve(error instanceof Error?error.message:String(error));}
+
+  for(const row of [{branch:prepared.integration.branch,worktreeRoot:prepared.integration.worktreeRoot},...prepared.workers.map(worker=>({branch:worker.branch,worktreeRoot:worker.worktreeRoot}))]){
+    try{await git(projectRoot,['worktree','remove',row.worktreeRoot]);}
+    catch(error){return preserve(`worktree ${row.worktreeRoot} could not be safely removed (${error instanceof Error?error.message:String(error)})`);}
+  }
+  const afterRemoval=listedWorktrees((await git(projectRoot,['worktree','list','--porcelain'])).stdout),generatedBranches=[prepared.integration.branch,...prepared.workers.map(worker=>worker.branch)];
+  if(afterRemoval.some(item=>targets.some(row=>samePath(item.path,row.worktreeRoot))))return preserve('a generated worktree remains registered after removal');
+  if(afterRemoval.some(item=>item.branch&&generatedBranches.includes(item.branch.slice('refs/heads/'.length))))return preserve('a generated branch remains checked out after worktree removal');
+
+  try{
+    const latestTaskRoot=await realpath(prepared.taskRoot);if(!samePath(latestTaskRoot,taskRoot)||!samePath(path.dirname(latestTaskRoot),taskParent))return preserve('the task root changed before generated branch cleanup');
+    const currentText=await readFile(path.join(taskRoot,TASK_MANIFEST),'utf8'),currentManifest=await readTaskManifest(projectRoot,taskRoot);
+    if(currentText!==manifestText||JSON.stringify(currentManifest)!==JSON.stringify(manifest))return preserve('the ownership manifest changed before generated branch cleanup');
+    const entries=await readdir(taskRoot);if(entries.length!==1||entries[0]!==TASK_MANIFEST)return preserve('the task root contains unexpected files or directories');
+    const manifestInfo=await lstat(path.join(taskRoot,TASK_MANIFEST));if(!manifestInfo.isFile()||manifestInfo.isSymbolicLink())return preserve('the ownership manifest is not a regular file');
+  }catch(error){return preserve(error instanceof Error?error.message:String(error));}
+
+  const branchErrors:string[]=[];
+  for(const branch of generatedBranches){
+    try{await git(projectRoot,['update-ref','-d',`refs/heads/${branch}`,prepared.baseCommit]);}
+    catch(error){branchErrors.push(`branch ${branch} changed or could not be conditionally deleted (${error instanceof Error?error.message:String(error)})`);}
+  }
+  if(branchErrors.length)return preserve(branchErrors.join('; '));
+
+  try{
+    const latestTaskRoot=await realpath(prepared.taskRoot);if(!samePath(latestTaskRoot,taskRoot)||!samePath(path.dirname(latestTaskRoot),taskParent))return preserve('the task root changed before manifest removal');
+    const currentText=await readFile(path.join(taskRoot,TASK_MANIFEST),'utf8'),currentManifest=await readTaskManifest(projectRoot,taskRoot);
+    if(currentText!==manifestText||JSON.stringify(currentManifest)!==JSON.stringify(manifest))return preserve('the ownership manifest changed before removal');
+    const entries=await readdir(taskRoot);if(entries.length!==1||entries[0]!==TASK_MANIFEST)return preserve('the task root contains unexpected files or directories');
+    const manifestInfo=await lstat(path.join(taskRoot,TASK_MANIFEST));if(!manifestInfo.isFile()||manifestInfo.isSymbolicLink())return preserve('the ownership manifest is not a regular file');
+    await unlink(path.join(taskRoot,TASK_MANIFEST));
+    try{await rmdir(taskRoot);}catch(error){try{await writeFile(path.join(taskRoot,TASK_MANIFEST),manifestText,{flag:'wx'});}catch{}return preserve(`the empty task root could not be removed (${error instanceof Error?error.message:String(error)})`);}
+  }catch(error){return preserve(error instanceof Error?error.message:String(error));}
+  return [];
 }
 
 async function assertPathAbsent(target: string): Promise<void> {
