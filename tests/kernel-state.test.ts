@@ -40,6 +40,6 @@ describe('kernel-owned state cursor and shutdown recovery',()=>{
     const task:Task={id:'task-qa-corrections',title:'QA correction recovery',phase:'reviewing',createdAt:at,updatedAt:at,userRoot:'D:/workspace',agentmemProjectId:'',userMessages:['Fix the implementation'],messages:[{id:'user-qa',role:'user',text:'Fix the implementation',createdAt:at}],passes:[pass],currentPassId:pass.id,correctionCount:0,processedTurns:[]};
     const state:State={version:3,revision:1,settings:{projectRoot:'D:/workspace',agentmemProjectId:'',orchestratorModel:'gpt-6-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[task],activeTaskId:task.id,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']};
     expect(pauseActiveTasksForKernelShutdown(state,at)).toBe(1);
-    expect(task.phase).toBe('paused_after_restart');expect(pass.qualityLoop).toMatchObject({enabled:true,status:'paused_after_restart',resumeAction:'corrections',rounds:[{roundId:'qa-round-corrections',status:'awaiting_corrections',findings,findingsFingerprint:'sha256-findings'}]});
+    expect(task.phase).toBe('paused_after_restart');expect(pass.qualityLoop).toMatchObject({enabled:true,status:'paused_after_restart',resumeAction:'corrections',correctionPlannerNotDispatchedRoundId:'qa-round-corrections',rounds:[{roundId:'qa-round-corrections',status:'awaiting_corrections',findings,findingsFingerprint:'sha256-findings'}]});
   });
 });

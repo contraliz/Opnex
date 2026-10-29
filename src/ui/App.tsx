@@ -14,7 +14,7 @@ import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitP
 import { formatBrowserAnnotation } from './browser-annotation';
 import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
 import type { AppState, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, LiveActivity, Project, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
-import { qualityCorrectionPlannerInFlight, qualityLoopResumeAction } from '../../server/quality-loop-resume.js';
+import { qualityCorrectionPlannerInFlight, qualityLoopCanAcceptFindings, qualityLoopResumeAction } from '../../server/quality-loop-resume.js';
 const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
 
 const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
@@ -1126,7 +1126,7 @@ function QualityLoopPanel({state,onAction}:{state:NonNullable<TaskPass['qualityL
   const labels:Record<string,string>={awaiting_audit:'Waiting for QA audit',auditing:'GPT-6.1 Terra is auditing',awaiting_corrections:'QA findings need correction',correcting:'Workers are correcting QA findings',complete:'QA audit found no actionable issues',user_accepted:'Known QA findings accepted by user',needs_attention:'QA loop needs attention',paused:'QA loop paused',paused_after_restart:'QA paused when the kernel restarted',cancelled:'QA loop cancelled',disabled:'QA loop off'};
   const latest=state.rounds[state.rounds.length-1];
   const findings=latest?.findings||[];
-  const canAccept=!!onAction&&findings.length>0&&['awaiting_corrections','needs_attention'].includes(state.status)&&!qualityCorrectionPlannerInFlight(state.correctionPlanner);
+  const canAccept=!!onAction&&qualityLoopCanAcceptFindings(state,latest?.roundId);
   const canPause=!!onAction&&['auditing','awaiting_corrections'].includes(state.status);
   const resumeAction=qualityLoopResumeAction(state);
   const canResume=!!onAction&&['paused','paused_after_restart'].includes(state.status)&&resumeAction!==undefined;
