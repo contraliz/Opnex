@@ -12,10 +12,36 @@ function page(repository:string,historyOffset=0,branchOffset=0){
   const commits=Array.from({length:100},(_,i)=>({hash:`c${historyOffset+i}`,parents:i===99?[`outside-${historyOffset+100}`]:[`c${historyOffset+i+1}`],author:'Fixture',date:'2026-10-24T00:00:00Z',subject:`${repository} commit ${historyOffset+i}`,refs:[]}));
   return {available:true,authorizedRoot:repository,repositoryRoot:repository,currentBranch:'branch-000',branches,branchPage:{offset:branchOffset,pageSize:100,totalCount:200,totalIsExact:true,hasMore:branchOffset===0,nextOffset:branchOffset===0?100:null},worktrees:[],commits,history:{offset:historyOffset,pageSize:100,hasMore:historyOffset===0,nextOffset:historyOffset===0?100:null},github};
 }
+function unavailable(detail:string,repositoryRoot?:string){
+  return {available:false,authorizedRoot:'C:/repo/project',...(repositoryRoot?{repositoryRoot}:{}),detail,branches:[],worktrees:[],commits:[],history:{offset:0,pageSize:100,hasMore:false,nextOffset:null},github};
+}
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 afterEach(()=>{cleanup();sessionStorage.clear();vi.resetAllMocks();});
 
 describe('native local Git workspace paging and routes',()=>{
+  it('explains that the selected project root must contain the repository root',async()=>{
+    vi.mocked(api).mockImplementation(async url=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github')||url.includes('/github?'))return github as any;
+      return unavailable('The Git repository is outside the selected project folder.','C:/repo') as any;
+    });
+    render(<LocalGitWorkspace projectRoot="C:/repo/project"/>);
+    expect(await screen.findByText('The Git repository is outside the selected project folder.',{selector:'.git-empty strong'})).toBeTruthy();
+    expect(screen.getByText(/select the repository root itself or a project folder that contains it/i)).toBeTruthy();
+    expect(screen.queryByText(/choose a project folder inside a local Git repository/i)).toBeNull();
+  });
+
+  it('keeps the inside-a-repository guidance when the selected folder has no repository',async()=>{
+    vi.mocked(api).mockImplementation(async url=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github')||url.includes('/github?'))return github as any;
+      return unavailable('Choose a folder inside a Git repository to see local branches and history.') as any;
+    });
+    render(<LocalGitWorkspace projectRoot="C:/repo/project"/>);
+    expect(await screen.findByText('Choose a folder inside a Git repository to see local branches and history.',{selector:'.git-empty strong'})).toBeTruthy();
+    expect(screen.getByText(/choose a project folder inside a local Git repository/i)).toBeTruthy();
+  });
+
   it('connects the actual lane node toward commit text and omits the duplicate glyph',async()=>{
     const graphCommits=[
       {hash:'merge',parents:['main','feature'],author:'Fixture',date:'2026-10-24T00:00:00Z',subject:'merge commit',refs:[]},

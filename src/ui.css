@@ -1071,7 +1071,11 @@ body { min-width: 640px; min-height: 520px; }
 .settings-select-row { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:10px 0 6px; color:var(--text); font-size:13px; }
 .settings-select-row .choice-popover { min-width:210px; justify-content:space-between; }
 .settings-help { display:block; margin:0 0 9px; color:var(--muted); font-size:11px; line-height:1.55; }
+.settings-dialog .settings-agentmem-auto-setup { display:grid; grid-template-columns:16px minmax(0,1fr); column-gap:8px; row-gap:3px; align-items:start; }
+.settings-agentmem-auto-setup > span,.settings-agentmem-auto-setup > small { grid-column:2; }
 .settings-dialog .settings-help > input[type="checkbox"] { width:16px; height:16px; margin:2px 0 0; padding:0; accent-color:var(--accent); }
+.settings-dialog .settings-provider-group { min-width:0; padding:8px 12px 9px; border:1px solid var(--border-strong); border-radius:7px; }
+.settings-dialog .settings-provider-group > legend { padding:0 5px; color:var(--muted); font-size:11px; font-weight:400; line-height:1.4; }
 .session-row { position:relative; display:flex; align-items:center; border-radius:7px; }
 .session-row:hover,.session-row.selected { background:var(--raised-hover); }
 .session-row .task-nav { min-width:0; flex:1; padding-right:34px; }
@@ -1396,7 +1400,7 @@ body { min-width: 640px; min-height: 520px; }
 .project-group-pin,.project-group-edit { width:24px; height:24px; display:grid; place-items:center; padding:0; border:0; border-radius:4px; background:transparent; color:#777; cursor:pointer; opacity:.45; }
 .project-session-group:hover .project-group-pin,.project-session-group:hover .project-group-edit,.project-group-pin:focus-visible,.project-group-edit:focus-visible { opacity:1; }
 .project-group-pin:hover,.project-group-edit:hover { background:#383838; color:#ddd; }
-.project-session-rows { position:relative; margin-left:9px; padding-left:7px; border-left:1px solid #373737; }
+.project-session-rows { position:relative; margin-left:9px; padding-left:8px; }
 .project-empty { display:block; padding:5px 10px; color:#686868; font-size:10px; }
 .session-history-more { width:100%; min-height:25px; padding:3px 8px; border:0; border-radius:4px; background:transparent; color:#8d8d8d; cursor:pointer; text-align:left; font-size:10px; }
 .session-history-more:hover { background:#303030; color:#ccc; }
