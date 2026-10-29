@@ -212,17 +212,24 @@ export async function prepareRecruitmentWorktrees(options: {
     integration: { branch: integrationBranch, worktreeRoot: path.join(taskRoot, 'integration') },
     workers: workers.map((worker) => ({ ...worker, worktreeRoot: path.join(taskRoot, `worker-${worker.workerId}`) })),
   };
-  await writeFile(path.join(taskRoot, TASK_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
+  const manifestText=`${JSON.stringify(manifest,null,2)}\n`;
+  await writeFile(path.join(taskRoot, TASK_MANIFEST), manifestText, { flag: 'wx' });
   let integrationCreated = false;
   const created: PreparedRecruitmentWorker[] = [];
+  const attempted:Array<{branch:string;worktreeRoot:string}>=[];
   try {
     for (const plan of plans) {
+      attempted.push({branch:plan.branch,worktreeRoot:plan.worktreeRoot});
       await git(validated.projectRoot, ['worktree', 'add', '-b', plan.branch, plan.worktreeRoot, validated.baseCommit]);
       if (plan.workerId === 'integration') integrationCreated = true;
       else created.push({ ...plan, headCommit: await commitAt(plan.worktreeRoot) });
     }
   } catch (error) {
-    throw new RecruitmentGitError(`Worktree preparation failed; inspect the partial task directory before cleanup: ${taskRoot}`, { cause: error });
+    const partial:PreparedRecruitmentWorktrees={canonicalRoot:validated.projectRoot,taskRoot,baseCommit:validated.baseCommit,integration:manifest.integration,workers:manifest.workers.map(worker=>({...worker,headCommit:validated.baseCommit}))};
+    let cleanupErrors:string[]=[];
+    try{cleanupErrors=await cleanupPreparedRecruitmentWorktrees(partial,parent,attempted);}catch(cleanupError){cleanupErrors=[`Automatic partial-worktree cleanup failed (${cleanupError instanceof Error?cleanupError.message:String(cleanupError)}).`];}
+    const cleanupSummary=cleanupErrors.length?` Cleanup was incomplete: ${cleanupErrors.join('; ')}`:' The unchanged task-owned worktrees and refs were retired.';
+    throw new RecruitmentGitError(`Worktree preparation failed for task root ${taskRoot}.${cleanupSummary}`, { cause: error });
   }
   if (!integrationCreated) throw new RecruitmentGitError('Integration worktree was not created.');
   return {
@@ -408,10 +415,11 @@ function listedWorktrees(output:string):ListedWorktree[]{
 const samePath=(left:string,right:string)=>path.resolve(left).toLowerCase()===path.resolve(right).toLowerCase();
 
 /** Retires only an unsealed, pristine recruitment whose complete manifest still matches preparation. */
-export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecruitmentWorktrees,expectedTaskParent:string):Promise<string[]>{
+export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecruitmentWorktrees,expectedTaskParent:string,attemptedTargets?:Array<{branch:string;worktreeRoot:string}>):Promise<string[]>{
   const preserve=(reason:string)=>[`Prepared recruitment cleanup was skipped or incomplete: ${reason}. Its remaining worktrees, branches, and ownership record were preserved.`];
   let projectRoot:string,taskRoot:string,taskParent:string,manifest:TaskManifest,manifestText:string;
   const targets=[{branch:prepared.integration.branch,worktreeRoot:prepared.integration.worktreeRoot},...prepared.workers.map(row=>({branch:row.branch,worktreeRoot:row.worktreeRoot}))];
+  const attempts=attemptedTargets??targets,worktreesToRemove:Array<{branch:string;worktreeRoot:string}>=[],branchesToDelete:string[]=[];
   try{
     projectRoot=(await validateRecruitmentProject(prepared.canonicalRoot,'HEAD')).projectRoot;
     taskParent=await realpath(expectedTaskParent);
@@ -423,21 +431,35 @@ export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecru
     const expectedWorkers=[...prepared.workers].sort((a,b)=>a.workerId.localeCompare(b.workerId));const recordedWorkers=[...manifest.workers].sort((a,b)=>a.workerId.localeCompare(b.workerId));
     if(!samePath(manifest.canonicalRoot,projectRoot)||manifest.integration.branch!==prepared.integration.branch||!samePath(manifest.integration.worktreeRoot,prepared.integration.worktreeRoot)||recordedWorkers.length!==expectedWorkers.length||recordedWorkers.some((row,index)=>row.workerId!==expectedWorkers[index].workerId||row.branch!==expectedWorkers[index].branch||!samePath(row.worktreeRoot,expectedWorkers[index].worktreeRoot)))return preserve('the task ownership manifest no longer exactly matches this preparation');
     if(new Set(targets.map(row=>row.branch)).size!==targets.length||new Set(targets.map(row=>path.resolve(row.worktreeRoot).toLowerCase())).size!==targets.length)return preserve('the prepared branches or worktree paths are not unique');
+    const targetKey=(row:{branch:string;worktreeRoot:string})=>`${row.branch}\0${path.resolve(row.worktreeRoot).toLowerCase()}`;
+    if(new Set(attempts.map(targetKey)).size!==attempts.length||attempts.some(row=>!targets.some(target=>targetKey(target)===targetKey(row))))return preserve('the attempted worktree list does not exactly match task-manifest targets');
     for(const row of targets){validateRecruitmentBranch(row.branch);if(!samePath(path.dirname(row.worktreeRoot),taskRoot))return preserve(`worktree ${row.worktreeRoot} is not a direct child of its task root`);}
     const worktrees=listedWorktrees((await git(projectRoot,['worktree','list','--porcelain'])).stdout);
     for(const row of targets){
-      const safePath=await validateOwnedLocation(projectRoot,taskRoot,row.worktreeRoot,row.branch);
-      if(!samePath(safePath,row.worktreeRoot))return preserve(`worktree ${row.worktreeRoot} resolved to a different path`);
-      if((await commitAt(safePath)).toLowerCase()!==prepared.baseCommit.toLowerCase())return preserve(`worktree ${row.worktreeRoot} no longer points at its initial commit`);
-      if((await git(safePath,['status','--porcelain','--untracked-files=all'])).stdout)return preserve(`worktree ${row.worktreeRoot} contains uncommitted or untracked changes`);
-      const branchHead=(await git(projectRoot,['rev-parse','--verify','--quiet','--end-of-options',`refs/heads/${row.branch}^{commit}`])).stdout;
-      if(branchHead.toLowerCase()!==prepared.baseCommit.toLowerCase())return preserve(`branch ${row.branch} no longer points at its initial commit`);
-      const attachments=worktrees.filter(item=>item.branch===`refs/heads/${row.branch}`);
-      if(attachments.length!==1||!samePath(attachments[0].path,safePath))return preserve(`branch ${row.branch} is checked out at an unexpected worktree`);
+      const attempted=attempts.some(item=>targetKey(item)===targetKey(row)),refName=`refs/heads/${row.branch}`,refRows=(await git(projectRoot,['for-each-ref','--format=%(refname) %(objectname)',refName])).stdout.split(/\r?\n/).filter(Boolean),exactRefs=refRows.filter(item=>item.startsWith(`${refName} `)),branchHead=exactRefs[0]?.slice(refName.length+1),attachments=worktrees.filter(item=>item.branch===refName);
+      if(exactRefs.length>1)return preserve(`branch ${row.branch} has duplicate ref records`);
+      if(!attempted){
+        if(attachments.length||branchHead)return preserve(`unattempted target ${row.branch} already has a worktree or branch ref`);
+        try{await assertPathAbsent(row.worktreeRoot);}catch(error){return preserve(`unattempted worktree path ${row.worktreeRoot} is occupied (${error instanceof Error?error.message:String(error)})`);}
+        continue;
+      }
+      if(attachments.length>1)return preserve(`branch ${row.branch} is attached to multiple worktrees`);
+      if(attachments.length){
+        if(!samePath(attachments[0].path,row.worktreeRoot))return preserve(`branch ${row.branch} is checked out at an unexpected worktree`);
+        const safePath=await validateOwnedLocation(projectRoot,taskRoot,row.worktreeRoot,row.branch);
+        if(!samePath(safePath,row.worktreeRoot))return preserve(`worktree ${row.worktreeRoot} resolved to a different path`);
+        if((await commitAt(safePath)).toLowerCase()!==prepared.baseCommit.toLowerCase())return preserve(`worktree ${row.worktreeRoot} no longer points at its initial commit`);
+        if((await git(safePath,['status','--porcelain','--untracked-files=all'])).stdout)return preserve(`worktree ${row.worktreeRoot} contains uncommitted or untracked changes`);
+        if(!branchHead||branchHead.toLowerCase()!==prepared.baseCommit.toLowerCase())return preserve(`branch ${row.branch} no longer points at its initial commit`);
+        worktreesToRemove.push(row);branchesToDelete.push(row.branch);
+      }else{
+        try{await assertPathAbsent(row.worktreeRoot);}catch(error){return preserve(`unregistered worktree path ${row.worktreeRoot} is occupied (${error instanceof Error?error.message:String(error)})`);}
+        if(branchHead){if(branchHead.toLowerCase()!==prepared.baseCommit.toLowerCase())return preserve(`branch ${row.branch} no longer points at its initial commit`);branchesToDelete.push(row.branch);}
+      }
     }
   }catch(error){return preserve(error instanceof Error?error.message:String(error));}
 
-  for(const row of [{branch:prepared.integration.branch,worktreeRoot:prepared.integration.worktreeRoot},...prepared.workers.map(worker=>({branch:worker.branch,worktreeRoot:worker.worktreeRoot}))]){
+  for(const row of worktreesToRemove){
     try{await git(projectRoot,['worktree','remove',row.worktreeRoot]);}
     catch(error){return preserve(`worktree ${row.worktreeRoot} could not be safely removed (${error instanceof Error?error.message:String(error)})`);}
   }
@@ -454,7 +476,7 @@ export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecru
   }catch(error){return preserve(error instanceof Error?error.message:String(error));}
 
   const branchErrors:string[]=[];
-  for(const branch of generatedBranches){
+  for(const branch of new Set(branchesToDelete)){
     try{await git(projectRoot,['update-ref','-d',`refs/heads/${branch}`,prepared.baseCommit]);}
     catch(error){branchErrors.push(`branch ${branch} changed or could not be conditionally deleted (${error instanceof Error?error.message:String(error)})`);}
   }
