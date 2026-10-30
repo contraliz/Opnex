@@ -107,16 +107,16 @@ function isExecutionProfile(value:unknown):value is ExecutionProfile{return isSt
 function legacyPassExecutionProfile(task:Task,pass:TaskPass):ExecutionProfile|undefined{
   if(isExecutionProfile(pass.executionProfile))return structuredClone(pass.executionProfile);
   const teams=[...(pass.recruitmentTeam?[pass.recruitmentTeam]:[]),...(pass.recruitmentHistory||[])];
-  const deepSeekRecord=teams.flatMap(team=>[...team.workers,team.integration]).find(record=>record.deepSeekExecution||record.deepSeekRuntime||record.deepSeekPhaseRuns?.length);
-  if(deepSeekRecord){const saved=deepSeekRecord.deepSeekExecution||pass.deepSeekExecution;if(isDeepSeekExecutionProfile(saved)&&['low','medium','high','xhigh','max','ultra'].includes(saved.nativeReasoningEffort))return {provider:'deepseek',model:saved.model,effort:saved.nativeReasoningEffort as ExecutionProfile['effort']};}
-  const turns=[...(pass.reasoningTurns||[]),...(task.reasoningTurns||[])],turn=[...turns].reverse().find(row=>['direct','simple','worker'].includes(row.role)&&isString(row.requestedModel)&&row.requestedModel.length>0&&['low','medium','high','xhigh','max','ultra'].includes(row.requestedEffort));
-  if(turn){if(turn.provider==='deepseek'){const saved=pass.deepSeekExecution;if(isDeepSeekExecutionProfile(saved))return {provider:'deepseek',model:turn.requestedModel,effort:turn.requestedEffort as ExecutionProfile['effort']};}return {provider:'codex',model:turn.requestedModel,effort:turn.requestedEffort as ExecutionProfile['effort']};}
-  if(task.activeRole&&['direct','simple','worker'].includes(task.activeRole)&&typeof task.activeModelId==='string'&&typeof task.activeEffort==='string'&&['low','medium','high','xhigh','max','ultra'].includes(task.activeEffort)){
-    const activeTurn=turns.find(row=>row.turnId===task.activeTurnId),provider=activeTurn?.provider==='deepseek'||task.activeModelId==='deepseek-v4.1-flash'?'deepseek':'codex';
-    if(provider==='deepseek'){const saved=pass.deepSeekExecution;if(isDeepSeekExecutionProfile(saved))return {provider,model:task.activeModelId,effort:task.activeEffort as ExecutionProfile['effort']};}
-    return {provider,model:task.activeModelId,effort:task.activeEffort as ExecutionProfile['effort']};
-  }
-  if(deepSeekRecord){const saved=deepSeekRecord.deepSeekExecution||pass.deepSeekExecution;if(isDeepSeekExecutionProfile(saved)&&['low','medium','high','xhigh','max','ultra'].includes(saved.nativeReasoningEffort))return {provider:'deepseek',model:saved.model,effort:saved.nativeReasoningEffort as ExecutionProfile['effort']};}
+  const records=teams.flatMap(team=>[...team.workers,team.integration]);
+  const deepSeekRun=records.flatMap(record=>record.deepSeekPhaseRuns||[]).reverse().find(run=>isString(run.model)&&run.model.length>0&&['low','medium','high','xhigh','max','ultra'].includes(run.requestedReasoningEffort||''));
+  if(deepSeekRun)return {provider:'deepseek',model:deepSeekRun.model,effort:deepSeekRun.requestedReasoningEffort as ExecutionProfile['effort']};
+  const deepSeekRuntimeRecord=records.find(record=>record.deepSeekRuntime&&isDeepSeekExecutionProfile(record.deepSeekExecution)&&['low','medium','high','xhigh','max','ultra'].includes(record.deepSeekExecution.nativeReasoningEffort));
+  if(deepSeekRuntimeRecord?.deepSeekExecution)return {provider:'deepseek',model:deepSeekRuntimeRecord.deepSeekExecution.model,effort:deepSeekRuntimeRecord.deepSeekExecution.nativeReasoningEffort as ExecutionProfile['effort']};
+  const passThreadIds=new Set([pass.directThreadId,pass.simpleThreadId,pass.workerThreadId,...records.map(record=>record.threadId)].filter((id):id is string=>typeof id==='string'&&id.length>0));
+  const currentPassTurns=task.currentPassId===pass.id?(task.reasoningTurns||[]).filter(turn=>turn.turnId===task.activeTurnId&&turn.role===task.activeRole):[];
+  const taskTurns=(task.reasoningTurns||[]).filter(turn=>passThreadIds.has(turn.threadId)||currentPassTurns.includes(turn));
+  const turns=[...(pass.reasoningTurns||[]),...taskTurns],turn=[...turns].reverse().find(row=>['direct','simple','worker'].includes(row.role)&&isString(row.requestedModel)&&row.requestedModel.length>0&&['low','medium','high','xhigh','max','ultra'].includes(row.requestedEffort));
+  if(turn){const provider=turn.provider==='deepseek'?'deepseek':turn.provider==='codex'||/^gpt-/i.test(turn.requestedModel)?'codex':undefined;if(provider)return {provider,model:turn.requestedModel,effort:turn.requestedEffort as ExecutionProfile['effort']};}
   return undefined;
 }
 function isOptionalString(value:Record<string,any>,field:string){return value[field]===undefined||isString(value[field]);}

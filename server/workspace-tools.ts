@@ -16,14 +16,13 @@ export function authorizesWorkerWorkspaceTool(task:Task|undefined,pass:TaskPass|
 
 export async function authorizesWorkspaceRepositoryInitialization(task:Task|undefined,pass:TaskPass|undefined,target:WorkspaceToolTarget|undefined,threadId:string){
   if(!task||!pass||!target||!authorizesWorkerWorkspaceTool(task,pass,target,threadId))return false;
+  const team=pass.recruitmentTeam;
+  if(team?.workers.some(row=>row.threadId===threadId)||team?.integration.threadId===threadId)return false;
   if(task.activeRole==='simple'){
     const roots=await simpleRouteWriteRoots(pass.userInputs||[],task.userRoot);
     return !!roots?.some(root=>assignmentAuthorizesWorkspaceRootWrite({write_scope:[root]},task.userRoot));
   }
-  const team=pass.recruitmentTeam;
-  const worker=team?.workers.find(row=>row.threadId===threadId);
-  const integration=team?.integration.threadId===threadId?team.integration:undefined;
-  const assignment=worker?.assignment||integration?.assignment||pass.assignment||task.assignment;
+  const assignment=pass.assignment||task.assignment;
   return !!assignment&&assignmentAuthorizesWorkspaceRootWrite(assignment,task.userRoot);
 }
 

@@ -73,6 +73,8 @@ describe('Codex approval and turn configuration',()=>{
     expect(await authorizesWorkspaceRepositoryInitialization(task,nestedPass,target,'worker-thread')).toBe(false);
     const rootPass:any={...nestedPass,assignment:{write_scope:['D:/repo']}};
     expect(await authorizesWorkspaceRepositoryInitialization(task,rootPass,target,'worker-thread')).toBe(true);
+    const recruitedPass:any={...rootPass,recruitmentTeam:{sealed:true,passId:'pass',workers:[{workerId:'worker-a',threadId:'worker-thread',status:'running',workerStage:'execute',assignment:{write_scope:['D:/repo']}}],integration:{status:'queued',branch:'recruitment/task/integration',worktreeRoot:'D:/task/integration',assignment:{write_scope:['D:/repo']}}}};
+    expect(await authorizesWorkspaceRepositoryInitialization({...task,workerThreadId:undefined,workerStage:undefined},recruitedPass,target,'worker-thread')).toBe(false);
     expect(await authorizesWorkspaceRepositoryInitialization({...task,phase:'routing',activeRole:'router',workerThreadId:undefined},rootPass,target,'router-thread')).toBe(false);
   });
   it('gives QA a distinct read-only thread config with external MCP, plugins, apps, and dynamic tools disabled',()=>{

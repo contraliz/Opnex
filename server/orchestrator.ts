@@ -570,14 +570,14 @@ async function recruitWorkers(task:Task,pass:TaskPass,raw:unknown,owner:Recruitm
     throw error;
   }
 }
-async function prepareRecruitmentDeepSeekProfile(task:Task,pass:TaskPass,record:RecruitmentWorker|RecruitmentIntegration,workspace:string,template:DeepSeekHarnessSdkLaunch,permission:DeepSeekHarnessPermissionGrant,integration:boolean,sessionId:string){
+async function prepareRecruitmentDeepSeekProfile(task:Task,pass:TaskPass,record:RecruitmentWorker|RecruitmentIntegration,workspace:string,template:DeepSeekHarnessSdkLaunch,permission:DeepSeekHarnessPermissionGrant,integration:boolean){
   const selection=pass.deepSeekExecution;
   if(!selection||selection.kind!=='deepseek-harness-sdk'||selection.provider!=='opencode-go')throw new DeepSeekHarnessError('unsupported-capability','The persisted worker provider is not the verified OpenCode Go route. No fallback was started.');
   const skillsConfig=skillLibraryMcpServerConfig({taskId:task.id,role:'worker'});
   const skillTools=Array.isArray(skillsConfig.enabled_tools)?skillsConfig.enabled_tools.filter((name):name is string=>typeof name==='string'):[];
-  const mayInitializeGit=assignmentAuthorizesWorkspaceRootWrite(record.assignment,task.userRoot),mcpServers:DeepSeekHarnessMcpServerConfig[]=[{serverName:'pseudoharness_skills',command:String(skillsConfig.command),args:skillsConfig.args as string[],cwd:String(skillsConfig.cwd),env:skillsConfig.env as Record<string,string>}];
+  const mcpServers:DeepSeekHarnessMcpServerConfig[]=[{serverName:'pseudoharness_skills',command:String(skillsConfig.command),args:skillsConfig.args as string[],cwd:String(skillsConfig.cwd),env:skillsConfig.env as Record<string,string>}];
   const expectedMcpTools=skillTools.map(name=>`mcp__pseudoharness_skills__${name}`);
-  if(mayInitializeGit){const workspaceConfig=workspaceMcpServerConfig({taskId:task.id,passId:pass.id,role:'worker',sessionId});mcpServers.push({serverName:'pseudoharness_workspace',command:String(workspaceConfig.command),args:workspaceConfig.args as string[],cwd:String(workspaceConfig.cwd),env:workspaceConfig.env as Record<string,string>});expectedMcpTools.push('mcp__pseudoharness_workspace__initialize_git_repository');}
+  // Recruited roles write in task-owned Git worktrees and cannot initialize the canonical workspace repository.
   const owner=integration?'integration':(record as RecruitmentWorker).workerId;
   const digest=createHash('sha256').update([task.id,pass.id,owner,permission.permissionMode,path.resolve(workspace),selection.provider,selection.model,selection.nativeReasoningEffort].join('\n')).digest('hex').slice(0,32);
   const profileName=`pseudoharness-${digest}`;
@@ -781,7 +781,7 @@ async function startRecruitmentStageInner(taskId:string,passId:string,workerId:s
   if(existingSessionId&&!session)throw new DeepSeekHarnessError('interrupted','This DeepSeek Harness session is not attached to the current kernel process. It was not resumed automatically; start a fresh task after checking the saved paused session.');
   let isNewSession=false;
   if(!session){
-    const isolated=await prepareRecruitmentDeepSeekProfile(task,pass,record,workspace,templateLaunch,permission,integration,sessionId);
+    const isolated=await prepareRecruitmentDeepSeekProfile(task,pass,record,workspace,templateLaunch,permission,integration);
     const runtime=new DeepSeekHarnessSdkRuntime({launch:isolated.launch,cwd:workspace,provider:profile.provider,model:profile.model,reasoningEffort:profile.nativeReasoningEffort,permission,sessionId});
     session={runtime,permission,taskId,passId,workerId,integration,latestTurn:0,expectedMcpTools:isolated.expectedMcpTools,configuredMcpServers:isolated.configuredMcpServers,profileName:isolated.profileName};isNewSession=true;
   }

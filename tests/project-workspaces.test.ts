@@ -53,6 +53,17 @@ describe('project-owned workspaces',()=>{
     }finally{rmSync(temp,{recursive:true,force:true});}
   });
 
+  it('does not copy a later pass execution profile into legacy history with a different thread',()=>{
+    const deepSeekExecution={kind:'deepseek-harness-sdk',provider:'opencode-go',model:'deepseek-v4.1-flash',nativeReasoningEffort:'max'};
+    const previous={id:'old-pass',index:1,createdAt:stamp,userInput:'Old direct answer',userInputs:['Old direct answer'],userMessageIds:['old-user'],phase:'accepted',resolution:'direct',directThreadId:'direct-old',deepSeekExecution,correctionCount:0,processedTurns:[]};
+    const current={id:'current-pass',index:2,createdAt:stamp,userInput:'Current direct answer',userInputs:['Current direct answer'],userMessageIds:['current-user'],phase:'direct_running',resolution:'direct',directThreadId:'direct-current',deepSeekExecution,correctionCount:0,processedTurns:[]};
+    const currentTurn={role:'direct',threadId:'direct-current',turnId:'current-turn',requestedModel:'gpt-6-luna',requestedEffort:'high',status:'streaming',startedAt:stamp};
+    const session=task({id:'profile-migration',phase:'direct_running',currentPassId:current.id,directThreadId:'direct-current',activeRole:'direct',activeTurnId:currentTurn.turnId,activeModelId:'gpt-6-luna',activeEffort:'high',reasoningTurns:[currentTurn],passes:[previous,current]});
+    const upgraded=upgradeStoredState(state([], [session]));const passes=upgraded.tasks[0].passes||[];
+    expect(passes[0]?.executionProfile).toBeUndefined();
+    expect(passes[1]?.executionProfile).toEqual({provider:'codex',model:'gpt-6-luna',effort:'high'});
+  });
+
   it('keeps an unclassified session unassigned after a restart',()=>{
     const alpha=project();
     const unclassified=task({id:'unclassified-history',projectId:undefined,userRoot:alpha.projectRoot});

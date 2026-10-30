@@ -41,5 +41,10 @@ describe('workspace MCP authorization',()=>{
     expect(await authorizedWorkspaceGitInitRoot({tasks:[nested]},scope)).toBeUndefined();
     const readOnly=task({passes:[{id:scope.passId,workerStage:'execute',executionProfile:{provider:'deepseek'},assignment:{write_scope:[]}}]});
     expect(await authorizedWorkspaceGitInitRoot({tasks:[readOnly]},scope)).toBeUndefined();
+    const team={sealed:true,passId:scope.passId,workers:[{threadId:'worker-a',status:'running',workerStage:'execute',activeTurnId:'turn-worker',executionProfile:{provider:'deepseek'},assignment}],integration:{threadId:'integrator-a',status:'running',workerStage:'execute',activeTurnId:'turn-integrator',deepSeekExecution:{provider:'opencode-go'},assignment}};
+    const recruited=task({workerStage:undefined,workerThreadId:undefined,passes:[{id:scope.passId,recruitmentTeam:team}]});
+    expect(authorizedWorkspaceRoot({tasks:[recruited]},scope)).toBe(root);
+    expect(await authorizedWorkspaceGitInitRoot({tasks:[recruited]},scope)).toBeUndefined();
+    expect(await authorizedWorkspaceGitInitRoot({tasks:[recruited]},{...scope,sessionId:'integrator-a'})).toBeUndefined();
   });
 });
