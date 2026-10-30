@@ -1,21 +1,23 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { assignmentWriteRoots } from './policy.js';
 import {
-  mergeRecruitmentCommits,
   prepareRecruitmentWorktrees,
   forgeGitWritableRoots,
   validateRecruitmentBranch,
   validateRecruitmentRoot,
-  verifyRecruitmentIntegration,
 } from './recruitment-git.js';
 
 const execFileAsync = promisify(execFile);
 const FULL_SHA = /^[0-9a-f]{40,64}$/i;
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
+
+/** The worker-plan limit imposed by the existing recruitment worktree manifest; callers must reject larger plans. */
+export const FORGE_GIT_MAX_WORKERS = 16;
 
 export class ForgeGitError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -36,15 +38,21 @@ export type PreparedForgeWorktrees = {
 };
 
 export type ForgeWorkerCommitInput = {
+  /** Stable across retries. If omitted, workerId is used for legacy single-attempt callers. */
+  workItemId?: string;
   workerId: string;
   baselineCommit: string;
   reportedCommit: string;
   writeScope: readonly string[];
+  /** The originating claim's immutable worktree/manifest. Omit only when it is the candidate owner attempt. */
+  prepared?: PreparedForgeWorktrees;
 };
 
 export type ForgeWorkerCommitCheck = {
   status: 'accepted' | 'rejected';
+  workItemId: string;
   workerId: string;
+  attemptId: string;
   branch: string;
   worktreeRoot: string;
   baselineCommit: string;
@@ -63,7 +71,16 @@ export type ForgeCandidateEvidence = {
   candidateBranch: string;
   candidateRoot: string;
   candidateCommit: string;
-  workerCommits: Array<{ workerId: string; commit: string }>;
+  workerCommits: Array<{
+    workItemId: string;
+    workerId: string;
+    sourceAttemptId: string;
+    sourceTaskRoot: string;
+    branch: string;
+    worktreeRoot: string;
+    baselineCommit: string;
+    commit: string;
+  }>;
 };
 
 export type ForgeCandidateResult =
@@ -71,7 +88,8 @@ export type ForgeCandidateResult =
   | {
       status: 'conflict'; stage: 'main' | 'worker'; targetMainCommit: string; targetBranch: string;
       candidateBranch: string; candidateRoot: string; candidateCommit: string;
-      conflicts: Array<{ workerId?: string; path: string }>; mergedWorkerIds: string[];
+      conflicts: Array<{ workItemId?: string; workerId?: string; path: string }>;
+      mergedWorkerIds: string[]; mergedWorkItemIds: string[];
     }
   | { status: 'stale-target'; targetBranch: string; expectedMainCommit: string; observedMainCommit: string; candidateRoot: string; candidateBranch: string; candidateCommit: string }
   | { status: 'rejected'; reason: string; workerChecks: ForgeWorkerCommitCheck[] };
@@ -87,7 +105,21 @@ export type ForgeFinalMergeResult =
   | { status: 'stale-target'; branch: string; expectedMainCommit: string; observedMainCommit: string }
   | { status: 'rejected'; reason: string; branch: string; observedMainCommit?: string; mainRoot?: string };
 
+export type ForgeDependencyPreparationResult =
+  | { status: 'ready'; workItemId: string; workerId: string; worktreeRoot: string; baselineCommit: string; mergedWorkItemIds: string[] }
+  | { status: 'conflict'; workItemId: string; workerId: string; worktreeRoot: string; conflicts: string[]; mergedWorkItemIds: string[] }
+  | { status: 'rejected'; workItemId: string; workerId: string; reason: string };
+
 type GitResult = { stdout: string; stderr: string };
+
+type ResolvedForgeWorker = ForgeWorkerCommitInput & {
+  workItemId: string;
+  prepared: PreparedForgeWorktrees;
+  sourceAttemptId: string;
+  sourceTaskRoot: string;
+  branch: string;
+  worktreeRoot: string;
+};
 
 async function git(cwd: string, args: string[]): Promise<GitResult> {
   try {
@@ -135,6 +167,19 @@ function branchSegment(value: string, label: string): string {
     throw new ForgeGitError(`${label} must be a simple 1-64 character Git branch segment.`);
   }
   return value;
+}
+
+function workItemIdentity(value: unknown): string {
+  if (typeof value !== 'string' || !value.length) throw new ForgeGitError('Work item ID must be a non-empty string without control characters.');
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) || 0;
+    if (codePoint < 0x20 || codePoint === 0x7f) throw new ForgeGitError('Work item ID must be a non-empty string without control characters.');
+  }
+  return value;
+}
+
+function identityDigest(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 function forgeBranch(ticketId: string, attemptId: string, role: 'integration' | 'worker', workerId?: string): string {
@@ -241,6 +286,40 @@ async function assertOwnedWorktree(prepared: PreparedForgeWorktrees, workerId?: 
   return { root, branch, baselineCommit: worker?.baselineCommit || prepared.baseCommit };
 }
 
+async function resolveForgeWorkers(candidateOwner: PreparedForgeWorktrees, workers: ForgeWorkerCommitInput[]): Promise<ResolvedForgeWorker[]> {
+  if (!Array.isArray(workers) || workers.length < 1 || workers.length > FORGE_GIT_MAX_WORKERS) {
+    throw new ForgeGitError(`Provide between 1 and ${FORGE_GIT_MAX_WORKERS} committed Forge workers.`);
+  }
+  const candidateCommon = await commonDirectory(candidateOwner.canonicalRoot);
+  const seenItems = new Set<string>();
+  const seenClaims = new Set<string>();
+  const resolved: ResolvedForgeWorker[] = [];
+  for (const input of workers) {
+    const workItemId = workItemIdentity(input.workItemId ?? input.workerId);
+    if (seenItems.has(workItemId)) throw new ForgeGitError(`Work item appears more than once in Forge integration: ${workItemId}`);
+    seenItems.add(workItemId);
+    branchSegment(input.workerId, 'Worker ID');
+    const prepared = input.prepared ?? candidateOwner;
+    if (prepared.ticketId !== candidateOwner.ticketId) throw new ForgeGitError(`Worker ${input.workerId} belongs to a different Forge ticket.`);
+    const claimKey = `${path.resolve(prepared.taskRoot).toLowerCase()}\0${prepared.attemptId}\0${input.workerId}`;
+    if (seenClaims.has(claimKey)) throw new ForgeGitError(`Worker branch is assigned to more than one Forge work item: ${input.workerId}`);
+    seenClaims.add(claimKey);
+    const sourceCommon = await commonDirectory(prepared.canonicalRoot);
+    if (!samePath(sourceCommon, candidateCommon)) throw new ForgeGitError(`Worker ${input.workerId} belongs to a different canonical Git repository.`);
+    const worktree = await assertOwnedWorktree(prepared, input.workerId);
+    resolved.push({
+      ...input,
+      workItemId,
+      prepared,
+      sourceAttemptId: prepared.attemptId,
+      sourceTaskRoot: path.resolve(prepared.taskRoot),
+      branch: worktree.branch,
+      worktreeRoot: worktree.root,
+    });
+  }
+  return resolved;
+}
+
 export async function prepareForgeWorktrees(options: {
   canonicalRoot: string;
   taskRoot: string;
@@ -251,7 +330,7 @@ export async function prepareForgeWorktrees(options: {
 }): Promise<PreparedForgeWorktrees> {
   branchSegment(options.ticketId, 'Ticket ID');
   branchSegment(options.attemptId, 'Attempt ID');
-  if (!Array.isArray(options.workerIds) || options.workerIds.length < 1 || options.workerIds.length > 16) throw new ForgeGitError('Provide between 1 and 16 Forge worker IDs.');
+  if (!Array.isArray(options.workerIds) || options.workerIds.length < 1 || options.workerIds.length > FORGE_GIT_MAX_WORKERS) throw new ForgeGitError(`Provide between 1 and ${FORGE_GIT_MAX_WORKERS} Forge worker IDs.`);
   const workerIds = options.workerIds.map((workerId) => branchSegment(workerId, 'Worker ID'));
   if (new Set(workerIds).size !== workerIds.length) throw new ForgeGitError('Forge worker IDs must be unique within an attempt.');
   if (!path.isAbsolute(options.taskRoot)) throw new ForgeGitError('Forge task root must be an absolute path.');
@@ -279,6 +358,7 @@ export async function prepareForgeWorktrees(options: {
 
 export async function validateForgeWorkerCommit(options: {
   prepared: PreparedForgeWorktrees;
+  workItemId?: string;
   workerId: string;
   baselineCommit: string;
   reportedCommit: string;
@@ -301,7 +381,9 @@ export async function validateForgeWorkerCommit(options: {
   const outOfScope = pathsOutsideScope(canonicalRoot, changed, writeRoots);
   const result = (status: ForgeWorkerCommitCheck['status'], reason?: ForgeWorkerCommitCheck['reason']): ForgeWorkerCommitCheck => ({
     status,
+    workItemId: options.workItemId ?? options.workerId,
     workerId: options.workerId,
+    attemptId: options.prepared.attemptId,
     branch: worktree.branch,
     worktreeRoot: worktree.root,
     baselineCommit: options.baselineCommit,
@@ -412,6 +494,19 @@ async function cleanMainWorktree(root: string, canonicalRoot: string, branch: st
   return undefined;
 }
 
+function workerEvidence(worker: ResolvedForgeWorker): ForgeCandidateEvidence['workerCommits'][number] {
+  return {
+    workItemId: worker.workItemId,
+    workerId: worker.workerId,
+    sourceAttemptId: worker.sourceAttemptId,
+    sourceTaskRoot: worker.sourceTaskRoot,
+    branch: worker.branch,
+    worktreeRoot: worker.worktreeRoot,
+    baselineCommit: worker.baselineCommit,
+    commit: worker.reportedCommit,
+  };
+}
+
 async function candidateMatches(prepared: PreparedForgeWorktrees, candidate: ForgeCandidateEvidence, workers: ForgeWorkerCommitInput[]): Promise<{ root: string; outOfScope: string[] } | ForgeFinalMergeResult> {
   if (candidate.ticketId !== prepared.ticketId || candidate.attemptId !== prepared.attemptId
     || candidate.candidateBranch !== prepared.integration.branch || !samePath(candidate.candidateRoot, prepared.integration.worktreeRoot)
@@ -419,14 +514,31 @@ async function candidateMatches(prepared: PreparedForgeWorktrees, candidate: For
     || !FULL_SHA.test(candidate.targetMainCommit) || !FULL_SHA.test(candidate.candidateCommit)) {
     return { status: 'rejected', reason: 'Candidate identity or commit evidence does not match the prepared Forge attempt.', branch: candidate.targetBranch };
   }
-  checkedWorkers(prepared, workers);
-  const expectedCommits = workers.map((worker) => `${worker.workerId}\0${worker.reportedCommit.toLowerCase()}`).sort();
-  const recordedCommits = Array.isArray(candidate.workerCommits)
-    ? candidate.workerCommits.map((worker) => `${worker.workerId}\0${worker.commit.toLowerCase()}`).sort()
-    : [];
-  if (expectedCommits.length !== recordedCommits.length || expectedCommits.some((commit, index) => commit !== recordedCommits[index])) {
+  let resolvedWorkers: ResolvedForgeWorker[];
+  try {
+    resolvedWorkers = await resolveForgeWorkers(prepared, workers);
+  } catch (error) {
+    return { status: 'rejected', reason: error instanceof Error ? error.message : 'Worker ownership validation failed.', branch: candidate.targetBranch };
+  }
+  const compareWorkItems = (left: { workItemId: string }, right: { workItemId: string }) => left.workItemId < right.workItemId ? -1 : left.workItemId > right.workItemId ? 1 : 0;
+  const expected = resolvedWorkers.map(workerEvidence).sort(compareWorkItems);
+  const recorded = Array.isArray(candidate.workerCommits) ? candidate.workerCommits : [];
+  if (recorded.length !== expected.length || recorded.some((worker) => !worker
+    || typeof worker.workItemId !== 'string' || typeof worker.workerId !== 'string'
+    || typeof worker.sourceAttemptId !== 'string' || typeof worker.sourceTaskRoot !== 'string'
+    || typeof worker.branch !== 'string' || typeof worker.worktreeRoot !== 'string'
+    || typeof worker.baselineCommit !== 'string' || typeof worker.commit !== 'string')) {
     return { status: 'rejected', reason: 'Candidate worker commit set does not match the final verification set.', branch: candidate.targetBranch };
   }
+  const sortedRecorded = [...recorded].sort(compareWorkItems);
+  if (expected.some((worker, index) => {
+    const proof = sortedRecorded[index];
+    return worker.workItemId !== proof.workItemId || worker.workerId !== proof.workerId
+      || worker.sourceAttemptId !== proof.sourceAttemptId || !samePath(worker.sourceTaskRoot, proof.sourceTaskRoot)
+      || worker.branch !== proof.branch || !samePath(worker.worktreeRoot, proof.worktreeRoot)
+      || worker.baselineCommit.toLowerCase() !== proof.baselineCommit.toLowerCase()
+      || worker.commit.toLowerCase() !== proof.commit.toLowerCase();
+  })) return { status: 'rejected', reason: 'Candidate worker commit set does not match the final verification set.', branch: candidate.targetBranch };
   const worktree = await assertOwnedWorktree(prepared);
   if (!samePath(worktree.root, candidate.candidateRoot) || worktree.branch !== candidate.candidateBranch) {
     return { status: 'rejected', reason: 'Candidate worktree is not the recorded Forge integration branch.', branch: candidate.targetBranch };
@@ -438,21 +550,16 @@ async function candidateMatches(prepared: PreparedForgeWorktrees, candidate: For
   }
   const dirty = await dirtyPaths(worktree.root);
   if (dirty.length || await operationInProgress(worktree.root)) return { status: 'rejected', reason: 'Candidate worktree is dirty or has an unfinished Git operation.', branch: candidate.targetBranch };
-  const checks = await Promise.all(workers.map((worker) => validateForgeWorkerCommit({ prepared, ...worker })));
+  const checks = await Promise.all(resolvedWorkers.map((worker) => validateForgeWorkerCommit({ ...worker, prepared: worker.prepared })));
   const failed = checks.find((check) => check.status !== 'accepted');
   if (failed) return { status: 'rejected', reason: `Worker ${failed.workerId} commit failed final scope validation (${failed.reason || 'unknown'}).`, branch: candidate.targetBranch };
-  try {
-    await verifyRecruitmentIntegration({
-      canonicalRoot: prepared.canonicalRoot,
-      integrationRoot: worktree.root,
-      integrationBranch: worktree.branch,
-      integrationBaseCommit: candidate.targetMainCommit,
-      workerCommits: workers.map((worker) => ({ workerId: worker.workerId, commit: worker.reportedCommit })),
-    });
-  } catch (error) {
-    return { status: 'rejected', reason: error instanceof Error ? error.message : 'Candidate ancestry validation failed.', branch: candidate.targetBranch };
+  if (!(await assertAncestor(worktree.root, candidate.targetMainCommit, candidate.candidateCommit))) return { status: 'rejected', reason: 'Candidate is not descended from the recorded target-main commit.', branch: candidate.targetBranch };
+  for (const worker of resolvedWorkers) {
+    if (!(await assertAncestor(worktree.root, worker.reportedCommit, candidate.candidateCommit))) {
+      return { status: 'rejected', reason: `Worker ${worker.workItemId} commit is not integrated in the candidate.`, branch: candidate.targetBranch };
+    }
   }
-  const roots = [...new Set(workers.flatMap((worker) => assignmentWriteRoots({ write_scope: [...worker.writeScope] }, prepared.canonicalRoot)))];
+  const roots = [...new Set(resolvedWorkers.flatMap((worker) => assignmentWriteRoots({ write_scope: [...worker.writeScope] }, prepared.canonicalRoot)))];
   const actualChanges = await changedPaths(worktree.root, candidate.targetMainCommit, candidate.candidateCommit);
   return { root: worktree.root, outOfScope: pathsOutsideScope(prepared.canonicalRoot, actualChanges, roots) };
 }
@@ -545,13 +652,103 @@ export async function finalizeForgeMerge(options: {
   return { status: 'merged', branch, ...(appeared ? { mainRoot: appeared.root } : {}), commit: actual, targetMainCommit: candidate.targetMainCommit, candidateCommit: candidate.candidateCommit, strategy: 'compare-and-swap' };
 }
 
-function checkedWorkers(prepared: PreparedForgeWorktrees, workers: ForgeWorkerCommitInput[]): void {
-  if (!Array.isArray(workers) || workers.length < 1 || workers.length > 16) throw new ForgeGitError('Provide between 1 and 16 committed Forge workers.');
-  const ids = new Set<string>();
-  for (const worker of workers) {
-    if (ids.has(worker.workerId)) throw new ForgeGitError(`Worker appears more than once in Forge integration: ${worker.workerId}`);
-    ids.add(worker.workerId);
-    if (!prepared.workers.some((row) => row.workerId === worker.workerId)) throw new ForgeGitError(`Worker is not recorded for this Forge attempt: ${worker.workerId}`);
+function dependencyMergeSubject(prepared: PreparedForgeWorktrees, workerId: string, workItemId: string, prerequisite: ResolvedForgeWorker): string {
+  return `Forge dependency ${prepared.ticketId}/${prepared.attemptId}/${workerId}/${identityDigest(workItemId)} <- ${identityDigest(prerequisite.workItemId)}/${prerequisite.sourceAttemptId}/${prerequisite.reportedCommit}`;
+}
+
+async function dependencyHistoryIsOwned(
+  root: string,
+  baseline: string,
+  head: string,
+  prerequisites: ResolvedForgeWorker[],
+  dependentPrepared: PreparedForgeWorktrees,
+  dependentWorkerId: string,
+  dependentWorkItemId: string,
+): Promise<boolean> {
+  if (!(await assertAncestor(root, baseline, head))) return false;
+  const sourceCommits = prerequisites.map((worker) => worker.reportedCommit);
+  const reachable = (await git(root, ['rev-list', baseline, ...sourceCommits])).stdout.split(/\r?\n/).filter(Boolean);
+  const allowed = new Set(reachable.map((commit) => commit.toLowerCase()));
+  const expectedSubjects = new Set(prerequisites.map((worker) => dependencyMergeSubject(dependentPrepared, dependentWorkerId, dependentWorkItemId, worker)));
+  const history = (await git(root, ['log', '--reverse', '--topo-order', '--format=%H%x09%P%x09%s', `${baseline}..${head}`])).stdout;
+  for (const line of history.split(/\r?\n/).filter(Boolean)) {
+    const [commit, parentsText, subject] = line.split('\t');
+    const parents = (parentsText || '').split(' ').filter(Boolean).map((parent) => parent.toLowerCase());
+    if (allowed.has(commit.toLowerCase())) continue;
+    if (parents.length < 2 || !expectedSubjects.has(subject) || parents.some((parent) => !allowed.has(parent))) return false;
+    allowed.add(commit.toLowerCase());
+  }
+  return true;
+}
+
+/** Merge only validated dependency commits into the exact clean worker worktree and return its new dispatch baseline. */
+export async function prepareForgeWorkerDependencies(options: {
+  prepared: PreparedForgeWorktrees;
+  workItemId?: string;
+  workerId: string;
+  prerequisites: ForgeWorkerCommitInput[];
+}): Promise<ForgeDependencyPreparationResult> {
+  const workItemId = options.workItemId ?? options.workerId;
+  try {
+    workItemIdentity(workItemId);
+    branchSegment(options.workerId, 'Worker ID');
+    const dependent = await assertOwnedWorktree(options.prepared, options.workerId);
+    const prerequisiteWorkers = await resolveForgeWorkers(options.prepared, options.prerequisites);
+    if (prerequisiteWorkers.some((worker) => worker.workItemId === workItemId)) {
+      throw new ForgeGitError('A Forge work item cannot depend on itself.');
+    }
+    const checks = await Promise.all(prerequisiteWorkers.map((worker) => validateForgeWorkerCommit({ ...worker, prepared: worker.prepared })));
+    const failed = checks.find((check) => check.status !== 'accepted');
+    if (failed) return { status: 'rejected', workItemId, workerId: options.workerId, reason: `Prerequisite ${failed.workItemId} failed saved-commit or write-scope validation (${failed.reason || 'unknown'}).` };
+
+    const baseline = dependent.baselineCommit;
+    if (!FULL_SHA.test(baseline)) throw new ForgeGitError('Dependent worker baseline must be a full commit SHA.');
+    const currentHead = await commitAt(dependent.root);
+    const dirty = await dirtyPaths(dependent.root);
+    if (dirty.length) {
+      const conflicts = await conflictPaths(dependent.root);
+      if (conflicts.length) return { status: 'conflict', workItemId, workerId: options.workerId, worktreeRoot: dependent.root, conflicts, mergedWorkItemIds: [] };
+      throw new ForgeGitError(`Dependent worktree contains uncommitted or untracked files: ${dirty.join(', ')}`);
+    }
+    if (await operationInProgress(dependent.root)) {
+      const conflicts = await conflictPaths(dependent.root);
+      if (conflicts.length) return { status: 'conflict', workItemId, workerId: options.workerId, worktreeRoot: dependent.root, conflicts, mergedWorkItemIds: [] };
+      throw new ForgeGitError('Dependent worktree has an unfinished Git operation.');
+    }
+    if (!(await dependencyHistoryIsOwned(dependent.root, baseline, currentHead, prerequisiteWorkers, options.prepared, options.workerId, workItemId))) {
+      throw new ForgeGitError('Dependent worktree history contains commits outside its dispatch baseline and verified prerequisites.');
+    }
+
+    const mergedWorkItemIds: string[] = [];
+    for (const prerequisite of prerequisiteWorkers) {
+      const observedHead = await commitAt(prerequisite.worktreeRoot);
+      const observedRef = await branchCommit(prerequisite.prepared.canonicalRoot, prerequisite.branch);
+      if (observedHead.toLowerCase() !== prerequisite.reportedCommit.toLowerCase()
+        || observedRef.toLowerCase() !== prerequisite.reportedCommit.toLowerCase()) {
+        throw new ForgeGitError(`Prerequisite ${prerequisite.workItemId} moved after saved-commit verification.`);
+      }
+      const head = await commitAt(dependent.root);
+      if (await assertAncestor(dependent.root, prerequisite.reportedCommit, head)) {
+        mergedWorkItemIds.push(prerequisite.workItemId);
+        continue;
+      }
+      try {
+        await git(dependent.root, ['merge', '--no-ff', '--no-commit', prerequisite.reportedCommit]);
+      } catch (error) {
+        const conflicts = await conflictPaths(dependent.root);
+        if (conflicts.length) return { status: 'conflict', workItemId, workerId: options.workerId, worktreeRoot: dependent.root, conflicts, mergedWorkItemIds };
+        throw error;
+      }
+      await git(dependent.root, ['commit', '-m', dependencyMergeSubject(options.prepared, options.workerId, workItemId, prerequisite)]);
+      mergedWorkItemIds.push(prerequisite.workItemId);
+    }
+    const dispatchBaseline = await commitAt(dependent.root);
+    if (!(await dependencyHistoryIsOwned(dependent.root, baseline, dispatchBaseline, prerequisiteWorkers, options.prepared, options.workerId, workItemId))) {
+      throw new ForgeGitError('Dependency preparation produced history that could not be verified. The worktree is preserved for inspection.');
+    }
+    return { status: 'ready', workItemId, workerId: options.workerId, worktreeRoot: dependent.root, baselineCommit: dispatchBaseline, mergedWorkItemIds };
+  } catch (error) {
+    return { status: 'rejected', workItemId, workerId: options.workerId, reason: error instanceof Error ? error.message : 'Dependency preparation failed.' };
   }
 }
 
@@ -560,7 +757,7 @@ export async function createForgeIntegrationCandidate(options: {
   targetBranch: string;
   workers: ForgeWorkerCommitInput[];
 }): Promise<ForgeCandidateResult> {
-  checkedWorkers(options.prepared, options.workers);
+  const resolvedWorkers = await resolveForgeWorkers(options.prepared, options.workers);
   const targetBranch = validateRecruitmentBranch(options.targetBranch);
   const integration = await assertOwnedWorktree(options.prepared);
   const integrationHead = await commitAt(integration.root);
@@ -569,7 +766,7 @@ export async function createForgeIntegrationCandidate(options: {
   }
   const target = await validateRecruitmentRoot(options.prepared.canonicalRoot, targetBranch);
   const targetMainCommit = target.baseCommit;
-  const checks = await Promise.all(options.workers.map((worker) => validateForgeWorkerCommit({ prepared: options.prepared, ...worker })));
+  const checks = await Promise.all(resolvedWorkers.map((worker) => validateForgeWorkerCommit({ ...worker, prepared: worker.prepared })));
   if (checks.some((check) => check.status !== 'accepted')) {
     return { status: 'rejected', reason: 'One or more worker commits failed saved-commit or write-scope validation.', workerChecks: checks };
   }
@@ -578,7 +775,7 @@ export async function createForgeIntegrationCandidate(options: {
     return {
       status: 'conflict', stage: 'worker', targetMainCommit, targetBranch, candidateBranch: integration.branch,
       candidateRoot: integration.root, candidateCommit: integrationHead,
-      conflicts: initialConflicts.map((file) => ({ path: file })), mergedWorkerIds: [],
+      conflicts: initialConflicts.map((file) => ({ path: file })), mergedWorkerIds: [], mergedWorkItemIds: [],
     };
   }
   const dirty = await dirtyPaths(integration.root);
@@ -589,42 +786,56 @@ export async function createForgeIntegrationCandidate(options: {
       await git(integration.root, ['merge', '--no-ff', '--no-edit', targetMainCommit]);
     } catch (error) {
       const conflicts = await conflictPaths(integration.root);
-      if (!conflicts.length) throw error;
+      if (!conflicts.length) return { status: 'rejected', reason: error instanceof Error ? error.message : 'Current target main could not be merged into the candidate.', workerChecks: checks };
       return {
         status: 'conflict', stage: 'main', targetMainCommit, targetBranch, candidateBranch: integration.branch,
         candidateRoot: integration.root, candidateCommit: await commitAt(integration.root),
-        conflicts: conflicts.map((file) => ({ path: file })), mergedWorkerIds: [],
+        conflicts: conflicts.map((file) => ({ path: file })), mergedWorkerIds: [], mergedWorkItemIds: [],
       };
     }
   }
 
-  const merged = await mergeRecruitmentCommits({
-    canonicalRoot: options.prepared.canonicalRoot,
-    integrationRoot: integration.root,
-    workers: options.workers.map((worker) => ({
-      workerId: worker.workerId,
-      branch: options.prepared.workers.find((row) => row.workerId === worker.workerId)!.branch,
-      headCommit: worker.reportedCommit,
-    })),
-  });
-  if (merged.status === 'conflict') {
-    return {
-      status: 'conflict', stage: 'worker', targetMainCommit, targetBranch, candidateBranch: integration.branch,
-      candidateRoot: integration.root, candidateCommit: merged.integrationHead,
-      conflicts: merged.conflicts.flatMap((entry) => entry.files.map((file) => ({ workerId: entry.workerId, path: file }))),
-      mergedWorkerIds: merged.merged.map((entry) => entry.workerId),
-    };
+  const mergedWorkers: ResolvedForgeWorker[] = [];
+  for (const worker of resolvedWorkers) {
+    const sourceHead = await commitAt(worker.worktreeRoot);
+    const sourceRef = await branchCommit(worker.prepared.canonicalRoot, worker.branch);
+    if (sourceHead.toLowerCase() !== worker.reportedCommit.toLowerCase() || sourceRef.toLowerCase() !== worker.reportedCommit.toLowerCase()) {
+      return { status: 'rejected', reason: `Worker ${worker.workItemId} moved after saved-commit verification.`, workerChecks: checks };
+    }
+    if (await assertAncestor(integration.root, worker.reportedCommit, await commitAt(integration.root))) {
+      mergedWorkers.push(worker);
+      continue;
+    }
+    try {
+      await git(integration.root, ['merge', '--no-ff', '--no-edit', worker.reportedCommit]);
+      mergedWorkers.push(worker);
+    } catch (error) {
+      const conflicts = await conflictPaths(integration.root);
+      if (!conflicts.length) return { status: 'rejected', reason: error instanceof Error ? error.message : `Worker ${worker.workItemId} commit could not be merged.`, workerChecks: checks };
+      return {
+        status: 'conflict', stage: 'worker', targetMainCommit, targetBranch, candidateBranch: integration.branch,
+        candidateRoot: integration.root, candidateCommit: await commitAt(integration.root),
+        conflicts: conflicts.map((file) => ({ workItemId: worker.workItemId, workerId: worker.workerId, path: file })),
+        mergedWorkerIds: mergedWorkers.map((merged) => merged.workerId),
+        mergedWorkItemIds: mergedWorkers.map((merged) => merged.workItemId),
+      };
+    }
   }
-  const workerCommits = options.workers.map((worker) => ({ workerId: worker.workerId, commit: worker.reportedCommit }));
-  await verifyRecruitmentIntegration({
-    canonicalRoot: options.prepared.canonicalRoot,
-    integrationRoot: integration.root,
-    integrationBranch: integration.branch,
-    integrationBaseCommit: targetMainCommit,
-    workerCommits: workerCommits.map((worker) => ({ workerId: worker.workerId, commit: worker.commit })),
-  });
+  for (const worker of resolvedWorkers) {
+    if (!(await assertAncestor(integration.root, worker.reportedCommit, await commitAt(integration.root)))) {
+      throw new ForgeGitError(`Worker ${worker.workItemId} commit did not remain integrated after candidate construction.`);
+    }
+  }
+  const workerCommits = resolvedWorkers.map(workerEvidence);
   const candidateCommit = await commitAt(integration.root);
-  const allowedPaths = [...new Set(options.workers.flatMap((worker) => {
+  if ((await branchCommit(options.prepared.canonicalRoot, integration.branch)).toLowerCase() !== candidateCommit.toLowerCase()) {
+    return { status: 'rejected', reason: 'Candidate branch ref moved while the composed candidate was being prepared.', workerChecks: checks };
+  }
+  const candidateDirty = await dirtyPaths(integration.root);
+  if (candidateDirty.length || await operationInProgress(integration.root)) {
+    return { status: 'rejected', reason: `Candidate worktree became dirty during integration: ${candidateDirty.join(', ') || 'unfinished Git operation'}.`, workerChecks: checks };
+  }
+  const allowedPaths = [...new Set(resolvedWorkers.flatMap((worker) => {
     const roots = assignmentWriteRoots({ write_scope: [...worker.writeScope] }, target.canonicalRoot);
     return roots;
   }))];
