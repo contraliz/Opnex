@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/ui/App.js';
 
 const demoProject={id:'11111111-1111-4111-8111-111111111111',name:'Demo project',projectRoot:'D:/workspace/demo',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
-const fixture={state:{version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[demoProject],selectedProjectId:demoProject.id,expandedProjectIds:[demoProject.id,'unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6 Luna',efforts:['high']}],workerAvailable:true}}};
+const fixture={state:{version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[demoProject],selectedProjectId:demoProject.id,expandedProjectIds:[demoProject.id,'unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6-Luna',efforts:['high']}],workerAvailable:true}}};
 const isSnapshotRoute=(path:string)=>path==='/api/state'||path==='/api/v1/snapshot';
 let serverState:any;
 let eventSource:any;
@@ -90,7 +90,7 @@ describe('Settings audit regressions',()=>{
     let dialog=await screen.findByRole('dialog',{name:'Settings'});
     let model=within(dialog).getByRole('button',{name:'Worker model'});
     expect(model.textContent).toContain('GPT-6 Luna');
-    await user.click(model);await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
+    await user.click(model);expect(within(dialog).getByRole('option',{name:/GPT-6 Luna/})).toBeTruthy();await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
     expect(model.textContent).toContain('DeepSeek V4.1 Flash');
     await user.click(within(dialog).getByRole('button',{name:'Cancel'}));
     await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Settings'})).toBeNull());
@@ -98,7 +98,7 @@ describe('Settings audit regressions',()=>{
     await user.click(opener);dialog=await screen.findByRole('dialog',{name:'Settings'});
     model=within(dialog).getByRole('button',{name:'Worker model'});
     expect(model.textContent).toContain('GPT-6 Luna');
-    await user.click(model);await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));failSettingsSave=true;
+    await user.click(model);expect(within(dialog).getByRole('option',{name:/GPT-6 Luna/})).toBeTruthy();await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));failSettingsSave=true;
     await user.click(within(dialog).getByRole('button',{name:'Save settings'}));
     await waitFor(()=>expect(within(dialog).getByRole('button',{name:'Save settings'}).textContent).toBe('Save settings'));
     expect(screen.getByRole('dialog',{name:'Settings'})).toBeTruthy();
@@ -119,7 +119,7 @@ describe('Settings audit regressions',()=>{
     await user.click(screen.getByRole('button',{name:'Settings'}));
     const dialog=await screen.findByRole('dialog',{name:'Settings'});
     const model=within(dialog).getByRole('button',{name:'Worker model'});
-    await user.click(model);await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
+    await user.click(model);expect(within(dialog).getByRole('option',{name:/GPT-6 Luna/})).toBeTruthy();await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
     const externalState={...serverState,settings:{...serverState.settings,orchestratorEffort:'high'}};
     act(()=>eventSource.onmessage({data:JSON.stringify({state:externalState,runtime:fixture.runtime})}));
     expect(within(dialog).getByRole('button',{name:'Worker model'}).textContent).toContain('DeepSeek V4.1 Flash');

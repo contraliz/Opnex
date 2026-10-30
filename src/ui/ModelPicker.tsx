@@ -4,6 +4,8 @@ import { Check, ChevronDown, Search } from 'lucide-react';
 export type ModelChoice={providerKey:string;provider:string;id:string;name:string;efforts:string[];available:boolean;availabilityNote?:string};
 type Props={label:string;providerKey:string;model:string;effort:string;choices:ModelChoice[];disabled:boolean;onChange:(choice:ModelChoice,effort:string)=>void};
 
+export function modelChoiceName(id:string,displayName?:string){return id==='gpt-6-luna'?'GPT-6 Luna':displayName||id;}
+
 function preferredEffort(current:string,efforts:string[]){
   if(efforts.includes(current))return current;
   return ['max','high','medium','low'].find(effort=>efforts.includes(effort))||efforts[0]||current;
