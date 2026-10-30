@@ -51,6 +51,15 @@ describe('project-owned workspaces',()=>{
     }finally{rmSync(temp,{recursive:true,force:true});}
   });
 
+  it('keeps a version 4 unclassified session unassigned after a restart',()=>{
+    const alpha=project();
+    const unclassified=task({id:'unclassified-history',projectId:undefined,userRoot:alpha.projectRoot});
+    const upgraded=upgradeStoredState(state([alpha],[unclassified]));
+    expect(upgraded.projects.map(row=>row.id)).toEqual([alpha.id]);
+    expect(upgraded.tasks[0]).not.toHaveProperty('projectId');
+    expect(upgraded.tasks[0]).toMatchObject({userRoot:alpha.projectRoot,messages:unclassified.messages});
+  });
+
   it('blocks project directory or integration changes while a session is active or resumable',()=>{
     const current=project();const changed={...current,projectRoot:'D:/work/other'};
     expect(()=>assertProjectIdentityChangeAllowed(current,changed,[task({projectId:current.id,phase:'paused_after_restart'})])).toThrow(/Finish or stop/);

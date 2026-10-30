@@ -292,12 +292,14 @@ export function upgradeStoredState(value:any):State{
     const row=rootRows.get(key)||{root,ids:new Set<string>(),enabled:false};
     row.ids.add(identity);row.enabled||=enabled;rootRows.set(key,row);
   };
-  for(const oldTask of value.tasks||[]){
-    const root=typeof oldTask.userRoot==='string'?oldTask.userRoot:'';
-    const identity=typeof oldTask.agentmemProjectId==='string'?oldTask.agentmemProjectId:(root&&sameProjectRoot(root,globalRoot)?globalAgentMemId:'');
-    includeRoot(root,identity,!!identity);
+  if(value.version<4){
+    for(const oldTask of value.tasks||[]){
+      const root=typeof oldTask.userRoot==='string'?oldTask.userRoot:'';
+      const identity=typeof oldTask.agentmemProjectId==='string'?oldTask.agentmemProjectId:(root&&sameProjectRoot(root,globalRoot)?globalAgentMemId:'');
+      includeRoot(root,identity,!!identity);
+    }
+    if(globalRoot)includeRoot(globalRoot,globalAgentMemId,globalIntegration);
   }
-  if(globalRoot)includeRoot(globalRoot,globalAgentMemId,globalIntegration);
   for(const row of rootRows.values()){
     if(row.ids.size!==1||migratedProjects.some(project=>sameProjectRoot(project.projectRoot,row.root)))continue;
     const agentmemProjectId=[...row.ids][0]||'';const now=new Date().toISOString();const name=projectDisplayName(row.root);
@@ -340,7 +342,7 @@ export function upgradeStoredState(value:any):State{
     const rootMatches=migratedProjects.filter(project=>sameProjectRoot(project.projectRoot,task.userRoot));
     const compatible=rootMatches.filter(project=>projectAgentMemIdentity(project)===task.agentmemProjectId);
     if(requestedProject&&sameProjectRoot(requestedProject.projectRoot,task.userRoot)&&projectAgentMemIdentity(requestedProject)===task.agentmemProjectId)task.projectId=requestedProject.id;
-    else if(compatible.length===1&&rootMatches.length===1)task.projectId=compatible[0].id;
+    else if(value.version<4&&compatible.length===1&&rootMatches.length===1)task.projectId=compatible[0].id;
     else delete task.projectId;
     delete (task as any).reasoningRawContent;
     for(const pass of task.passes||[])delete (pass as any).reasoningRawContent;
