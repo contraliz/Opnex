@@ -21,7 +21,7 @@ import { qualityCorrectionPlannerInFlight, qualityCorrectionPlannerMayHaveBeenSe
 import { createHash, randomUUID } from 'node:crypto';
 import { loadConfiguredSkill, parseWorkerStructuredOutput, workerExecutePrompt, workerOutcomeResponseFormatPrompt, type WorkerStage } from './worker-staging.js';
 import { readGitHubWorkspace } from './github.js';
-import { authorizesWorkerWorkspaceTool, authorizesWorkspaceRepositoryInitialization, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from './workspace-tools.js';
+import { authorizesWorkerWorkspaceTool, authorizesWorkspaceRepositoryInitialization, normalizeAgentWorkspaceUrl, recruitedWorkerWorkspaceTool, workerWorkspaceTool, workspaceToolRequiresDesktop } from './workspace-tools.js';
 import { recordAgentReceipt } from './receipt-provenance.js';
 import { createToolCallLog, interruptRunningToolCalls, recordToolCall, type ToolCallStatus } from './tool-call-log.js';
 import { captureTurnSourceFingerprint, compareTurnSourceFingerprints, type TurnSourceFingerprint } from './turn-source-snapshot.js';
@@ -814,8 +814,8 @@ async function startCodexRecruitmentStageInner(task:Task,pass:TaskPass,team:Recr
   const carried=integration?{images:[],text:''}:attachmentUserInput(pass.attachments||[]),skillsConfig=skillLibraryMcpServerConfig({taskId:task.id,role:'worker'});
   await ensureAgentAuth();
   let threadId=record.threadId;
-  if(!threadId){threadId=await agentCodex.startThread('worker',workspace,profile.model,profile.effort,approvalPolicy,undefined,workerWorkspaceTool,skillsConfig);record.threadId=threadId;}
-  else if(!attachedThreads.has(threadId))await agentCodex.resumeThread(threadId,approvalPolicy,'worker',workspace,undefined,skillsConfig,workerWorkspaceTool);
+  if(!threadId){threadId=await agentCodex.startThread('worker',workspace,profile.model,profile.effort,approvalPolicy,undefined,recruitedWorkerWorkspaceTool,skillsConfig);record.threadId=threadId;}
+  else if(!attachedThreads.has(threadId))await agentCodex.resumeThread(threadId,approvalPolicy,'worker',workspace,undefined,skillsConfig,recruitedWorkerWorkspaceTool);
   attachedThreads.add(threadId);workerWorkspaceTargets.set(threadId,{taskId:task.id,passId:pass.id});
   await verifySkillMcpAvailability(threadId);
   const now=new Date().toISOString();await mutate(state=>{const current=state.tasks.find(row=>row.id===task.id),currentPassRow=current?.passes?.find(row=>row.id===pass.id),currentTeam=currentPassRow?.recruitmentTeam,target=integration?currentTeam?.integration:currentTeam?.workers.find(row=>row.workerId===workerId);if(!current||!currentPassRow||!currentTeam||!target||current.currentPassId!==pass.id||current.phase==='cancelled')return;currentTeam.status=integration?'integrating':'running';target.threadId=threadId;target.activeTurnId=undefined;target.workerStage='execute';target.status='running';target.startedAt??=now;target.executionStartedAt=now;});

@@ -3,6 +3,7 @@ import { assignmentAuthorizesWorkspaceRootWrite, simpleRouteWriteRoots } from '.
 
 export type WorkspaceToolTarget={taskId:string;passId:string};
 export const workerWorkspaceTool=[{namespace:'pseudoharness',name:'workspace',description:'Open or inspect the current task’s Browser or GitHub workspace, or initialize Git in the active workspace root. Git initialization accepts no path and never creates commits or remotes.',inputSchema:{type:'object',additionalProperties:false,properties:{action:{type:'string',enum:['open_browser','open_github','open_pull_request','dock_browser','dock_github','undock','inspect_github','initialize_git_repository']},url:{type:'string',maxLength:2048}},required:['action']}}];
+export const recruitedWorkerWorkspaceTool=[{...workerWorkspaceTool[0],description:'Open or inspect the current task’s Browser or GitHub workspace. Repository initialization is unavailable in recruited worktrees.',inputSchema:{...workerWorkspaceTool[0].inputSchema,properties:{...workerWorkspaceTool[0].inputSchema.properties,action:{...workerWorkspaceTool[0].inputSchema.properties.action,enum:workerWorkspaceTool[0].inputSchema.properties.action.enum.filter(action=>action!=='initialize_git_repository')}}}}];
 
 export function authorizesWorkerWorkspaceTool(task:Task|undefined,pass:TaskPass|undefined,target:WorkspaceToolTarget|undefined,threadId:string){
   if(!task||!pass||!target||task.id!==target.taskId||task.currentPassId!==target.passId||pass.id!==target.passId||!['worker_running','simple_running'].includes(task.phase))return false;
