@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -73,10 +73,10 @@ afterEach(async()=>{
 
 describe('headless kernel HTTP boundary',()=>{
   it('creates project-owned settings with AgentMem off and rejects new sessions without projectId',async()=>{
-    const dataDirectory=await temporaryDirectory('project-workspace');const projectRoot=path.join(dataDirectory,'workspace');await mkdir(projectRoot);
+    const dataDirectory=await temporaryDirectory('project-workspace');const projectRoot=path.join(dataDirectory,'workspace');await mkdir(projectRoot);const canonicalProjectRoot=await realpath(projectRoot);
     await writeFile(path.join(dataDirectory,'state.json'),JSON.stringify({version:4,revision:0,settings:{orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']}));
     const kernel=await startKernel(dataDirectory),headers={'x-pseudoharness-protocol-version':'1',origin:kernel.origin,'content-type':'application/json','x-pseudoharness-token':''};const snapshot=await (await fetch(`${kernel.origin}/api/v1/snapshot`,{headers})).json();headers['x-pseudoharness-token']=snapshot.csrf;
-    const projectResponse=await fetch(`${kernel.origin}/api/projects`,{method:'POST',headers,body:JSON.stringify({id:'11111111-1111-4111-8111-111111111111',name:'Workspace',projectRoot,pinned:false})});expect(projectResponse.status).toBe(200);const saved=(await projectResponse.json()).project;expect(saved).toMatchObject({projectRoot,agentmemEnabled:false,agentmemProjectId:'',needsLocation:false});
+    const projectResponse=await fetch(`${kernel.origin}/api/projects`,{method:'POST',headers,body:JSON.stringify({id:'11111111-1111-4111-8111-111111111111',name:'Workspace',projectRoot,pinned:false})});expect(projectResponse.status).toBe(200);const saved=(await projectResponse.json()).project;expect(saved).toMatchObject({projectRoot:canonicalProjectRoot,agentmemEnabled:false,agentmemProjectId:'',needsLocation:false});
     const current=await (await fetch(`${kernel.origin}/api/v1/snapshot`,{headers:{'x-pseudoharness-protocol-version':'1'}})).json();expect(current.state.settings).not.toHaveProperty('projectRoot');expect(current.state.settings).not.toHaveProperty('agentmemProjectId');
     const missingProject=await fetch(`${kernel.origin}/api/tasks`,{method:'POST',headers,body:JSON.stringify({message:'A project is required.'})});expect(missingProject.status).toBe(400);expect((await missingProject.json()).error).toMatch(/projectId|project/i);
     const stopped=await fetch(`${kernel.origin}/api/v1/kernel/shutdown`,{method:'POST',headers,body:JSON.stringify({confirm:'stop-kernel'})});expect(stopped.status).toBe(202);await poll(async()=>kernel.child.exitCode===0?true:undefined,()=>kernel.getOutput()||'Kernel did not stop cleanly.');
