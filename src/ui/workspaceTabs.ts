@@ -5,6 +5,7 @@ export type WorkspaceTabRecord = {
   kind: Exclude<WorkspaceTabKind, 'session'>;
   originTabId: string | null;
   originTaskId: string | null;
+  projectId?:string;
   projectRoot: string;
   initialUrl?: string;
   focusUrl?: string;
@@ -14,6 +15,7 @@ export type WorkspaceTabRegistry = Readonly<Record<string, WorkspaceTabRecord>>;
 
 export type WorkspaceTabContext = {
   originTabId: string | null;
+  projectId?:string;
   projectRoot: string;
   initialUrl?: string;
   focusUrl?: string;
@@ -48,6 +50,7 @@ export function createWorkspaceTabRecord(
     kind,
     originTabId: context.originTabId,
     originTaskId,
+    ...(context.projectId ? { projectId: context.projectId } : {}),
     projectRoot: context.projectRoot,
     ...(context.initialUrl ? { initialUrl: context.initialUrl } : {}),
     ...(context.focusUrl ? { focusUrl: context.focusUrl } : {}),

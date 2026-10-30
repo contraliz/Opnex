@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/ui/App.js';
 
-const fixture={state:{version:3,settings:{projectRoot:'D:/workspace/demo',agentmemProjectId:'demo-project',deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6 Luna',efforts:['high']}],workerAvailable:true},agentmem:{connected:true,projectVerified:true,detail:'Connected · demo-project'}}};
+const demoProject={id:'11111111-1111-4111-8111-111111111111',name:'Demo project',projectRoot:'D:/workspace/demo',agentmemProjectId:'',agentmemEnabled:false,needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
+const fixture={state:{version:4,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[demoProject],selectedProjectId:demoProject.id,expandedProjectIds:[demoProject.id,'unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6 Luna',efforts:['high']}],workerAvailable:true}}};
 const isSnapshotRoute=(path:string)=>path==='/api/state'||path==='/api/v1/snapshot';
 let serverState:any;
 let eventSource:any;
@@ -26,7 +27,6 @@ beforeEach(async()=>{
       if(failSettingsSave)throw new Error('Save failed for the focused regression test.');
       serverState={...serverState,settings:{...body}};return {} as any;
     }
-    if(path==='/api/agentmem/projects')return {projects:[]} as any;
     if(path.startsWith('/api/directories'))return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'one',path:'D:/workspace/demo/one'}],truncated:false} as any;
     if(path==='/api/skills'||path.startsWith('/api/skills?'))return {skills:[]} as any;
     return {} as any;
@@ -43,8 +43,8 @@ describe('Settings audit regressions',()=>{
     const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
     const opener=screen.getByRole('button',{name:'Settings'});await user.click(opener);
     const dialog=await screen.findByRole('dialog',{name:'Settings'});
-    expect(document.activeElement).toBe(screen.getByRole('textbox',{name:/Project root/}));
-    for(let index=0;index<3;index++)await user.tab({shift:true});
+    expect(document.activeElement).toBe(within(dialog).getByRole('textbox',{name:'DeepSeek Harness provider'}));
+    for(let index=0;index<2;index++)await user.tab({shift:true});
     expect(dialog.contains(document.activeElement)).toBe(true);
     expect(document.activeElement).toBe(within(dialog).getByRole('button',{name:'Save settings'}));
     await user.tab();
@@ -55,9 +55,9 @@ describe('Settings audit regressions',()=>{
 
   it('gives the nested directory picker focus and Escape priority, then returns to Browse',async()=>{
     const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
-    const opener=screen.getByRole('button',{name:'Settings'});await user.click(opener);
-    const settings=await screen.findByRole('dialog',{name:'Settings'});
-    const browse=within(settings).getByRole('button',{name:'Browse project root folders'});
+    const opener=screen.getByRole('button',{name:'Configure Demo project'});await user.click(opener);
+    const settings=await screen.findByRole('dialog',{name:'Configure Demo project'});
+    const browse=within(settings).getByRole('button',{name:'Browse working directory folders'});
     const windowEscape=vi.fn();observedWindowKeydown=windowEscape;window.addEventListener('keydown',windowEscape);
     await user.click(browse);
     const picker=await screen.findByRole('dialog',{name:'Choose a folder'});
@@ -76,10 +76,10 @@ describe('Settings audit regressions',()=>{
     await user.keyboard('{Escape}');
     await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());
     expect(windowEscape).not.toHaveBeenCalled();
-    expect(screen.getByRole('dialog',{name:'Settings'})).toBeTruthy();
+    expect(screen.getByRole('dialog',{name:'Configure Demo project'})).toBeTruthy();
     await waitFor(()=>expect(document.activeElement).toBe(browse));
     await user.keyboard('{Escape}');
-    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Settings'})).toBeNull());
+    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Configure Demo project'})).toBeNull());
     expect(windowEscape).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(opener);
   });

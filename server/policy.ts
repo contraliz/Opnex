@@ -16,10 +16,6 @@ export function correctionWorker(task:Pick<Task,'workerThreadId'|'correctionCoun
   return task.workerThreadId;
 }
 export function isCancelled(task:Pick<Task,'phase'>){return task.phase==='cancelled';}
-/** AgentMem owns lease truth; a persisted app token may be stale after a service-side release. */
-export function canRetryAcceptedAgentMemPass(pass:{phase?:string;agentmemTaskId?:string;agentmemLease?:string}):pass is {phase:'accepted';agentmemTaskId:string;agentmemLease?:string}{
-  return pass.phase==='accepted'&&!!pass.agentmemTaskId;
-}
 export function completionDisposition(task:Pick<Task,'phase'|'pendingRevision'>,role:'orchestrator'|'worker',status:string){
   if(isCancelled(task))return 'ignore' as const;
   if(status==='interrupted'&&task.pendingRevision)return 'revise' as const;

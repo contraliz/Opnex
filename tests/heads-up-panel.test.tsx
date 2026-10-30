@@ -2,12 +2,10 @@
 import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Runtime, Settings, Task, TaskPass } from '../src/types';
+import type { Project, Runtime, Settings, Task, TaskPass } from '../src/types';
 import { HeadsUpPanel } from '../src/ui/HeadsUpPanel';
 
 const settings: Settings = {
-  projectRoot: 'D:/new-project',
-  agentmemProjectId: 'new-project-kb',
   orchestratorModel: 'gpt-6.1-sol',
   orchestratorEffort: 'low',
   approvalPolicy: 'never',
@@ -15,8 +13,8 @@ const settings: Settings = {
 
 const runtime: Runtime = {
   codex: { state: 'connected', error: '', models: [], workerAvailable: true },
-  agentmem: { connected: true, projectVerified: true, detail: 'Project is verified for new tasks.' },
 };
+const project:Project={id:'project-1',name:'New project',projectRoot:'D:/new-project',agentmemProjectId:'new-project-kb',agentmemEnabled:true,needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
 
 function pass(id: string, index: number, overrides: Partial<TaskPass> = {}): TaskPass {
   return {
@@ -115,12 +113,14 @@ function taskFixture(id = 'task-1'): Task {
 
 function PanelHarness({
   task,
+  project:currentProject=project,
   name = task?.id || 'empty',
   initiallyOpen = true,
   withinPane = false,
   onOpenSettings = vi.fn(),
 }: {
   task: Task | null;
+  project?:Project|null;
   name?: string;
   initiallyOpen?: boolean;
   withinPane?: boolean;
@@ -130,7 +130,7 @@ function PanelHarness({
   const triggerRef = useRef<HTMLButtonElement>(null);
   return <div className={withinPane ? 'pane-body' : undefined}>
     <button ref={triggerRef} type="button" aria-label={`HUD ${name}`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>HUD</button>
-    <HeadsUpPanel task={task} settings={settings} runtime={runtime} open={open} onClose={() => setOpen(false)} onOpenSettings={onOpenSettings} triggerRef={triggerRef}/>
+    <HeadsUpPanel task={task} project={currentProject} settings={settings} runtime={runtime} open={open} onClose={() => setOpen(false)} onOpenSettings={onOpenSettings} triggerRef={triggerRef}/>
   </div>;
 }
 

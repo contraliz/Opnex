@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ApprovalPolicy, Assignment, Receipt } from './contracts.js';
@@ -9,6 +10,7 @@ import { stateDirectory } from './paths.js';
 import { assignmentSchema, receiptSchema } from './contracts.js';
 import { normalizeAgentWorkspaceUrl } from './workspace-tools.js';
 import { qualityCorrectionPlannerMayHaveBeenSent, qualityLoopResumeAction, type QACorrectionPlannerDispatch } from './quality-loop-resume.js';
+import { assertProjectIdentityChangeAllowed, projectAgentMemIdentity, projectPathKey, sameProjectRoot } from './project-identity.js';
 
 export type TaskPhase = 'intake' | 'routing' | 'direct_running' | 'simple_running' | 'planning' | 'worker_running' | 'escalated' | 'reviewing' | 'accepted' | 'needs_attention' | 'cancelled' | 'paused_after_restart';
 export type WorkflowRole='router'|'direct'|'simple'|'orchestrator'|'worker';
@@ -60,12 +62,12 @@ export type SkillSaveRecord={id:string;revision:string;name:string;description:s
 export type TaskPass = { id:string; index:number; createdAt:string; userInput:string; userInputs:string[]; userMessageIds:string[]; attachments?:TaskAttachment[]; selectedSkills?:SavedSkillSnapshot[]; loadedSkills?:SavedSkillSnapshot[]; savedSkills?:SkillSaveRecord[]; interruptedApprovals?:ApprovalRequest[]; phase:TaskPhase; agentmemAudit?:AgentMemAudit; agentmemSetupMode?:'register'|'repository'; agentmemSetupTurnId?:string; receiptProvenance?:ReceiptProvenance; agentReceipts?:AgentReceiptRecord[]; turnSourceChanges?:TurnSourceChangeRecord[]; recruitmentTeam?:RecruitmentTeam; recruitmentHistory?:RecruitmentTeam[]; qualityLoop?:QualityLoop; approvalPolicy?:ApprovalPolicy; deepSeekExecution?:DeepSeekExecutionProfile; agentContextVersion?:number; legacyUnassociated?:boolean; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; publicAnswer?:string; assignment?:Assignment; receipt?:Receipt; reviewNote?:string; resolution?:'direct'|'simple'|'delegated'; routingNote?:string; error?:string; escalation?:unknown; workerStage?:WorkerStage; workerContextStatus?:WorkerContextStatus; workerContextSummary?:string; reasoningSummaries?:ReasoningSummary[]; reasoningTurns?:ReasoningTurn[]; liveActivity?:LiveActivity[]; usage?:PassUsage; gitDiff?:PassGitDiff; correctionCount:number; routerThreadId?:string; directThreadId?:string; simpleThreadId?:string; orchestratorThreadId?:string; workerThreadId?:string; activeTurnId?:string; activeRole?:WorkflowRole; processedTurns:string[]; agentmemTaskId?:string; agentmemLease?:string; agentmemRecordStatus?:string; agentmemRecordError?:string; agentmemReceiptId?:string }
 export type GitHubTaskLink={repository:string;branch:string;baseBranch?:string;pullRequestUrl?:string;updatedAt:string};
 export type Task = { projectId?:string; lastInteractedAt?:string; githubLink?:GitHubTaskLink; workspaceCommand?:{id:string;mode:'browser'|'github';placement:'side'|'full';url?:string;createdAt:string}; id: string; title: string; phase: TaskPhase; createdAt: string; updatedAt: string; userRoot: string; agentmemProjectId: string; userMessages: string[]; messages: Message[]; passes?:TaskPass[]; currentPassId?:string; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; assignment?: Assignment; receipt?: Receipt; reviewNote?: string; resolution?:'direct'|'simple'|'delegated'; allowDirectResponse?:boolean;routingNote?:string;workerStage?:WorkerStage;workerContextStatus?:WorkerContextStatus;workerContextSummary?:string;reasoningSummaries?:ReasoningSummary[];reasoningTurns?:ReasoningTurn[];liveActivity?:LiveActivity[];gitDiff?:PassGitDiff;activeModelId?:string;activeEffort?:string;correctionCount:number;routerThreadId?:string;directThreadId?:string;simpleThreadId?:string;orchestratorThreadId?:string;workerThreadId?:string;activeTurnId?:string;activeRole?:WorkflowRole;processedTurns:string[];error?:string;escalation?:unknown;approvalRequests?:ApprovalRequest[];agentmemTaskId?:string;agentmemLease?:string;agentmemRecordStatus?:string;agentmemRecordError?:string;agentmemReceiptId?:string;pendingRevision?:boolean };
-export type Project = { id:string; name:string; projectRoot:string; agentmemProjectId:string; agentmemEnabled:boolean; agentmemAutoSetup:boolean; pinned:boolean; createdAt:string; updatedAt:string };
-export type Settings = { projectRoot: string; agentmemProjectId: string; agentmemAutoSetup?:boolean; orchestratorModel: string; orchestratorEffort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'; approvalPolicy: ApprovalPolicy; deepseekProvider?:string; deepseekModel?:string; deepseekReasoningEffort?:string };
-export type State = { version: 3; revision:number; settings: Settings; tasks: Task[]; activeTaskId: string|null; projects:Project[]; selectedProjectId:string|null; expandedProjectIds:string[] };
+export type Project = { id:string; name:string; projectRoot:string; agentmemProjectId:string; agentmemEnabled:boolean; needsLocation:boolean; pinned:boolean; createdAt:string; updatedAt:string };
+export type Settings = { orchestratorModel: string; orchestratorEffort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'; approvalPolicy: ApprovalPolicy; deepseekProvider?:string; deepseekModel?:string; deepseekReasoningEffort?:string };
+export type State = { version: 4; revision:number; settings: Settings; tasks: Task[]; activeTaskId: string|null; projects:Project[]; selectedProjectId:string|null; expandedProjectIds:string[] };
 const dataDir = stateDirectory();
 const statePath = path.join(dataDir, 'state.json');
-const defaults: State = { version: 3, revision:0, settings: { projectRoot: '', agentmemProjectId: '', agentmemAutoSetup:false, orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request', deepseekProvider:'opencode-go', deepseekModel:'deepseek-v4.1-flash', deepseekReasoningEffort:'max' }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:['unclassified'] };
+const defaults: State = { version: 4, revision:0, settings: { orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request', deepseekProvider:'opencode-go', deepseekModel:'deepseek-v4.1-flash', deepseekReasoningEffort:'max' }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:['unclassified'] };
 export function deepSeekExecutionProfileForSettings(settings:Partial<Settings>):DeepSeekExecutionProfile{return {kind:'deepseek-harness-sdk',provider:settings.deepseekProvider||'opencode-go',model:settings.deepseekModel||'deepseek-v4.1-flash',nativeReasoningEffort:settings.deepseekReasoningEffort||'max'};}
 let current = structuredClone(defaults);
 let loaded = false;
@@ -83,11 +85,12 @@ function isDeepSeekCapabilities(value:unknown){return isStoredRecord(value)&&val
 function isDeepSeekProviderEventSummary(value:unknown){const boundedKeys=(candidate:unknown)=>candidate===undefined||Array.isArray(candidate)&&candidate.length<=32&&candidate.every((row:unknown)=>isString(row)&&row.length<=64);return isStoredRecord(value)&&isString(value.type)&&value.type.length<=128&&(value.sequence===undefined||Number.isSafeInteger(value.sequence)&&value.sequence>=0)&&(value.turn===undefined||Number.isSafeInteger(value.turn)&&value.turn>=0)&&(value.step===undefined||Number.isSafeInteger(value.step)&&value.step>=0)&&isOptionalString(value,'status')&&isOptionalString(value,'messageRole')&&(value.contentBlockTypes===undefined||strings(value.contentBlockTypes))&&(value.textCharacters===undefined||Number.isSafeInteger(value.textCharacters)&&value.textCharacters>=0)&&isOptionalString(value,'toolName')&&isOptionalString(value,'toolCallId')&&(value.sourceEventSequences===undefined||Array.isArray(value.sourceEventSequences)&&value.sourceEventSequences.every((row:unknown)=>Number.isSafeInteger(row)&&Number(row)>=0))&&(value.toolError===undefined||typeof value.toolError==='boolean')&&(value.hasError===undefined||typeof value.hasError==='boolean')&&isOptionalString(value,'errorCode')&&boundedKeys(value.dataKeys)&&boundedKeys(value.reasonKeys)&&isOptionalString(value,'reasonKind')&&isOptionalString(value,'reasonErrorName')&&isOptionalString(value,'reasonErrorCode')&&(value.reasonErrorMessagePresent===undefined||typeof value.reasonErrorMessagePresent==='boolean');}
 function isDeepSeekPhaseRun(value:unknown){return isStoredRecord(value)&&['context_plan','context_compose','execute'].includes(value.stage)&&isString(value.sessionId)&&isString(value.turnId)&&validProviderValue(value.provider)&&validProviderValue(value.model)&&isOptionalString(value,'requestedReasoningEffort')&&['read-only','workspace-write','danger-full-access'].includes(value.permissionMode)&&approvalPolicies.includes(value.approvalPolicy)&&isString(value.workspaceRoot)&&strings(value.writeScope)&&['read-only','unrestricted'].includes(value.access)&&['assignment-instruction-only','read-only-preset'].includes(value.filesystemScope)&&['running','completed','interrupted','failed'].includes(value.status)&&isDate(value.startedAt)&&isDate(value.updatedAt)&&isOptionalString(value,'profileName')&&(value.configuredMcpServers===undefined||strings(value.configuredMcpServers))&&(value.mcpToolCatalog===undefined||isDeepSeekMcpToolCatalog(value.mcpToolCatalog))&&(value.providerEvents===undefined||Array.isArray(value.providerEvents)&&value.providerEvents.length<=256&&value.providerEvents.every(isDeepSeekProviderEventSummary))&&(value.latestNonAgentMemToolSequence===undefined||Number.isSafeInteger(value.latestNonAgentMemToolSequence)&&value.latestNonAgentMemToolSequence>=0)&&isOptionalString(value,'harnessVersion')&&isOptionalString(value,'error')&&(value.capabilities===undefined||isDeepSeekCapabilities(value.capabilities))&&(value.serverInfo===undefined||isStoredRecord(value.serverInfo)&&isString(value.serverInfo.name)&&isString(value.serverInfo.version));}
 function hasValidStoredArrayFields(value:Record<string,any>,fields:string[]){return fields.every(field=>value[field]===undefined||Array.isArray(value[field]));}
-function hasSupportedSettingsShape(value:unknown){
+function hasSupportedSettingsShape(value:unknown,version:number){
   if(value===undefined)return true;
   if(!isStoredRecord(value))return false;
   const optionalString=(field:string,max:number,allowEmpty=true)=>value[field]===undefined||typeof value[field]==='string'&&value[field].length<=max&&value[field]===value[field].trim()&&(allowEmpty||value[field].length>0);
-  return optionalString('projectRoot',1024)&&optionalString('agentmemProjectId',64)&&(value.agentmemAutoSetup===undefined||typeof value.agentmemAutoSetup==='boolean')&&
+  const legacyWorkspace=version<4||!('projectRoot' in value)&&!('agentmemProjectId' in value)&&!('agentmemAutoSetup' in value);
+  return (legacyWorkspace||(value.projectRoot===undefined&&value.agentmemProjectId===undefined&&value.agentmemAutoSetup===undefined))&&optionalString('projectRoot',1024)&&optionalString('agentmemProjectId',64)&&(value.agentmemAutoSetup===undefined||typeof value.agentmemAutoSetup==='boolean')&&
     (value.agentmemProjectId===undefined||/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(value.agentmemProjectId))&&
     optionalString('orchestratorModel',200,false)&&
     optionalString('deepseekProvider',160,false)&&optionalString('deepseekModel',160,false)&&optionalString('deepseekReasoningEffort',160,false)&&
@@ -193,14 +196,15 @@ function hasSupportedTaskShape(task:unknown,legacy:boolean){
   return ['currentPassId','activeTurnId','routerThreadId','directThreadId','simpleThreadId','orchestratorThreadId','workerThreadId','agentmemTaskId','agentmemLease','agentmemRecordStatus','agentmemRecordError','agentmemReceiptId','activeModelId','activeEffort','error','workerContextSummary','routingNote','reviewNote'].every(field=>isOptionalString(task,field));
 }
 const isUuid=(value:unknown)=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-function isProject(value:unknown){return isStoredRecord(value)&&isUuid(value.id)&&isString(value.name)&&value.name.trim().length>0&&value.name.length<=80&&isString(value.projectRoot)&&value.projectRoot.length<=1024&&isString(value.agentmemProjectId)&&/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(value.agentmemProjectId)&&typeof value.agentmemEnabled==='boolean'&&typeof value.agentmemAutoSetup==='boolean'&&(!value.agentmemEnabled&&!value.agentmemProjectId||value.agentmemEnabled&&(!!value.agentmemProjectId||value.agentmemAutoSetup))&&typeof value.pinned==='boolean'&&isDate(value.createdAt)&&isDate(value.updatedAt);}
+function isProject(value:unknown){return isStoredRecord(value)&&isUuid(value.id)&&isString(value.name)&&value.name.trim().length>0&&value.name.length<=80&&isString(value.projectRoot)&&value.projectRoot.length<=1024&&isString(value.agentmemProjectId)&&/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(value.agentmemProjectId)&&typeof value.agentmemEnabled==='boolean'&&(value.agentmemEnabled?!!value.agentmemProjectId:!value.agentmemProjectId)&&typeof value.needsLocation==='boolean'&&typeof value.pinned==='boolean'&&isDate(value.createdAt)&&isDate(value.updatedAt);}
+function isLegacyProject(value:unknown){return isStoredRecord(value)&&isUuid(value.id)&&isString(value.name)&&value.name.trim().length>0&&value.name.length<=80&&isString(value.projectRoot)&&value.projectRoot.length<=1024&&isString(value.agentmemProjectId)&&/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(value.agentmemProjectId)&&typeof value.agentmemEnabled==='boolean'&&typeof value.agentmemAutoSetup==='boolean'&&(!value.agentmemEnabled&&!value.agentmemProjectId||value.agentmemEnabled&&(!!value.agentmemProjectId||value.agentmemAutoSetup))&&typeof value.pinned==='boolean'&&isDate(value.createdAt)&&isDate(value.updatedAt);}
 function safeWorkspaceUrl(value:unknown){try{return normalizeAgentWorkspaceUrl(value)===value;}catch{return false;}}
 function hasSupportedStoredShape(value:any){
-  if(!isStoredRecord(value)||![1,2,3].includes(value.version)||!Array.isArray(value.tasks))return false;
+  if(!isStoredRecord(value)||![1,2,3,4].includes(value.version)||!Array.isArray(value.tasks))return false;
   if(value.revision!==undefined&&(!Number.isSafeInteger(value.revision)||value.revision<0))return false;
-  if(!hasSupportedSettingsShape(value.settings))return false;
+  if(!hasSupportedSettingsShape(value.settings,value.version))return false;
   if(value.activeTaskId!==undefined&&value.activeTaskId!==null&&typeof value.activeTaskId!=='string')return false;
-  if(value.version===3&&(!Array.isArray(value.projects)||!value.projects.every(isProject)||new Set(value.projects.map((project:any)=>project.id)).size!==value.projects.length||value.selectedProjectId!==null&&!isUuid(value.selectedProjectId)||!Array.isArray(value.expandedProjectIds)||!value.expandedProjectIds.every((id:any)=>id==='unclassified'||isUuid(id))||value.selectedProjectId&&!value.projects.some((project:any)=>project.id===value.selectedProjectId)||value.tasks.some((task:any)=>task.projectId&&!value.projects.some((project:any)=>project.id===task.projectId))))return false;
+  if(value.version>=3&&(!Array.isArray(value.projects)||!value.projects.every(value.version===4?isProject:isLegacyProject)||new Set(value.projects.map((project:any)=>project.id)).size!==value.projects.length||value.selectedProjectId!==null&&!isUuid(value.selectedProjectId)||!Array.isArray(value.expandedProjectIds)||!value.expandedProjectIds.every((id:any)=>id==='unclassified'||isUuid(id))||value.selectedProjectId&&!value.projects.some((project:any)=>project.id===value.selectedProjectId)||value.tasks.some((task:any)=>task.projectId&&!value.projects.some((project:any)=>project.id===task.projectId))))return false;
   return value.tasks.every((task:any)=>hasSupportedTaskShape(task,value.version===1));
 }
 
@@ -237,13 +241,20 @@ async function loadStateOnce(): Promise<State> {
     // Persist every normalization that changes the stored state, including
     // v3 in-flight task recovery. Otherwise restart recovery would only exist
     // in memory and a later crash could replay the same active state again.
-    if(containedRawReasoning||JSON.stringify(current)!==JSON.stringify(value)){const tmp=`${statePath}.${randomUUID()}.tmp`;await writeFile(tmp,JSON.stringify(current,null,2),{mode:0o600});await rename(tmp,statePath);}
+    if(containedRawReasoning||JSON.stringify(current)!==JSON.stringify(value))await persistStateMigration(source,current);
   } catch(error) {
     current=structuredClone(defaults);
     throw new Error(`Opnex local state at ${statePath} could not be migrated safely. Preserve or repair this file before restarting; it will not be replaced automatically.`,{cause:error});
   }
   loaded = true;
   return structuredClone(current);
+}
+async function persistStateMigration(original:string,state:State){
+  const backup=`${statePath}.pre-migration-${Date.now()}-${randomUUID()}.bak`;
+  await writeFile(backup,original,{flag:'wx',mode:0o600});
+  const tmp=`${statePath}.${randomUUID()}.tmp`;
+  try{await writeFile(tmp,JSON.stringify(state,null,2),{flag:'wx',mode:0o600});await rename(tmp,statePath);}
+  catch(error){try{await rm(tmp,{force:true});}catch{/* Preserve the original persistence error. */}throw error;}
 }
 function recoverQualityLoopAfterRestart(pass:TaskPass,at:string,possiblyActiveCorrectionPlanner?:{threadId?:string;turnId?:string}){
   const loop=pass.qualityLoop;if(!loop)return;
@@ -269,17 +280,37 @@ function recoverQualityLoopAfterRestart(pass:TaskPass,at:string,possiblyActiveCo
   }
 }
 export function upgradeStoredState(value:any):State{
-  let migratedProjects:Project[]=Array.isArray(value.projects)?value.projects.filter(isProject).map((row:any)=>({...row})):[];
+  let migratedProjects:Project[]=(Array.isArray(value.projects)?value.projects:[]).filter(value.version===4?isProject:isLegacyProject).map((row:any)=>({id:row.id,name:row.name,projectRoot:row.projectRoot,agentmemProjectId:row.agentmemEnabled&&row.agentmemProjectId?row.agentmemProjectId:'',agentmemEnabled:row.agentmemEnabled&&!!row.agentmemProjectId,needsLocation:value.version===4?row.needsLocation:!projectDirectoryExists(row.projectRoot),pinned:row.pinned,createdAt:row.createdAt,updatedAt:row.updatedAt}));
   let selectedProjectId: string|null=typeof value.selectedProjectId==='string'?value.selectedProjectId:null;
-  if(value.version!==3&&value.settings?.projectRoot){
-    const now=new Date().toISOString();const id=randomUUID();
-    migratedProjects=[{id,name:path.basename(value.settings.projectRoot.replace(/[\\/]+$/,''))||'Project',projectRoot:value.settings.projectRoot,agentmemProjectId:value.settings.agentmemProjectId||'',agentmemEnabled:!!value.settings.agentmemProjectId||!!value.settings.agentmemAutoSetup,agentmemAutoSetup:!!value.settings.agentmemAutoSetup,pinned:false,createdAt:now,updatedAt:now}];selectedProjectId=id;
+  const legacySettings=value.settings||{};
+  const globalRoot=typeof legacySettings.projectRoot==='string'?legacySettings.projectRoot:'';
+  const globalAgentMemId=typeof legacySettings.agentmemProjectId==='string'?legacySettings.agentmemProjectId:'';
+  const globalIntegration=!!globalAgentMemId;
+  const rootRows=new Map<string,{root:string;ids:Set<string>;enabled:boolean}>();
+  const includeRoot=(root:string,identity:string,enabled:boolean)=>{
+    const key=projectPathKeyForMigration(root);if(!key)return;
+    const row=rootRows.get(key)||{root,ids:new Set<string>(),enabled:false};
+    row.ids.add(identity);row.enabled||=enabled;rootRows.set(key,row);
+  };
+  for(const oldTask of value.tasks||[]){
+    const root=typeof oldTask.userRoot==='string'?oldTask.userRoot:'';
+    const identity=typeof oldTask.agentmemProjectId==='string'?oldTask.agentmemProjectId:(root&&sameProjectRoot(root,globalRoot)?globalAgentMemId:'');
+    includeRoot(root,identity,!!identity);
+  }
+  if(globalRoot)includeRoot(globalRoot,globalAgentMemId,globalIntegration);
+  for(const row of rootRows.values()){
+    if(row.ids.size!==1||migratedProjects.some(project=>sameProjectRoot(project.projectRoot,row.root)))continue;
+    const agentmemProjectId=[...row.ids][0]||'';const now=new Date().toISOString();const name=projectDisplayName(row.root);
+    migratedProjects.push({id:randomUUID(),name,projectRoot:row.root,agentmemProjectId:row.enabled?agentmemProjectId:'',agentmemEnabled:row.enabled&&!!agentmemProjectId,needsLocation:!projectDirectoryExists(row.root),pinned:false,createdAt:now,updatedAt:now});
   }
   if(selectedProjectId&&!migratedProjects.some(row=>row.id===selectedProjectId))selectedProjectId=null;
+  const globalProject=migratedProjects.find(project=>sameProjectRoot(project.projectRoot,globalRoot)&&projectAgentMemIdentity(project)===(globalIntegration?globalAgentMemId:''));
+  if(!selectedProjectId&&globalProject)selectedProjectId=globalProject.id;
   const tasks=(value.tasks||[]).map((t:any)=>{
-    const task={...t,agentmemProjectId:typeof t.agentmemProjectId==='string'?t.agentmemProjectId:(value.settings?.agentmemProjectId||defaults.settings.agentmemProjectId)} as Task;
+    const userRoot=typeof t.userRoot==='string'?t.userRoot:'';
+    const agentmemProjectId=typeof t.agentmemProjectId==='string'?t.agentmemProjectId:(sameProjectRoot(userRoot,globalRoot)?globalAgentMemId:'');
+    const task={...t,userRoot,agentmemProjectId} as Task;
     if(value.version===1){
-      task.userRoot=typeof t.userRoot==='string'?t.userRoot:value.settings?.projectRoot||'';
       task.userMessages=Array.isArray(t.userMessages)?t.userMessages:[];
       task.messages=Array.isArray(t.messages)?t.messages:[];
       task.updatedAt=typeof t.updatedAt==='string'?t.updatedAt:task.createdAt;
@@ -305,13 +336,24 @@ export function upgradeStoredState(value:any):State{
       const interruptedAt=new Date().toISOString();for(const activity of task.liveActivity||[])if(activity.status==='running'){activity.status='interrupted';activity.updatedAt=interruptedAt;}
       for(const pass of task.passes||[]){for(const context of pass.agentmemAudit?.contexts||[])if(context.status==='running'){context.status='interrupted';context.updatedAt=interruptedAt;}for(const call of pass.agentmemAudit?.calls||[])if(call.status==='running'){call.status='interrupted';call.updatedAt=interruptedAt;}for(const team of recruitmentTeamsForPass(pass))pauseRecruitmentTeamAfterRestart(team);if(pass.id===task.currentPassId)recoverQualityLoopAfterRestart(pass,interruptedAt,possiblyActiveCorrectionPlanner);}
     }
+    const requestedProject=typeof t.projectId==='string'?migratedProjects.find(project=>project.id===t.projectId):undefined;
+    const rootMatches=migratedProjects.filter(project=>sameProjectRoot(project.projectRoot,task.userRoot));
+    const compatible=rootMatches.filter(project=>projectAgentMemIdentity(project)===task.agentmemProjectId);
+    if(requestedProject&&sameProjectRoot(requestedProject.projectRoot,task.userRoot)&&projectAgentMemIdentity(requestedProject)===task.agentmemProjectId)task.projectId=requestedProject.id;
+    else if(compatible.length===1&&rootMatches.length===1)task.projectId=compatible[0].id;
+    else delete task.projectId;
     delete (task as any).reasoningRawContent;
     for(const pass of task.passes||[])delete (pass as any).reasoningRawContent;
     syncCurrentPass(task);
     return task;
   });
-  return {...defaults,...value,version:3,revision:Number.isSafeInteger(value.revision)&&value.revision>=0?value.revision:0,settings:{...defaults.settings,...value.settings,approvalPolicy:savedApprovalPolicy(value.settings?.approvalPolicy)},tasks,projects:migratedProjects,selectedProjectId,expandedProjectIds:Array.isArray(value.expandedProjectIds)?value.expandedProjectIds.filter((id:string)=>id==='unclassified'||migratedProjects.some(row=>row.id===id)):[...migratedProjects.map(row=>row.id),'unclassified']};
+  const {projectRoot:_oldRoot,agentmemProjectId:_oldAgentMemId,agentmemAutoSetup:_oldAutoSetup,...savedSettings}=legacySettings;
+  return {...defaults,...value,version:4,revision:Number.isSafeInteger(value.revision)&&value.revision>=0?value.revision:0,settings:{...defaults.settings,...savedSettings,approvalPolicy:savedApprovalPolicy(legacySettings.approvalPolicy)},tasks,projects:migratedProjects,selectedProjectId,expandedProjectIds:Array.isArray(value.expandedProjectIds)?[...new Set(value.expandedProjectIds.filter((id:string)=>id==='unclassified'||migratedProjects.some(row=>row.id===id)))]:[...migratedProjects.map(row=>row.id),'unclassified']};
 }
+function isAbsoluteProjectPath(root:string){return path.isAbsolute(root)||path.win32.isAbsolute(root);}
+function projectDirectoryExists(root:string){try{return isAbsoluteProjectPath(root)&&existsSync(root)&&statSync(root).isDirectory();}catch{return false;}}
+function projectPathKeyForMigration(root:string){return isAbsoluteProjectPath(root)?projectPathKey(root):null;}
+function projectDisplayName(root:string){const paths=path.win32.isAbsolute(root)?path.win32:path;return paths.basename(root.replace(/[\\/]+$/,''))||'Project';}
 export function getState() { return structuredClone(current); }
 export function getTask(id: string) { return current.tasks.find(t => t.id === id); }
 export function pauseActiveTasksForKernelShutdown(state:State,at=new Date().toISOString()){
@@ -339,27 +381,28 @@ export function pauseActiveTasksForKernelShutdown(state:State,at=new Date().toIS
 }
 export function selectProjectInState(state:State,id:string|null){if(id!==null&&!state.projects.some(project=>project.id===id))throw new Error('Project not found.');state.selectedProjectId=id;return id===null?null:state.projects.find(project=>project.id===id)!;}
 export function saveProjectInState(state:State,input:Omit<Project,'createdAt'|'updatedAt'> & Partial<Pick<Project,'createdAt'|'updatedAt'>>){
-  if(!input.id||input.id.length>128||!input.name.trim()||input.name.trim().length>80||input.projectRoot.length>1024||!/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(input.agentmemProjectId))throw new Error('Enter a valid project name, root, and AgentMem ID.');
+  if(!input.id||input.id.length>128||!input.name.trim()||input.name.trim().length>80||input.projectRoot.length>1024||!/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(input.agentmemProjectId)||input.agentmemEnabled&&!input.agentmemProjectId||!input.needsLocation&&!projectPathKey(input.projectRoot))throw new Error('Enter a valid project name and absolute working directory.');
   const existing=state.projects.find(project=>project.id===input.id);const now=new Date().toISOString();
-  const project:Project={id:input.id,name:input.name.trim(),projectRoot:input.projectRoot,agentmemProjectId:input.agentmemEnabled?input.agentmemProjectId:'',agentmemEnabled:input.agentmemEnabled,agentmemAutoSetup:input.agentmemEnabled&&input.agentmemAutoSetup,pinned:!!input.pinned,createdAt:existing?.createdAt||input.createdAt||now,updatedAt:now};
+  const project:Project={id:input.id,name:input.name.trim(),projectRoot:input.projectRoot,agentmemProjectId:input.agentmemEnabled?input.agentmemProjectId:'',agentmemEnabled:input.agentmemEnabled,needsLocation:!!input.needsLocation,pinned:!!input.pinned,createdAt:existing?.createdAt||input.createdAt||now,updatedAt:now};
+  assertProjectIdentityChangeAllowed(existing||project,project,state.tasks);
+  const duplicate=(!existing||!sameProjectRoot(existing.projectRoot,project.projectRoot))?state.projects.find(row=>row.id!==project.id&&sameProjectRoot(row.projectRoot,project.projectRoot)):undefined;
+  if(duplicate)throw new Error(`This directory already belongs to the project "${duplicate.name}". Open that project instead of creating a duplicate.`);
   if(existing)state.projects=state.projects.map(row=>row.id===project.id?project:row);else state.projects.push(project);
   return project;
 }
 export function moveTaskProjectInState(state:State,taskId:string,projectId:string|null){
   const task=state.tasks.find(row=>row.id===taskId);if(!task)throw new Error('Session not found.');
-  if(projectId!==null&&!state.projects.some(project=>project.id===projectId))throw new Error('Project not found.');
-   const waitingForAgentmem=[task,...(task.passes||[])].some(row=>row.agentmemRecordStatus==='saving'||!!row.agentmemLease);
-  const blocked=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing','escalated','paused_after_restart'].includes(task.phase)||!!task.activeTurnId||!!task.activeRole||!!task.approvalRequests?.length||waitingForAgentmem;
-  if(blocked)throw new Error(waitingForAgentmem?'Wait for AgentMem receipt completion before moving this session.':'Stop or finish this session, resolve approvals, or explicitly resume it before moving projects. Its current execution keeps the original project context.');
+  const project=projectId?state.projects.find(row=>row.id===projectId):undefined;
+  if(projectId&&!project)throw new Error('Project not found.');
+  if(project&&(!sameProjectRoot(task.userRoot,project.projectRoot)||task.agentmemProjectId!==projectAgentMemIdentity(project)))throw new Error('This session belongs to a different project directory or AgentMem identity. Its saved history stays with the original project; start a new session to work in another project.');
+  const blocked=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing','escalated','paused_after_restart'].includes(task.phase)||!!task.activeTurnId||!!task.activeRole||!!task.approvalRequests?.length;
+  if(blocked)throw new Error('Stop or finish this session, resolve approvals, or explicitly resume it before moving projects. Its current execution keeps the original project context.');
   task.projectId=projectId||undefined;
-  if(projectId){const project=state.projects.find(row=>row.id===projectId)!;task.userRoot=project.projectRoot;task.agentmemProjectId=project.agentmemEnabled?project.agentmemProjectId:'';}else{task.userRoot=state.settings.projectRoot||task.userRoot;task.agentmemProjectId=state.settings.agentmemProjectId;}
   task.lastInteractedAt=new Date().toISOString();return task;
 }
 export function noteTaskInteractionInState(state:State,taskId:string){const task=state.tasks.find(row=>row.id===taskId);if(task)task.lastInteractedAt=new Date().toISOString();}
 export function taskDeletionBlockReason(task:Task){
   if(['intake','routing','direct_running','simple_running','planning','worker_running','reviewing','escalated'].includes(task.phase)||task.activeTurnId||task.activeRole)return 'Stop or finish the active turn before deleting this session.';
-  const records=[task,...(task.passes||[])];
-  if(records.some(x=>x.agentmemRecordStatus==='saving'||!!x.agentmemLease))return 'Wait for AgentMem receipt completion before deleting this session.';
   return null;
 }
 export function renameTaskInState(state:State,id:string,title:string){
@@ -377,7 +420,7 @@ export async function mutate(fn: (state: State) => void) {
   const operation=writeQueue.then(async()=>{
     const rollback=structuredClone(current);
     try {
-      fn(current); current.version=3; current.revision+=1; current.tasks.forEach(syncCurrentPass); current.tasks.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
+      fn(current); current.version=4; current.revision+=1; current.tasks.forEach(syncCurrentPass); current.tasks.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
       await mkdir(dataDir,{recursive:true});
       const tmp=`${statePath}.${randomUUID()}.tmp`;
       try { await writeFile(tmp,JSON.stringify(current,null,2),{mode:0o600}); await rename(tmp,statePath); }
@@ -396,21 +439,15 @@ export async function mutate(fn: (state: State) => void) {
   writeQueue=operation.then(()=>undefined,()=>undefined);
   return operation;
 }
-export async function createTask(message: string, root: string, agentmemProjectId: string, approvalPolicy:ApprovalPolicy='on-request',attachments:TaskAttachment[]=[],projectId?:string,qaEnabled=false ) {
-  const now = new Date().toISOString(); const id = randomUUID();
-  const task: Task = { id, ...(projectId?{projectId}:{}),lastInteractedAt:now,title: message.slice(0, 72)||attachments[0]?.name||'Image task', phase: 'intake', createdAt: now, updatedAt: now, userRoot: root, agentmemProjectId, userMessages: [message], correctionCount: 0, processedTurns: [], messages: [{id:randomUUID(),role:'user',text:message,createdAt:now,attachments}] };
-  beginPass(task,message,task.messages[0].id,approvalPolicy,attachments,[],deepSeekExecutionProfileForSettings(current.settings),qaEnabled);
-  await mutate(s => { s.tasks.unshift(task); s.activeTaskId=id; }); return task;
-}
 export async function createTaskForProject(message:string,projectId:string|null|undefined,attachments:TaskAttachment[]=[],selectedSkills:SavedSkillSnapshot[]=[],qaEnabled=false){
   const id=randomUUID();
   await mutate(state=>{
-    const selectedId=projectId===undefined?state.selectedProjectId:projectId;
+    const selectedId=projectId;
     const project=selectedId?state.projects.find(row=>row.id===selectedId):undefined;
-    if(selectedId&&!project)throw new Error('The selected project no longer exists. Select a project again before starting a session.');
-    const root=project?.projectRoot||state.settings.projectRoot;
-    if(!root)throw new Error('Choose or create a project before starting a task.');
-    const agentmemProjectId=project?(project.agentmemEnabled?project.agentmemProjectId:''):state.settings.agentmemProjectId;
+    if(!selectedId||!project)throw new Error('Select or create a project before starting a session.');
+    if(project.needsLocation||!project.projectRoot||!projectDirectoryExists(project.projectRoot))throw new Error('Choose an existing working directory for this project before starting a session.');
+    const root=project.projectRoot;
+    const agentmemProjectId=projectAgentMemIdentity(project);
     const approvalPolicy=state.settings.approvalPolicy;const now=new Date().toISOString();const firstMessage={id:randomUUID(),role:'user' as const,text:message,createdAt:now,...(attachments.length?{attachments:structuredClone(attachments)}:{})};
     const created:Task={id,title:message.slice(0,72)||attachments[0]?.name||'Image task',phase:'intake',createdAt:now,updatedAt:now,lastInteractedAt:now,...(project?{projectId:project.id}:{}),userRoot:root,agentmemProjectId,userMessages:[message],correctionCount:0,processedTurns:[],messages:[firstMessage]};
     beginPass(created,message,firstMessage.id,approvalPolicy,attachments,selectedSkills,deepSeekExecutionProfileForSettings(state.settings),qaEnabled);state.tasks.unshift(created);state.activeTaskId=id;

@@ -7,9 +7,9 @@ import './EmbeddedWorkspace.css';
 const LocalGitWorkspace=lazy(()=>import('./LocalGitWorkspace').then(module=>({default:module.LocalGitWorkspace})));
 const DEFAULT_BROWSER_URL='https://www.google.com/';
 
-type Props={mode:'browser'|'github';task:Task|null;placement:'full'|'side';docked:boolean;workspaceId?:string;active?:boolean;sidebarCollapsed?:boolean;sidebarWidth?:number;initialUrl?:string;projectRoot?:string;onOpenBrowserTab?:(url?:string)=>void;onSummary?:()=>void;onAnnotation?:(annotation:BrowserAnnotation,comment:string)=>void};
+type Props={mode:'browser'|'github';task:Task|null;placement:'full'|'side';docked:boolean;workspaceId?:string;active?:boolean;sidebarCollapsed?:boolean;sidebarWidth?:number;initialUrl?:string;projectRoot?:string;projectId?:string;onOpenBrowserTab?:(url?:string)=>void;onSummary?:()=>void;onAnnotation?:(annotation:BrowserAnnotation,comment:string)=>void};
 
-export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active=true,sidebarCollapsed=false,sidebarWidth=0,initialUrl,projectRoot,onOpenBrowserTab,onAnnotation}:Props){
+export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active=true,sidebarCollapsed=false,sidebarWidth=0,initialUrl,projectRoot,projectId,onOpenBrowserTab,onAnnotation}:Props){
   const bridge=(window.opnexDesktop||window.pseudoharnessDesktop)?.browser;
   const hostId=workspaceId||`browser:${task?.id||'legacy'}`;
   const [page,setPage]=useState<EmbeddedBrowserTab|null>(null);
@@ -173,7 +173,7 @@ export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active
     if(annotation&&annotationComment.trim()&&annotationTaskId===task?.id){onAnnotation?.(annotation,annotationComment.trim());closeAnnotation();void bridge?.workspaceSetCommenting(hostId,false).catch(()=>{});currentPage(page?{...page,commenting:false}:page);}
   };
 
-  if(mode==='github')return <Suspense fallback={<div className="git-empty"><LoaderCircle className="spinning" size={22}/><span>Loading local Git workspace…</span></div>}><LocalGitWorkspace taskId={task?.id} projectRoot={projectRoot} active={active} focusUrl={task?.workspaceCommand?.mode==='github'?task.workspaceCommand.url:undefined} onOpenBrowserTab={onOpenBrowserTab}/></Suspense>;
+  if(mode==='github')return <Suspense fallback={<div className="git-empty"><LoaderCircle className="spinning" size={22}/><span>Loading local Git workspace…</span></div>}><LocalGitWorkspace taskId={task?.id} projectRoot={projectRoot} projectId={projectId} active={active} focusUrl={task?.workspaceCommand?.mode==='github'?task.workspaceCommand.url:undefined} onOpenBrowserTab={onOpenBrowserTab}/></Suspense>;
 
   return <section ref={rootRef} className={`embedded-workspace native-browser-workspace ${placement==='side'?'chat-docked-workspace':'full-workspace'} ${placement==='side'&&!docked?'is-hidden':''}`} aria-label="Browser workspace" aria-hidden={placement==='side'&&!docked}>
     <header className={`native-browser-toolbar ${addressFocused&&suggestionsOpen&&suggestions.length?'has-address-suggestions':''}`}>

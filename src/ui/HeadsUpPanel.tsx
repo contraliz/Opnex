@@ -2,12 +2,13 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, Copy, ExternalLink, Settings2, X } from 'lucide-react';
-import type { ReasoningTurn, Runtime, Settings, Task, TaskPass, WorkflowRole } from '../types';
+import type { Project, ReasoningTurn, Runtime, Settings, Task, TaskPass, WorkflowRole } from '../types';
 import { getCurrentTaskPass, summarizeSessionUsage, type SessionUsageBucket } from './sessionUsage';
 import './HeadsUpPanel.css';
 
 export type HeadsUpPanelProps = {
   task: Task | null;
+  project:Project|null;
   settings: Settings;
   runtime: Runtime | null;
   open: boolean;
@@ -183,7 +184,7 @@ function SettingRow({ label, value }: { label: string; value: string }) {
   return <div className="heads-up-setting-row"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-export function HeadsUpPanel({ task, settings, runtime, open, onClose, onOpenSettings, triggerRef }: HeadsUpPanelProps) {
+export function HeadsUpPanel({ task, project, settings, runtime, open, onClose, onOpenSettings, triggerRef }: HeadsUpPanelProps) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
@@ -437,8 +438,9 @@ export function HeadsUpPanel({ task, settings, runtime, open, onClose, onOpenSet
 
         <div className="heads-up-details-block">
           <h4>For new tasks</h4>
-          <SettingRow label="Root" value={settings.projectRoot || 'Not selected'}/>
-          <SettingRow label="AgentMem" value={settings.agentmemProjectId || 'Disabled'}/>
+          <SettingRow label="Project" value={project?.name || 'Choose a project'}/>
+          <SettingRow label="Working directory" value={project?.projectRoot || 'Not selected'}/>
+          <SettingRow label="AgentMem" value={project?.agentmemEnabled ? project.agentmemProjectId : 'Disabled'}/>
           <SettingRow label="Approval" value={policyLabel[settings.approvalPolicy] || settings.approvalPolicy}/>
           <SettingRow label="Orchestrator" value={`${settings.orchestratorModel} · ${settings.orchestratorEffort}`}/>
           <SettingRow label="Worker" value="gpt-6-luna · high (app policy)"/>
@@ -448,7 +450,6 @@ export function HeadsUpPanel({ task, settings, runtime, open, onClose, onOpenSet
         <div className="heads-up-details-block">
           <h4>Runtime</h4>
           <SettingRow label="Codex" value={runtime?.codex.state || 'Unavailable'}/>
-          <SettingRow label="AgentMem" value={!runtime ? 'Unavailable' : runtime.agentmem.connected ? (runtime.agentmem.projectVerified ? 'Connected · verified' : 'Connected · unverified') : 'Disconnected'}/>
         </div>
       </DetailDisclosure>
     </div>

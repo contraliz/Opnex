@@ -5,11 +5,18 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createSkill, loadSkillForAgent, readSkillFile, searchSkillDescriptions, updateSkill } from './skill-library.js';
 import { stateDirectory } from './paths.js';
+import { AGENTMEM_PROJECT_SKILL } from './agentmem-project-skill.js';
 
 const taskId=process.env.OPNEX_SKILLS_TASK_ID||process.env.PSEUDOHARNESS_SKILLS_TASK_ID||'';
 const role=process.env.OPNEX_SKILLS_ROLE||process.env.PSEUDOHARNESS_SKILLS_ROLE||'';
 const writableRoles=['direct','simple','orchestrator','worker'];
 const activePhases=['direct_running','simple_running','planning','worker_running','reviewing'];
+function searchAvailableSkills(query:string,limit=20){
+  const bundled=AGENTMEM_PROJECT_SKILL;
+  const q=query.toLocaleLowerCase();
+  const bundledMatch=!q||`${bundled.name} ${bundled.description}`.toLocaleLowerCase().includes(q);
+  return searchSkillDescriptions(query,limit).then(rows=>[...(bundledMatch?[{id:bundled.id,name:bundled.name,description:bundled.description,source:bundled.source,revision:bundled.revision}]:[]),...rows].slice(0,Math.min(50,Math.max(1,limit))));
+}
 async function currentPassContext(){
   try{
     const state=JSON.parse(await readFile(path.join(stateDirectory(),'state.json'),'utf8'));
@@ -38,10 +45,11 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   try{
     const context=await currentPassContext();if(!taskId||!context)throw new Error('The skills tool is not scoped to the active role and pass.');
     const passId=context.passId,args=request.params.arguments||{};
-    if(request.params.name==='skills_list')return {content:[{type:'text',text:JSON.stringify(await searchSkillDescriptions(typeof args.query==='string'?args.query:'',20))}]};
-    if(request.params.name==='skills_search')return {content:[{type:'text',text:JSON.stringify(await searchSkillDescriptions(String(args.query||''),Number(args.limit||10)))}]};
+    if(request.params.name==='skills_list')return {content:[{type:'text',text:JSON.stringify(await searchAvailableSkills(typeof args.query==='string'?args.query:'',20))}]};
+    if(request.params.name==='skills_search')return {content:[{type:'text',text:JSON.stringify(await searchAvailableSkills(String(args.query||''),Number(args.limit||10)))}]};
     if(request.params.name==='skills_load'){
       const raw=String(args.skill_id||'');const id=raw.startsWith('library:')?raw.slice(8):raw;
+      if(id===AGENTMEM_PROJECT_SKILL.id)return {content:[{type:'text',text:JSON.stringify({...AGENTMEM_PROJECT_SKILL,loaded_at:new Date().toISOString()})}]};
       const skill=await loadSkillForAgent(id,taskId,passId,role);
       return {content:[{type:'text',text:JSON.stringify({id:`library:${id}`,revision:skill.revision,name:skill.name,description:skill.description,source:skill.source,instructions:skill.instructions,files:skill.files,loaded_at:new Date().toISOString()})}]};
     }

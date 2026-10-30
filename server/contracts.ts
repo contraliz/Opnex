@@ -13,11 +13,6 @@ export const assignmentSchema = z.object({
 }).strict();
 export type Assignment = z.infer<typeof assignmentSchema>;
 
-export const workerContextPlanSchema=z.object({type:z.literal('context_plan'),queries:z.array(z.string().trim().min(1).max(500)).max(6),scope_summary:z.string().trim().min(1).max(3000)}).strict();
-export const workerContextSummarySchema=z.object({type:z.literal('context_ready'),summary:z.string().trim().min(1).max(8000)}).strict();
-export const workerContextPlanJsonSchema={type:'object',additionalProperties:false,required:['type','queries','scope_summary'],properties:{type:{type:'string',enum:['context_plan']},queries:{type:'array',maxItems:6,items:{type:'string',maxLength:500}},scope_summary:{type:'string',maxLength:3000}}};
-export const workerContextSummaryJsonSchema={type:'object',additionalProperties:false,required:['type','summary'],properties:{type:{type:'string',enum:['context_ready']},summary:{type:'string',maxLength:8000}}};
-
 export const directAnswerSchema = z.object({
   type:z.literal('direct_answer'), answer:text, policy_basis:z.string().trim().min(1).max(400),
 }).strict();
@@ -186,7 +181,6 @@ export const sessionTitleSchema = z.object({ title: z.string().trim().min(1, 'Se
 export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(), z.number()]), decision: z.enum(['accept','decline','cancel']), content:z.record(z.string(),z.unknown()).optional() }).strict();
 export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never' | 'full-access';
 export const settingsSchema = z.object({
-    projectRoot: z.string().trim().max(1024), agentmemProjectId: z.string().trim().max(64).regex(/^$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).default(''), agentmemAutoSetup: z.boolean().default(false),
   orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   deepseekProvider:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('opencode-go'),deepseekModel:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('deepseek-v4.1-flash'),deepseekReasoningEffort:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('max'),
   approvalPolicy: z.enum(['on-request','untrusted','never','full-access']).default('on-request'),
