@@ -276,7 +276,7 @@ function requireRouterModel(){requireModel('gpt-6-luna','low');const found=model
 function jsonFromTurn(turn:any){const raw=extractAssistantText(turn); if(!raw)throw new Error('The worker completed without a structured final message.'); try{return parseWorkerStructuredOutput(raw);}catch{throw new Error('The worker final message was not valid JSON. No follow-up work was scheduled.');}}
 const stageConfig={router:{effort:'low',phase:'routing'},direct:{effort:'high',phase:'direct_running'},simple:{effort:'xhigh',phase:'simple_running'}} as const;
 function executionDisplay(profile:ExecutionProfile,deepSeek?:DeepSeekExecutionProfile){
-  const model=profile.model==='gpt-6-luna'?'GPT-6 Luna':profile.model==='deepseek-v4.1-flash'?'DeepSeek V4.1 Flash':profile.model;
+  const model=profile.model==='gpt-6-luna'?'GPT-6 Luna':profile.model==='gpt-6.1-sol'?'GPT-6.1 Sol':profile.model==='gpt-6.1-terra'?'GPT-6.1 Terra':profile.model==='gpt-6-sol'?'GPT-6 Sol':profile.model==='gpt-6-astra'?'GPT-6 Astra':profile.model==='deepseek-v4.1-flash'?'DeepSeek V4.1 Flash':profile.model;
   if(profile.provider==='deepseek')return `DeepSeek Harness (${deepSeek?.provider==='opencode-go'?'OpenCode Go':deepSeek?.provider||'provider'}) used ${model} at requested native ${profile.effort} effort; effective effort unknown`;
   return `${model} at ${profile.effort} effort`;
 }
@@ -296,12 +296,14 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
     return;
   }
   const selectedProfile=pass.executionProfile||executionProfileForSettings(getState().settings);
-  if(role==='router')requireRouterModel();else if(selectedProfile.provider==='codex')requireModel(selectedProfile.model,selectedProfile.effort);else{await startDeepSeekRoutedTurn(task,role,selectedProfile,simpleWriteRoots||[]);return;}
+  const orchestratorSettings=getState().settings;
+  const roleProfile:ExecutionProfile=role==='direct'?{provider:'codex',model:orchestratorSettings.orchestratorModel,effort:orchestratorSettings.orchestratorEffort}:selectedProfile;
+  if(role==='router')requireRouterModel();else if(roleProfile.provider==='codex')requireModel(roleProfile.model,roleProfile.effort);else{await startDeepSeekRoutedTurn(task,role,roleProfile,simpleWriteRoots||[]);return;}
   await ensureAgentAuth();
   if(pass.agentContextVersion!==1)throw new Error('This pass predates the current Opnex role configuration. Send a follow-up to start a fresh pass.');
   const skillsConfig=role==='router'?undefined:skillLibraryMcpServerConfig({taskId:task.id,role});
   const client=agentCodex;
-  const modelId=role==='router'?'gpt-6-luna':selectedProfile.model,effort=role==='router'?stageConfig.router.effort:selectedProfile.effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
+  const modelId=role==='router'?'gpt-6-luna':roleProfile.model,effort=role==='router'?stageConfig.router.effort:roleProfile.effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
   const approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;
   let threadId=task[threadKey];
   const dynamicTools=role==='simple'?workerWorkspaceTool:undefined;
@@ -1166,7 +1168,7 @@ async function applyRouteDecision(task:Task,value:unknown,fallbackReason?:string
   await startRoutedTurn(live,effectiveRoute==='direct_answer'?'direct':'simple');
 }
 async function finishRoutedDirect(task:Task,answer:string){
-  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled')return;const p=currentPass(t),profile=p?.executionProfile||executionProfileForSettings(s.settings);t.phase='accepted';t.resolution='direct';t.activeRole=undefined;t.activeTurnId=undefined;t.reviewNote=`${executionDisplay(profile,p?.deepSeekExecution)} answered directly. No implementation or Sol review occurred.`;if(p)p.publicAnswer=answer;addMessage(t,'direct',answer);});
+  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled')return;const p=currentPass(t),turn=p?.reasoningTurns?.filter(row=>row.role==='direct'&&row.threadId===p.directThreadId).at(-1),profile:ExecutionProfile=turn?{provider:turn.provider==='deepseek'||turn.requestedModel==='deepseek-v4.1-flash'?'deepseek':'codex',model:turn.requestedModel,effort:turn.requestedEffort as ExecutionProfile['effort']}:{provider:'codex',model:s.settings.orchestratorModel,effort:s.settings.orchestratorEffort as ExecutionProfile['effort']};t.phase='accepted';t.resolution='direct';t.activeRole=undefined;t.activeTurnId=undefined;t.reviewNote=`${executionDisplay(profile,p?.deepSeekExecution)} answered directly. No implementation or Sol review occurred.`;if(p)p.publicAnswer=answer;addMessage(t,'direct',answer);});
 }
 async function escalateExecutor(task:Task,from:'direct_answer'|'simple_implementation',to:'simple_implementation'|'hard_task',reason:string,completedActions:string[]=[],evidence:string[]=[]){
   const escalation={from,to,reason,completedActions,evidence};

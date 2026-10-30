@@ -210,17 +210,25 @@ describe('routed request workflow',()=>{
     expect(fake.calls.find(row=>row.kind==='refresh-auth')).toMatchObject({previousAccountId:'test-account'});
     expect(fake.calls.find(row=>row.kind==='server-response')).toMatchObject({id:'agent-auth-1',result:{accessToken:fake.refreshedToken,chatgptAccountId:'test-account',chatgptPlanType:'plus'}});
   });
-  it('runs a direct answer on the selected maximum-effort Luna profile without a worker receipt',async()=>{
+  it('runs a direct answer on the configured orchestrator profile without changing the worker profile',async()=>{
     const {orchestrator}=await setup();let task=await orchestrator.submitTask('Explain why the sky looks blue.');expect(task.phase).toBe('routing');const router=lastTurn('router');expect(router).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:'priority'});
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A concise explanation needs no implementation.'});const direct=await waitForRole('direct');expect(direct).toMatchObject({model:'gpt-6-luna',effort:'max',serviceTierForTurn:undefined});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
-    expect(direct.input).not.toContain('Verified project context');await complete('direct',{type:'answer',answer:'Short wavelengths scatter more strongly.',escalation:null,route:null,justification:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');task=modules.state.getTask(task.id);expect(task).toMatchObject({resolution:'direct',reviewNote:expect.stringContaining('max effort')});expect(task.passes?.[0].reasoningTurns?.find((turn:any)=>turn.role==='direct')?.requestedEffort).toBe('max');expect(task.passes?.[0].publicAnswer).toBe('Short wavelengths scatter more strongly.');expect(task.receipt).toBeUndefined();
+    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A concise explanation needs no implementation.'});const direct=await waitForRole('direct');expect(direct).toMatchObject({model:'gpt-6.1-sol',effort:'low',serviceTierForTurn:undefined});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
+    expect(direct.input).not.toContain('Verified project context');await complete('direct',{type:'answer',answer:'Short wavelengths scatter more strongly.',escalation:null,route:null,justification:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');task=modules.state.getTask(task.id);expect(task).toMatchObject({resolution:'direct',reviewNote:expect.stringContaining('GPT-6.1 Sol at low effort')});expect(task.passes?.[0].executionProfile).toEqual({provider:'codex',model:'gpt-6-luna',effort:'max'});expect(task.passes?.[0].reasoningTurns?.find((turn:any)=>turn.role==='direct')?.requestedEffort).toBe('low');expect(task.passes?.[0].publicAnswer).toBe('Short wavelengths scatter more strongly.');expect(task.receipt).toBeUndefined();
+  });
+  it('keeps a saved DeepSeek worker profile out of the Codex direct-answer role',async()=>{
+    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Answer this short question.');
+    expect(state.getTask(task.id)?.passes?.[0]?.executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
+    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short answer needs no implementation.'});const direct=await waitForRole('direct');
+    expect(direct).toMatchObject({model:'gpt-6.1-sol',effort:'low'});expect(fake.profileCalls).toHaveLength(0);expect(fake.dshSessions.size).toBe(0);
+    await complete('direct',{type:'answer',answer:'Answered by the configured orchestrator.',escalation:null,route:null,justification:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');
+    expect(state.getTask(task.id)?.reviewNote).toContain('GPT-6.1 Sol at low effort');
   });
   it('runs direct and delegated sessions without an application-owned knowledge service lifecycle',async()=>{
     const {orchestrator,state}=await setup();
     const directTask=await orchestrator.submitTask('Answer this short question.');
     await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'This is a direct explanation.'});
     const direct=await waitForRole('direct'),directThread=fake.calls.find(row=>row.kind==='thread'&&row.role==='direct');
-    expect(direct.model).toBe('gpt-6-luna');expect(directThread?.skillsMcpConfig).toBeTruthy();expect(directThread).not.toHaveProperty('mcpConfig');expect(direct.input).not.toContain('Verified project context');
+    expect(direct.model).toBe('gpt-6.1-sol');expect(directThread?.skillsMcpConfig).toBeTruthy();expect(directThread).not.toHaveProperty('mcpConfig');expect(direct.input).not.toContain('Verified project context');
     await complete('direct',{type:'answer',answer:'Answered without any app-fetched context.',escalation:null,route:null,justification:null});await waitFor(()=>state.getTask(directTask.id)?.phase==='accepted');
 
     await state.mutate((saved:any)=>{saved.settings.executionProfile={provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'};});
@@ -228,6 +236,7 @@ describe('routed request workflow',()=>{
     await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'A source change requires delegated work.'});
     const planner=await waitForRole('orchestrator');expect(planner.input).toContain('Use selected project skills and configured tools when relevant');expect(planner.input).not.toContain('Verified project context');
     await complete('orchestrator',assignment);const worker=await waitForRole('worker');
+    expect(state.getTask(delegated.id)?.passes?.[1]?.executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});expect(worker).toMatchObject({server:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
     expect(worker.input).toContain('EXECUTE.');expect(worker.input).toContain('COMPLETE ASSIGNMENT');expect(worker.input).not.toContain('Verified project context');
     expect(fake.profileCalls[0]?.mcpServers.map((server:any)=>server.serverName)).toEqual(['pseudoharness_skills']);
     await complete('worker',{type:'receipt',receipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
