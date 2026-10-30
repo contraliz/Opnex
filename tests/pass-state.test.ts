@@ -17,9 +17,10 @@ describe('per-pass task state',()=>{
     expect(migrated.tasks[0].passes?.[0].executionProfile).toEqual({provider:'codex',model:'gpt-6-astra',effort:'high'});
     expect(migrated.tasks[0].passes?.[0].reasoningTurns?.[0]).toMatchObject({requestedModel:'gpt-6-astra',requestedEffort:'high'});
   });
-  it('migrates an existing DeepSeek team pass to its saved provider/model/effort',()=>{
+  it('migrates a DeepSeek team pass from its recorded provider turn',()=>{
     const task=taskFixture(),pass=task.passes![0];const deepSeek={kind:'deepseek-harness-sdk' as const,provider:'opencode-go',model:'deepseek-v4.1-flash',nativeReasoningEffort:'max'};
     pass.deepSeekExecution=deepSeek;pass.recruitmentTeam={teamId:'team-legacy',passId:pass.id,createdAt:'2026-10-19T00:00:00Z',canonicalProjectRoot:'D:/workspace',workspaceParent:'D:/workspace/.opnex',baseRef:'HEAD',baseCommit:'abc123',status:'paused_after_restart',sealed:true,workers:[{workerId:'worker-1',name:'Legacy worker',assignment,effort:'high',skills:[],branch:'recruitment/legacy/worker-1',worktreeRoot:'D:/workspace/.opnex/worker-1',status:'paused_after_restart',deepSeekExecution:deepSeek}],integration:{status:'paused_after_restart',branch:'recruitment/legacy/integration',worktreeRoot:'D:/workspace/.opnex/integration',assignment,effort:'high',skills:[]},toolCallIds:[],completionWakeSent:false};
+    task.reasoningTurns=[{role:'worker',threadId:'worker-one',turnId:'worker-turn',provider:'deepseek',requestedModel:'deepseek-v4.1-flash',requestedEffort:'max',status:'interrupted'}];pass.reasoningTurns=structuredClone(task.reasoningTurns);
     const migrated=upgradeStoredState(JSON.parse(JSON.stringify({version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'},tasks:[task],activeTaskId:task.id}))).tasks[0];
     expect(migrated.passes?.[0].executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
   });

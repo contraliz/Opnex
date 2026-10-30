@@ -25,11 +25,12 @@ export async function authorizedWorkspaceGitInitRoot(state:unknown,scope:Workspa
   const root=authorizedWorkspaceRoot(state,scope);if(!root)return;
   const tasks=(state as {tasks?:unknown[]}).tasks;const task=tasks?.find((row:any)=>row?.id===scope.taskId) as any;const pass=task?.passes?.find((row:any)=>row?.id===scope.passId);
   if(!task||!pass)return;
+  const team=pass.recruitmentTeam;
+  if(scope.role==='worker'&&(team?.workers?.some((row:any)=>row?.threadId===scope.sessionId)||team?.integration?.threadId===scope.sessionId))return;
   if(scope.role==='simple'){
     const roots=await simpleRouteWriteRoots(Array.isArray(pass.userInputs)?pass.userInputs:[],root);
     return roots?.some(candidate=>assignmentAuthorizesWorkspaceRootWrite({write_scope:[candidate]},root))?root:undefined;
   }
-  const team=pass.recruitmentTeam,worker=team?.workers?.find((row:any)=>row?.threadId===scope.sessionId),integration=team?.integration?.threadId===scope.sessionId?team.integration:undefined;
-  const assignment=worker?.assignment||integration?.assignment||pass.assignment||task.assignment;
+  const assignment=pass.assignment||task.assignment;
   return assignment&&assignmentAuthorizesWorkspaceRootWrite(assignment,root)?root:undefined;
 }
