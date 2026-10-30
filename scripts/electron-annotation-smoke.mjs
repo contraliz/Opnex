@@ -338,7 +338,7 @@ try{
   await waitFor(()=>evalValue(appClient,"document.querySelector('.dialog-backdrop[data-open=false]')?.getAttribute('aria-hidden')==='true'"),Boolean,'settings closed');
   if(emulatedViewport){await appClient.send('Emulation.clearDeviceMetricsOverride');emulatedViewport=false;}
   await evalValue(appClient,'window.pseudoharnessDesktop.interactionTest.resize({width:1440,height:960})');
-  await waitFor(()=>evalValue(appClient,'innerWidth'),value=>Math.abs(value-1426)<3,'native 1440×960 inspection window',5000);
+  await waitFor(()=>evalValue(appClient,'({width:innerWidth,height:innerHeight})'),value=>value.width===1440&&Math.abs(value.height-960)<=3,'native 1440×960 inspection window',5000);
   await sleep(500);
   await evalValue(appClient,"[...document.querySelectorAll('.session-row .task-nav')].find(button=>button.textContent.includes('Fixture review session'))?.click();true");
   await waitFor(()=>evalValue(appClient,"!!document.querySelector('[data-workspace-tab=fixture-browser-task]:not([hidden]) .conversation')"),Boolean,'final fixture session selected');
