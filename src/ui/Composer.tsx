@@ -7,7 +7,7 @@ import type { Runtime, TaskAttachment } from '../types';
 import type { SkillSummary } from './skills-types';
 
 type Choice={value:string;label:string};
-type Props={value:string;setValue:(s:string)=>void;submit:()=>void;disabled:boolean;hint:string;inputRef:any;model:string;effort:string;approvalPolicy:'on-request'|'untrusted'|'never'|'full-access';models:Runtime['codex']['models'];configDisabled:boolean;onModelChange:(s:string)=>void;onEffortChange:(s:string)=>void;onApprovalChange:(s:'on-request'|'untrusted'|'never'|'full-access')=>void;qaEnabled:boolean;onQaChange:(enabled:boolean)=>void;busy?:boolean;attachments:TaskAttachment[];onFiles:(files:FileList|null)=>void;onRemoveFile:(index:number)=>void;onOpenSkills:()=>void};
+type Props={value:string;setValue:(s:string)=>void;submit:()=>void;disabled:boolean;hint:string;inputRef:any;model:string;effort:string;projectId?:string;approvalPolicy:'on-request'|'untrusted'|'never'|'full-access';models:Runtime['codex']['models'];configDisabled:boolean;onModelChange:(s:string)=>void;onEffortChange:(s:string)=>void;onApprovalChange:(s:'on-request'|'untrusted'|'never'|'full-access')=>void;qaEnabled:boolean;onQaChange:(enabled:boolean)=>void;busy?:boolean;attachments:TaskAttachment[];onFiles:(files:FileList|null)=>void;onRemoveFile:(index:number)=>void;onOpenSkills:()=>void};
 
 function activeCommand(value:string){
   const line=value.slice(value.lastIndexOf('\n')+1);
@@ -19,16 +19,16 @@ function activeCommand(value:string){
   return query?{line,query:query[1].trim(),mode:'library' as const}:null;
 }
 
-export default function Composer({value,setValue,submit,disabled,hint,inputRef,model,effort,approvalPolicy,models,configDisabled,onModelChange,onEffortChange,onApprovalChange,qaEnabled,onQaChange,busy,attachments,onFiles,onRemoveFile,onOpenSkills}:Props){
+export default function Composer({value,setValue,submit,disabled,hint,inputRef,model,effort,projectId,approvalPolicy,models,configDisabled,onModelChange,onEffortChange,onApprovalChange,qaEnabled,onQaChange,busy,attachments,onFiles,onRemoveFile,onOpenSkills}:Props){
   const choices=models.filter(m=>/sol|astra/i.test(m.id));const efforts=choices.find(m=>m.id===model)?.efforts||[];
   const modelOptions=[...choices.map(m=>({value:m.id,label:m.displayName||m.id})),...(!choices.some(m=>m.id===model)?[{value:model,label:model+' · unavailable'}]:[])];
   const command=useMemo(()=>activeCommand(value),[value]);
   const [matches,setMatches]=useState<SkillSummary[]>([]);const [active,setActive]=useState(0);const [searching,setSearching]=useState(false);const [searchError,setSearchError]=useState('');const [dismissed,setDismissed]=useState(false);const [composing,setComposing]=useState(false);const menuId=useId().replaceAll(':','');
   useEffect(()=>{setActive(0);setDismissed(false);if(!command||composing){setMatches([]);setSearchError('');return;}
     const codexSource=command.query.toLocaleLowerCase().startsWith('codex:');const query=codexSource?command.query.slice(6):command.query;
-    let cancelled=false;setSearching(true);setSearchError('');const timer=window.setTimeout(()=>void api<{skills?:SkillSummary[]}>(`/api/skills?${codexSource?'source=codex&':''}q=${encodeURIComponent(query)}&limit=50`).then(result=>{if(!cancelled)setMatches((result.skills||[]).slice(0,50));}).catch(error=>{if(!cancelled){setMatches([]);setSearchError(String(error));}}).finally(()=>{if(!cancelled)setSearching(false);}),120);
+    let cancelled=false;setSearching(true);setSearchError('');const projectQuery=codexSource&&projectId?`&projectId=${encodeURIComponent(projectId)}`:'';const timer=window.setTimeout(()=>void api<{skills?:SkillSummary[]}>(`/api/skills?${codexSource?'source=codex&':''}q=${encodeURIComponent(query)}&limit=50${projectQuery}`).then(result=>{if(!cancelled)setMatches((result.skills||[]).slice(0,50));}).catch(error=>{if(!cancelled){setMatches([]);setSearchError(String(error));}}).finally(()=>{if(!cancelled)setSearching(false);}),120);
     return()=>{cancelled=true;window.clearTimeout(timer);};
-  },[command?.line,command?.query,composing]);
+  },[command?.line,command?.query,composing,projectId]);
   const rows=dismissed?[]:matches.map(skill=>({id:skill.id,label:skill.name,description:skill.description||'Saved skill',source:skill.source,revision:skill.revision}));
   const duplicateNames=new Set(rows.filter((row,index)=>rows.some((other,otherIndex)=>otherIndex!==index&&other.label.localeCompare(row.label,undefined,{sensitivity:'accent'})===0)).map(row=>row.label.toLocaleLowerCase()));
   const pick=(index=active)=>{const row=rows[index];if(!row||!command)return;const editor=inputRef.current as HTMLElement|null;const prefix=value.slice(0,value.length-command.line.length);const reference=row.id.startsWith('codex:')?row.id:`library:${row.id}@${row.revision}`;setValue(prefix+`/skill ${reference}`);editor?.focus();};

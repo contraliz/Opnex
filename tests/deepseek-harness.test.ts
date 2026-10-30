@@ -83,7 +83,7 @@ describe('DeepSeek Harness SDK worker boundary', () => {
   });
 
   it('reports only session-observed MCP tool names and preserves tool call/result provenance', async () => {
-    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['agentmem', 'pseudoharness_skills']));
+    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['project_notes', 'pseudoharness_skills']));
     const catalogEvents: unknown[] = [];
     const notifications: Array<{ method: string; params: unknown }> = [];
     runtime.on('mcpToolCatalog', catalog => catalogEvents.push(catalog));
@@ -96,16 +96,16 @@ describe('DeepSeek Harness SDK worker boundary', () => {
 
     expect(runtime.runtimeInfo?.mcpToolCatalog).toEqual({
       status: 'ready',
-      configuredServerNames: ['agentmem', 'pseudoharness_skills'],
-      availableServerNames: ['agentmem', 'pseudoharness_skills'],
+      configuredServerNames: ['project_notes', 'pseudoharness_skills'],
+      availableServerNames: ['project_notes', 'pseudoharness_skills'],
       missingServerNames: [],
-      toolNames: ['mcp__agentmem__decisions', 'mcp__pseudoharness_skills__skills_list'],
+      toolNames: ['mcp__project_notes__search', 'mcp__pseudoharness_skills__skills_list'],
       observedAtSequence: 17,
     });
     expect(catalogEvents).toHaveLength(1);
     const toolCall = notifications.find(item => (item.params as any)?.event?.type === 'tool/call')?.params as any;
     const toolResult = notifications.find(item => (item.params as any)?.event?.type === 'tool/result')?.params as any;
-    expect(toolCall.event.data).toMatchObject({ turn: 1, step: 1, callId: 'fixture-mcp-call', name: 'mcp__agentmem__decisions' });
+    expect(toolCall.event.data).toMatchObject({ turn: 1, step: 1, callId: 'fixture-mcp-call', name: 'mcp__project_notes__search' });
     expect(typeof toolCall.event.data.arguments).toBe('string');
     expect(toolResult.event.data).toMatchObject({ turn: 1, step: 1, message: { role: 'tool', toolCallId: 'fixture-mcp-call', source: { kind: 'tool', callId: 'fixture-mcp-call' }, isError: false } });
     expect(toolResult.event.sourceEventSeqs).toEqual([18]);
@@ -113,12 +113,12 @@ describe('DeepSeek Harness SDK worker boundary', () => {
   });
 
   it('marks a configured MCP server missing when the real session header omits its tools', async () => {
-    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['agentmem', 'missing-server']));
+    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['project_notes', 'missing-server']));
     await runtime.startSession([{ type: 'text', text: 'Read-only catalog check.' }]);
     await runtime.waitSession();
     expect(runtime.mcpToolCatalog).toMatchObject({
       status: 'missing-tools',
-      availableServerNames: ['agentmem'],
+      availableServerNames: ['project_notes'],
       missingServerNames: ['missing-server'],
     });
     await runtime.shutdown();

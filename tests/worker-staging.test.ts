@@ -10,10 +10,10 @@ let temporaryRoot='';
 afterEach(async()=>{if(temporaryRoot)await rm(temporaryRoot,{recursive:true,force:true});temporaryRoot='';});
 
 describe('worker execution prompt',()=>{
-  it('starts from the complete assignment and treats optional project knowledge as nonblocking',()=>{
+  it('starts from the complete assignment and keeps selected skills and tools optional',()=>{
     const execute=workerExecutePrompt(assignment,'--- testing ---\nUse focused tests.');
     expect(execute).toContain(JSON.stringify(assignment,null,2));expect(execute).toContain('Use focused tests.');
-    expect(execute).toContain('optional project-scoped AgentMem');expect(execute).toContain('continue the assigned work');
+    expect(execute).toContain('Use configured tools only when relevant');expect(execute).toContain('their availability does not affect execution or completion');
     expect(execute).not.toContain('context_plan');expect(execute).not.toContain('context_compose');
   });
 
@@ -28,10 +28,10 @@ describe('worker execution prompt',()=>{
     expect(format).toContain('Do not make acceptance an array.');
     expect(format).toContain('status (one of "complete", "incomplete", "blocked", "failed")');
     expect(format).toContain('verification (an array of objects with check');
-    expect(format).toContain('continue the assigned work');
-    expect(format).toContain('report only what was actually consulted or updated');
+    expect(format).toContain('report only what you actually consulted or changed');
     const execute=workerExecutePrompt(assignment,'');
     expect(execute).toContain(format);
+    expect(execute).toContain('If a selected skill\'s external service is unavailable, report that limitation and continue the assigned work');
   });
 
   it('loads exact named skill files from supported Codex roots and refuses path traversal or missing names',async()=>{

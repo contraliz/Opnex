@@ -3,7 +3,7 @@ import { applyPassGitDiffUpdate,PASS_GIT_DIFF_MAX_TURNS,PASS_GIT_DIFF_MAX_TURN_C
 import type { Task,TaskPass } from '../server/state.js';
 
 function task(overrides:Partial<Task>={}):Task{
-  return {id:'task-1',title:'Task',phase:'worker_running',createdAt:'now',updatedAt:'now',userRoot:'D:/repo',agentmemProjectId:'kb',userMessages:[],messages:[],passes:[pass()],currentPassId:'pass-1',correctionCount:0,processedTurns:[],activeRole:'worker',activeTurnId:'turn-1',workerThreadId:'worker-thread',...overrides};
+  return {id:'task-1',title:'Task',phase:'worker_running',createdAt:'now',updatedAt:'now',userRoot:'D:/repo',userMessages:[],messages:[],passes:[pass()],currentPassId:'pass-1',correctionCount:0,processedTurns:[],activeRole:'worker',activeTurnId:'turn-1',workerThreadId:'worker-thread',...overrides};
 }
 function pass(overrides:Partial<TaskPass>={}):TaskPass{return {id:'pass-1',index:1,createdAt:'now',userInput:'Work',userInputs:['Work'],userMessageIds:[],phase:'worker_running',correctionCount:0,processedTurns:[],...overrides};}
 const event=(overrides:Record<string,unknown>={})=>({threadId:'worker-thread',turnId:'turn-1',diff:'diff --git a/a b/a\n+one\n',...overrides});

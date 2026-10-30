@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/ui/App.js';
 
-const demoProject={id:'11111111-1111-4111-8111-111111111111',name:'Demo project',projectRoot:'D:/workspace/demo',agentmemProjectId:'',agentmemEnabled:false,needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
-const fixture={state:{version:4,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[demoProject],selectedProjectId:demoProject.id,expandedProjectIds:[demoProject.id,'unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6 Luna',efforts:['high']}],workerAvailable:true}}};
+const demoProject={id:'11111111-1111-4111-8111-111111111111',name:'Demo project',projectRoot:'D:/workspace/demo',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
+const fixture={state:{version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[demoProject],selectedProjectId:demoProject.id,expandedProjectIds:[demoProject.id,'unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6 Luna',efforts:['high']}],workerAvailable:true}}};
 const isSnapshotRoute=(path:string)=>path==='/api/state'||path==='/api/v1/snapshot';
 let serverState:any;
 let eventSource:any;

@@ -88,10 +88,7 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     mkdirSync(path.dirname(credentialStorePath), { recursive: true });
     writeFileSync(credentialStorePath, 'SYNTHETIC_CREDENTIAL_SENTINEL');
     const bootstrap = fakeDshProfileBootstrap();
-    const mcpServers = [
-      server('agentmem', { PSEUDOHARNESS_AGENTMEM_CONFIG_ENV: 'SYNTHETIC_GATEWAY_ENV_SENTINEL' }),
-      server('pseudoharness_skills', { PSEUDOHARNESS_SKILLS_TASK_ID: 'test-task' }),
-    ];
+    const mcpServers = [server('pseudoharness_skills', { PSEUDOHARNESS_SKILLS_TASK_ID: 'test-task' })];
 
     const profile = await prepareDeepSeekHarnessTaskProfile({
       dshHome,
@@ -106,12 +103,14 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     const taskLaunch = applyDeepSeekHarnessTaskProfileLaunch(launch(), profile);
     expect(taskLaunch.profileName).toBe(profile.profileName);
     expect(taskLaunch.args[taskLaunch.args.indexOf('--profile') + 1]).toBe(profile.profileName);
-    expect(taskLaunch.configuredMcpServers).toEqual(['agentmem', 'pseudoharness_skills']);
+    expect(taskLaunch.configuredMcpServers).toEqual(['pseudoharness_skills']);
     expect(taskLaunch.env).toMatchObject({ ELECTRON_RUN_AS_NODE: '1', DSH_HOME: dshHome });
 
     const patch = readFileSync(profile.patchPath, 'utf8');
     expect(profile.profileName).toBe('pseudoharness-test-worker');
-    expect(profile.configuredMcpServers).toEqual(['agentmem', 'pseudoharness_skills']);
+    expect(profile.configuredMcpServers).toEqual(['pseudoharness_skills']);
+    const envName = `PSEUDOHARNESS_DSH_MCP_CONFIG_${createHash('sha256').update('pseudoharness_skills').digest('hex').slice(0, 16).toUpperCase()}`;
+    expect(Object.keys(profile.launchEnvironment).sort()).toEqual(['DSH_AGENTS_HOME','DSH_HOME',envName,envName.replace(/^PSEUDOHARNESS_/, 'OPNEX_')].sort());
     expect(profile.launchEnvironment.DSH_HOME).toBe(dshHome);
     expect(profile.launchEnvironment.DSH_AGENTS_HOME).toBe(path.join(dshHome, 'pseudoharness-agents'));
     expect(patch).toContain('path:');
@@ -122,14 +121,13 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     expect(patch).not.toContain('SYNTHETIC_CREDENTIAL_SENTINEL');
     expect(patch).not.toContain('SYNTHETIC_GATEWAY_ENV_SENTINEL');
     expect(patch).not.toContain('D:\\programming\\pseudoharness\\server\\gateway.ts');
-    const envName = `PSEUDOHARNESS_DSH_MCP_CONFIG_${createHash('sha256').update('agentmem').digest('hex').slice(0, 16).toUpperCase()}`;
     const runtimeConfig = JSON.parse(profile.launchEnvironment[envName] ?? '{}');
     expect(profile.launchEnvironment[envName.replace(/^PSEUDOHARNESS_/, 'OPNEX_')]).toBe(profile.launchEnvironment[envName]);
     expect(runtimeConfig).toMatchObject({
-      serverName: 'agentmem',
+      serverName: 'pseudoharness_skills',
       transport: 'stdio',
       failOnStartupError: true,
-      env: { PSEUDOHARNESS_AGENTMEM_CONFIG_ENV: 'SYNTHETIC_GATEWAY_ENV_SENTINEL' },
+      env: { PSEUDOHARNESS_SKILLS_TASK_ID: 'test-task' },
     });
     expect(() => applyDeepSeekHarnessTaskProfileLaunch(launch('custom'), profile))
       .toThrow('Task profiles must be applied to the installed default SDK launch.');
@@ -198,8 +196,8 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     })).rejects.toThrow('outside its isolated task home');
     await expect(prepareDeepSeekHarnessTaskProfile({
       ...base,
-      mcpServers: [{ ...server('agentmem'), serverName: 'external' as 'agentmem' }],
-    })).rejects.toThrow('Only the existing scoped AgentMem and Opnex Skills');
+      mcpServers: [{ ...server('pseudoharness_skills'), serverName: 'external' as 'pseudoharness_skills' }],
+    })).rejects.toThrow('Only the existing Opnex Skills MCP gateway');
     await expect(prepareDeepSeekHarnessTaskProfile({ ...base, mcpServers: [] })).rejects.toThrow('At least one scoped');
     await expect(prepareDeepSeekHarnessTaskProfile({ ...base, provider: 'deepseek-official', mcpServers: [server('pseudoharness_skills')] }))
       .rejects.toThrow('Only the verified OpenCode Go provider route');

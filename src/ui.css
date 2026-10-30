@@ -497,9 +497,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .escalation-options { display: flex; flex-wrap: wrap; gap: 7px; }
 .escalation-options span { padding: 6px 9px; border-radius: 5px; background: #302b20; color: #dbc98f; font-size: 12px; }
 .rec-line { color: #ddcfaa !important; }
-.agentmem-pass-status { max-width: 820px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 9px 0 12px 48px; color: var(--muted); font-size: 12px; }
-.agentmem-pass-status.is-error { color: var(--danger); }
-.agentmem-pass-status small { color: var(--muted); }
 .error-card { max-width: 820px; display: flex; align-items: flex-start; gap: 12px; margin: 8px 0 18px 48px; padding: 14px; border: 1px solid #5d4144; border-radius: 8px; background: var(--danger-wash); color: var(--danger); }
 .error-card strong { font-size: 13px; }
 .error-card p { margin: 5px 0 0; color: var(--danger-soft); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
@@ -617,11 +614,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .skill-command-empty-action button { justify-self:start; min-height:30px; padding:0 9px; border:1px solid var(--border-strong); border-radius:5px; background:var(--raised); color:var(--text); cursor:pointer; font-size:11px; }
 .skill-library-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; margin:8px 0 4px; }
 .skill-library-toolbar > button,.skill-import-button,.skill-import-file,.skill-detail-title > button,.skill-detail-actions > button,.skill-library-detail > button { min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 10px; border:1px solid var(--border-strong); border-radius:6px; background:var(--raised); color:var(--text); cursor:pointer; font-size:11px; }
-.skill-library-toolbar .agentmem-search { flex:1 1 240px; min-width:0; height:36px; display:flex; align-items:center; gap:8px; margin:0; padding:0 10px; border:1px solid var(--border-strong); border-radius:6px; background:var(--input); color:var(--muted); }
-.skill-library-toolbar .agentmem-search:focus-within { border-color:var(--accent-soft); box-shadow:0 0 0 1px var(--accent-soft); }
-.skill-library-toolbar .agentmem-search svg { flex:0 0 auto; }
-.skill-library-toolbar .agentmem-search input { width:100%; min-width:0; height:32px; margin:0; padding:0; border:0; border-radius:0; outline:0; background:transparent; color:var(--text); font-size:12px; }
-.skill-library-toolbar .agentmem-search input::placeholder { color:var(--subtle); }
+.skill-library-toolbar .skill-search-field { flex:1 1 240px; min-width:0; height:36px; display:flex; align-items:center; gap:8px; margin:0; padding:0 10px; border:1px solid var(--border-strong); border-radius:6px; background:var(--input); color:var(--muted); }
+.skill-library-toolbar .skill-search-field:focus-within { border-color:var(--accent-soft); box-shadow:0 0 0 1px var(--accent-soft); }
+.skill-library-toolbar .skill-search-field svg { flex:0 0 auto; }
+.skill-library-toolbar .skill-search-field input { width:100%; min-width:0; height:32px; margin:0; padding:0; border:0; border-radius:0; outline:0; background:transparent; color:var(--text); font-size:12px; }
+.skill-library-toolbar .skill-search-field input::placeholder { color:var(--subtle); }
 .skill-library-toolbar .skill-show-archived { display:flex; flex:0 0 auto; align-items:center; gap:6px; min-height:36px; margin:0; color:var(--muted); white-space:nowrap; font-size:11px; cursor:pointer; }
 .skill-library-toolbar .skill-show-archived input { width:14px; height:14px; margin:0; accent-color:var(--accent-soft); }
 .skill-library-toolbar > button:hover,.skill-import-button:hover,.skill-import-file:hover,.skill-detail-title > button:hover,.skill-detail-actions > button:hover,.skill-library-detail > button:hover { border-color:var(--border-hover); background:var(--raised-hover); }
@@ -681,7 +678,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 @container skills (max-width:620px) {
   .skill-library-page { padding:14px; }
   .skill-library-toolbar { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:stretch; gap:7px; }
-  .skill-library-toolbar .agentmem-search,.skill-library-toolbar .skill-show-archived { grid-column:1 / -1; }
+  .skill-library-toolbar .skill-search-field,.skill-library-toolbar .skill-show-archived { grid-column:1 / -1; }
   .skill-library-toolbar > button,.skill-import-button,.skill-import-file { width:100%; min-width:0; }
   .skill-library-layout { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(84px,30%) minmax(0,1fr); }
   .skill-library-list { border-right:0; border-bottom:1px solid var(--border); }
@@ -690,7 +687,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 @container skills (max-width:340px) {
   .skill-library-toolbar { grid-template-columns:minmax(0,1fr); }
-  .skill-library-toolbar .agentmem-search,.skill-library-toolbar .skill-show-archived { grid-column:1; }
+  .skill-library-toolbar .skill-search-field,.skill-library-toolbar .skill-show-archived { grid-column:1; }
   .skill-library-empty-state { gap:9px; padding:12px; }
 }
 .settings-dialog h2 { margin: 0; color: var(--text); font-size: 23px; font-weight: 600; letter-spacing: -.35px; }
@@ -1072,8 +1069,6 @@ body { min-width: 640px; min-height: 520px; }
 .settings-select-row { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:10px 0 6px; color:var(--text); font-size:13px; }
 .settings-select-row .choice-popover { min-width:210px; justify-content:space-between; }
 .settings-help { display:block; margin:0 0 9px; color:var(--muted); font-size:11px; line-height:1.55; }
-.settings-dialog .settings-agentmem-auto-setup { display:grid; grid-template-columns:16px minmax(0,1fr); column-gap:8px; row-gap:3px; align-items:start; }
-.settings-agentmem-auto-setup > span,.settings-agentmem-auto-setup > small { grid-column:2; }
 .settings-dialog .settings-help > input[type="checkbox"] { width:16px; height:16px; margin:2px 0 0; padding:0; accent-color:var(--accent); }
 .settings-dialog .settings-provider-group { min-width:0; padding:8px 12px 9px; border:1px solid var(--border-strong); border-radius:7px; }
 .settings-dialog .settings-provider-group > legend { padding:0 5px; color:var(--muted); font-size:11px; font-weight:400; line-height:1.4; }

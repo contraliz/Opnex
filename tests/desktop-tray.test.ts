@@ -94,13 +94,13 @@ describe('managed kernel shutdown', () => {
     expect(waitForBackendExit).toHaveBeenCalledWith(15_000);
   });
 
-  it('keeps the managed kernel running if AgentMem reports pending writes', async () => {
+  it('keeps the managed kernel running when its shutdown request is rejected', async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(response(200, { csrf: 'opaque-test-token' }))
-      .mockResolvedValueOnce(response(409, { code: 'AGENTMEM_WORK_PENDING', error: 'Wait for AgentMem work.' }));
+      .mockResolvedValueOnce(response(409, { code: 'SHUTDOWN_REJECTED', error: 'Shutdown is temporarily unavailable.' }));
     const state = { shutdownAccepted: false };
     const waitForBackendExit = vi.fn();
-    await expect(stopOwnedKernel({ ownsKernel: true, origin: 'http://127.0.0.1:4174', fetchImpl, state, isBackendExited: () => false, waitForBackendExit })).rejects.toThrow('Wait for AgentMem work.');
+    await expect(stopOwnedKernel({ ownsKernel: true, origin: 'http://127.0.0.1:4174', fetchImpl, state, isBackendExited: () => false, waitForBackendExit })).rejects.toThrow('Shutdown is temporarily unavailable.');
     expect(state.shutdownAccepted).toBe(false);
     expect(waitForBackendExit).not.toHaveBeenCalled();
   });
