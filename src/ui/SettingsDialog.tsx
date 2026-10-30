@@ -2,7 +2,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent 
 import { ChevronRight, X } from 'lucide-react';
 import { api } from './api';
 import { ChoicePopover } from './Composer';
-import ModelPicker from './ModelPicker';
+import ModelPicker, { modelChoiceName } from './ModelPicker';
 import type { ModelChoice } from './ModelPicker';
 import type { AppState, ExecutionProfile, Runtime } from '../types';
 
@@ -13,7 +13,7 @@ function workerProfile(value:Settings):ExecutionProfile{return value.executionPr
 function WorkerExecutionSettings({value,set,models,disabled}:{value:Settings;set:(value:Settings)=>void;models:Runtime['codex']['models'];disabled:boolean}){
   const profile=workerProfile(value),codex=models.find(model=>model.id==='gpt-6-luna'),codexEfforts=(codex?.efforts||[]).filter(effort=>['low','medium','high','xhigh','max','ultra'].includes(effort));
   const choices:ModelChoice[]=[
-    {providerKey:'codex',provider:'Codex · OpenAI',id:'gpt-6-luna',name:codex?.displayName||'GPT-6 Luna',efforts:codexEfforts,available:!!codex&&codexEfforts.length>0,availabilityNote:codex&&codexEfforts.length?undefined:'GPT-6 Luna is not available in the local Codex model catalog.'},
+    {providerKey:'codex',provider:'Codex · OpenAI',id:'gpt-6-luna',name:modelChoiceName('gpt-6-luna',codex?.displayName),efforts:codexEfforts,available:!!codex&&codexEfforts.length>0,availabilityNote:codex&&codexEfforts.length?undefined:'GPT-6 Luna is not available in the local Codex model catalog.'},
     {providerKey:'deepseek',provider:'DeepSeek Harness · OpenCode Go',id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',efforts:['max'],available:true,availabilityNote:'Runtime and authentication are checked before launch; no fallback is used.'},
   ];
   if(!choices.some(choice=>choice.providerKey===profile.provider&&choice.id===profile.model))choices.push({providerKey:profile.provider,provider:`Saved ${profile.provider} profile`,id:profile.model,name:profile.model,efforts:[profile.effort],available:false,availabilityNote:'This saved profile is not one of the currently configured worker choices.'});

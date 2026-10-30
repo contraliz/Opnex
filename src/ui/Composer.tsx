@@ -5,7 +5,7 @@ import { LiveMarkdownEditor } from './LiveMarkdownEditor';
 import { api } from './api';
 import type { ExecutionProfile, Runtime, TaskAttachment } from '../types';
 import type { SkillSummary } from './skills-types';
-import ModelPicker from './ModelPicker';
+import ModelPicker, { modelChoiceName } from './ModelPicker';
 import type { ModelChoice } from './ModelPicker';
 
 type Choice={value:string;label:string};
@@ -54,7 +54,7 @@ export default function Composer({value,setValue,submit,disabled,hint,inputRef,e
 
 function ExecutionModelPopover({profile,models,disabled,onChange}:{profile:ExecutionProfile;models:Runtime['codex']['models'];deepseekModel?:string;deepseekEffort?:string;disabled:boolean;onChange:(profile:ExecutionProfile)=>void}){
   const supportedEfforts=new Set(['low','medium','high','xhigh','max','ultra']);
-  const choices:ModelChoice[]=models.map(model=>{const efforts=model.efforts.filter(effort=>supportedEfforts.has(effort));return {providerKey:'codex',provider:'Codex · OpenAI',id:model.id,name:model.displayName||model.id,efforts,available:efforts.length>0,availabilityNote:efforts.length?undefined:'No supported reasoning effort is advertised by the runtime.'};});
+  const choices:ModelChoice[]=models.map(model=>{const efforts=model.efforts.filter(effort=>supportedEfforts.has(effort));return {providerKey:'codex',provider:'Codex · OpenAI',id:model.id,name:modelChoiceName(model.id,model.displayName),efforts,available:efforts.length>0,availabilityNote:efforts.length?undefined:'No supported reasoning effort is advertised by the runtime.'};});
   return <ModelPicker label="Orchestrator model" providerKey="codex" model={profile.model} effort={profile.effort} choices={choices} disabled={disabled} onChange={(choice,effort)=>onChange({provider:'codex',model:choice.id,effort:effort as ExecutionProfile['effort']})}/>;
 }
 
