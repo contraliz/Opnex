@@ -2,65 +2,114 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport as StdioServer } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, InitializedNotificationSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { AGENTMEM_MODEL_TOOLS, scopeAgentMemToolArgs, scopeAgentMemToolSchema } from './agentmem-mcp-scope.js';
-import path from 'node:path';
+import { sameProjectRoot } from './project-identity.js';
+import { AgentMemTimeoutError, withAgentMemTimeout } from './agentmem-adapter-timeout.js';
 
 const appEnv=(name:string)=>process.env[`OPNEX_AGENTMEM_${name}`]??process.env[`PSEUDOHARNESS_AGENTMEM_${name}`];
 const projectId=appEnv('PROJECT_ID')||'';
 const projectRoot=appEnv('PROJECT_ROOT')||'';
-let repositoryId=appEnv('REPOSITORY_ID')||'';
-const setupMode=(appEnv('SETUP_MODE')||'ready') as 'register'|'repository'|'ready';
+const configuredRepositoryId=appEnv('REPOSITORY_ID')||'';
+const readOnlyAccess=appEnv('ACCESS')==='read-only';
 const command=appEnv('COMMAND')||'';
 const args=JSON.parse(appEnv('ARGS')||'[]') as string[];
 const configuredEnvValue=JSON.parse(appEnv('CONFIG_ENV')||'{}') as unknown;
+const repositoryTools=new Set(['repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync']);
+const statusSchema={type:'object',properties:{},additionalProperties:false};
+const upstreamTimeoutMs=2500;
+const cleanupTimeoutMs=500;
+
+function resultText(value:any){return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};}
+function unwrap(result:any){
+  if(result.isError)throw new Error(result.content?.map((item:any)=>item.text||'').join('\n')||'AgentMem operation failed.');
+  const text=result.content?.find((item:any)=>item.type==='text')?.text;
+  if(text){try{const parsed=JSON.parse(text);if(parsed?.ok===false)throw new Error(parsed.error?.reason||'AgentMem operation failed.');return parsed;}catch(error){if(error instanceof Error&&error.message!=='Unexpected end of JSON input')throw error;}}
+  return result.structuredContent||result;
+}
+
 async function main(){
-  if(!projectId||!projectRoot||!command||!Array.isArray(args)||!args.every((value:unknown)=>typeof value==='string')||!configuredEnvValue||typeof configuredEnvValue!=='object'||Array.isArray(configuredEnvValue)||Object.entries(configuredEnvValue).some(([key,value])=>!key.trim()||typeof value!=='string')||setupMode==='ready'&&!repositoryId)throw new Error('The selected AgentMem project/repository binding is incomplete.');
-  const client=new Client({name:'pseudoharness-agentmem-scope',version:'1.0.0'});
-  const childEnv={...process.env,...configuredEnvValue} as Record<string,string>;
-  const clientTransport=new StdioClientTransport({command,args,env:childEnv,stderr:'ignore'});
-  await client.connect(clientTransport);
-  const server=new Server({name:'agentmem',version:'1.0.0'},{capabilities:{tools:{listChanged:false}}});
-  const rootKey=(value:string)=>path.resolve(value).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase();
-  const unwrap=(result:any)=>{if(result.isError)throw new Error(result.content?.map((item:any)=>item.text||'').join('\n')||'AgentMem operation failed.');const text=result.content?.find((item:any)=>item.type==='text')?.text;if(text){try{const parsed=JSON.parse(text);if(parsed?.ok===false)throw new Error(parsed.error?.reason||'AgentMem operation failed.');return parsed;}catch(error){if(error instanceof Error&&error.message!=='Unexpected end of JSON input')throw error;}}return result.structuredContent||result;};
-  const projects=async()=>{const value=unwrap(await client.callTool({name:'projects',arguments:{action:'list'}}));const rows=value.projects||value.items||[];if(!Array.isArray(rows))throw new Error('AgentMem project list is invalid.');return rows;};
-  const repositoryRows=async()=>{const value=unwrap(await client.callTool({name:'repository_list',arguments:{project_id:projectId}}));const rows=value.repositories||[];if(!Array.isArray(rows))throw new Error('AgentMem repository list is invalid.');return rows;};
-  const prepareRegistration=async()=>{
-    const rows=await projects();const idMatch=rows.find((row:any)=>row?.id===projectId);const rootMatch=rows.find((row:any)=>typeof(row?.source_root||row?.root||row?.cwd)==='string'&&rootKey(row.source_root||row.root||row.cwd)===rootKey(projectRoot));
-    if(idMatch)throw new Error('The selected AgentMem project ID is already registered. Select the existing matching project or choose a new ID; no existing KB was changed.');
-    if(rootMatch)throw new Error(`This root is already registered as AgentMem project "${rootMatch.id}". Select that ID; no project was re-bound.`);
+  if(!projectId||!projectRoot||!command||!Array.isArray(args)||!args.every((value:unknown)=>typeof value==='string')||!configuredEnvValue||typeof configuredEnvValue!=='object'||Array.isArray(configuredEnvValue)||Object.entries(configuredEnvValue).some(([key,value])=>!key.trim()||typeof value!=='string'))throw new Error('The project-scoped AgentMem adapter configuration is incomplete.');
+  const server=new Server({name:'opnex-agentmem',version:'1.0.0'},{capabilities:{tools:{listChanged:true}}});
+  const serverTransport=new StdioServer();
+  let client:Client|undefined,transport:StdioClientTransport|undefined,repositoryId=configuredRepositoryId;
+  let ready=false,initialized=false,connecting:Promise<void>|undefined,lastAttempt=0,status='AgentMem is unavailable; continue project work without it.';
+  const closeUpstream=async(targetClient=client,targetTransport=transport)=>{
+    if(client===targetClient)ready=false;
+    if(targetClient)try{await withAgentMemTimeout(targetClient.close(),cleanupTimeoutMs,'AgentMem client cleanup');}catch{}
+    if(targetTransport)try{await withAgentMemTimeout(targetTransport.close(),cleanupTimeoutMs,'AgentMem transport cleanup');}catch{}
+    if(client===targetClient)client=undefined;
+    if(transport===targetTransport)transport=undefined;
   };
-  const registerRepository=async()=>{
-    const projectRows=await projects();const selected=projectRows.find((row:any)=>row?.id===projectId);const selectedRoot=selected?.source_root||selected?.root||selected?.cwd;
-    if(!selected||typeof selectedRoot!=='string'||rootKey(selectedRoot)!==rootKey(projectRoot))throw new Error('The selected project ID/root is not registered as configured; repository registration was blocked.');
-    const repos=await repositoryRows();const match=repos.find((row:any)=>typeof row?.root==='string'&&rootKey(row.root)===rootKey(projectRoot));
-    if(match){repositoryId=String(match.repository_id||'');if(!repositoryId)throw new Error('The matching repository registration has no identity.');return {repository_id:repositoryId,root:projectRoot,already_registered:true};}
-    const value=unwrap(await client.callTool({name:'repository_register',arguments:{project_id:projectId,repository_root:projectRoot}}));
-    const after=await repositoryRows();const created=after.find((row:any)=>typeof row?.root==='string'&&rootKey(row.root)===rootKey(projectRoot));
-    if(!created||typeof created.repository_id!=='string')throw new Error('AgentMem did not confirm a repository index for the selected root.');repositoryId=created.repository_id;return value;
+  const notifyToolsChanged=async()=>{if(initialized)try{await server.sendToolListChanged();}catch{}};
+  server.setNotificationHandler(InitializedNotificationSchema,async()=>{initialized=true;await notifyToolsChanged();});
+  const ensureUpstream=async()=>{
+    if(ready)return;
+    if(connecting){await connecting;return;}
+    if(Date.now()-lastAttempt<5000)return;
+    lastAttempt=Date.now();
+    const attempt=(async()=>{
+      const nextClient=new Client({name:'opnex-project-adapter',version:'1.0.0'});
+      const nextTransport=new StdioClientTransport({command,args,env:{...process.env,...configuredEnvValue} as Record<string,string>,stderr:'ignore'});
+      client=nextClient;transport=nextTransport;
+      try{
+        await withAgentMemTimeout(nextClient.connect(nextTransport),upstreamTimeoutMs,'AgentMem connection');
+        const projectResponse=unwrap(await withAgentMemTimeout(nextClient.callTool({name:'projects',arguments:{action:'list'}}),upstreamTimeoutMs,'AgentMem project verification'));
+        const projects=projectResponse.projects||projectResponse.items||projectResponse.data?.projects;
+        if(!Array.isArray(projects))throw new Error('AgentMem project list was invalid.');
+        const source=(row:any)=>row?.source_root||row?.root||row?.cwd;
+        const selected=projects.filter((row:any)=>row?.id===projectId),rootMatches=projects.filter((row:any)=>typeof source(row)==='string'&&sameProjectRoot(source(row),projectRoot));
+        if(selected.length!==1||typeof source(selected[0])!=='string'||!sameProjectRoot(source(selected[0]),projectRoot)||rootMatches.length!==1||rootMatches[0].id!==projectId)throw new Error('The saved AgentMem project binding no longer matches this directory.');
+        try{
+          const repositoryResponse=unwrap(await withAgentMemTimeout(nextClient.callTool({name:'repository_list',arguments:{project_id:projectId}}),upstreamTimeoutMs,'AgentMem repository verification'));
+          const repositories=Array.isArray(repositoryResponse?.repositories)?repositoryResponse.repositories:[];
+          const matching=repositories.find((row:any)=>typeof row?.repository_id==='string'&&typeof row?.root==='string'&&sameProjectRoot(row.root,projectRoot));
+          repositoryId=matching?.repository_id||'';
+          if(configuredRepositoryId&&repositoryId!==configuredRepositoryId)throw new Error('The saved AgentMem repository identity no longer matches this directory.');
+          status=repositoryId?'Connected to the selected project and its exact repository index.':'Connected to the selected project; no exact repository index is registered.';
+        }catch(error){
+          if(configuredRepositoryId)throw error;
+          repositoryId='';status='Connected to the selected project; the optional repository index is unavailable.';
+        }
+        ready=true;
+        await notifyToolsChanged();
+      }catch{
+        status='AgentMem is unavailable or the selected project identity could not be verified.';
+        await closeUpstream(nextClient,nextTransport);
+      }
+    })();
+    connecting=attempt;try{await attempt;}finally{if(connecting===attempt)connecting=undefined;}
   };
   server.setRequestHandler(ListToolsRequestSchema,async request=>{
-    const response=await client.listTools(request.params?.cursor?{cursor:request.params.cursor}:{});
-    const setupTools=new Set(setupMode==='register'?['projects','repository_register']:setupMode==='repository'?['repository_register']:[]);
-    return {...response,tools:response.tools.filter(tool=>AGENTMEM_MODEL_TOOLS.has(tool.name)&&(tool.name!=='projects'&&tool.name!=='repository_register'||setupTools.has(tool.name))).map(tool=>({...tool,inputSchema:scopeAgentMemToolSchema(tool.inputSchema,tool.name,setupMode),...(tool.name==='projects'?{description:'Initialize the AgentMem KB selected in Opnex Settings. Only action=register is allowed; Opnex supplies the exact selected project ID and root and rejects existing ID/root bindings.'}:{}),...(tool.name==='repository_register'?{description:'Register the repository index for the exact project root selected in Opnex Settings. The project ID and root are supplied and cannot be changed.'}:{})}))};
+    if(!ready||!client){
+      if(!connecting)void ensureUpstream();
+      return {tools:[{name:'agentmem_status',description:`Optional project knowledge is unavailable. ${status} Normal project work can continue.`,inputSchema:statusSchema}]};
+    }
+    const activeClient=client,activeTransport=transport;
+    try{
+      const response=await withAgentMemTimeout(activeClient.listTools(request.params?.cursor?{cursor:request.params.cursor}:{}),upstreamTimeoutMs,'AgentMem tool catalog');
+      const tools=response.tools.filter(tool=>AGENTMEM_MODEL_TOOLS.has(tool.name)&&tool.name!=='projects'&&tool.name!=='repository_register'&&(!repositoryTools.has(tool.name)||!!repositoryId));
+      return {...response,tools:tools.map(tool=>({...tool,inputSchema:scopeAgentMemToolSchema(tool.inputSchema,tool.name,readOnlyAccess)}))};
+    }catch{
+      status='The optional AgentMem tool catalog is unavailable.';
+      await closeUpstream(activeClient,activeTransport);
+      return {tools:[{name:'agentmem_status',description:`Optional project knowledge is unavailable. ${status} Normal project work can continue.`,inputSchema:statusSchema}]};
+    }
   });
   server.setRequestHandler(CallToolRequestSchema,async request=>{
     const name=request.params?.name||'';
-    if(name==='projects'&&setupMode==='register')await prepareRegistration();
-    const callArgs=scopeAgentMemToolArgs(name,request.params?.arguments||{},projectId,repositoryId,projectRoot,setupMode);
-    if(name==='repository_register')return {content:[{type:'text',text:JSON.stringify(await registerRepository())}]};
-    if(['repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync'].includes(name)&&!repositoryId)throw new Error('Register the selected project repository index before using repository tools.');
-    const result=await client.callTool({name,arguments:callArgs});
-    if(name==='projects'&&setupMode==='register'){
-      const value=unwrap(result);const returnedRoot=value.source_root||value.root||value.cwd;const returnedId=value.id||value.project_id;
-      if(value.onboarding?.newly_registered!==true||returnedId!==projectId||typeof returnedRoot!=='string'||rootKey(returnedRoot)!==rootKey(projectRoot))throw new Error('AgentMem did not confirm a newly registered KB for the selected project ID/root.');
-    }
-    return result;
+    if(name==='agentmem_status'){await ensureUpstream();return resultText({available:ready,projectId,projectRoot,status});}
+    await ensureUpstream();
+    if(!ready||!client)throw new Error(`Optional AgentMem is unavailable: ${status} Continue project work without it.`);
+    const scoped=scopeAgentMemToolArgs(name,request.params?.arguments||{},projectId,repositoryId,projectRoot,readOnlyAccess);
+    const activeClient=client,activeTransport=transport;
+    try{return await withAgentMemTimeout(activeClient.callTool({name,arguments:scoped}),upstreamTimeoutMs,`AgentMem ${name} tool`);}
+    catch(error){if(error instanceof AgentMemTimeoutError){status=`The optional AgentMem ${name} operation timed out.`;await closeUpstream(activeClient,activeTransport);}throw error;}
   });
-  const serverTransport=new StdioServer();
   await server.connect(serverTransport);
-  const close=async()=>{try{await server.close();}catch{}try{await client.close();}catch{}};
+  void ensureUpstream();
+  const close=async()=>{try{await server.close();}catch{}try{await client?.close();}catch{}try{await transport?.close();}catch{}};
   process.on('SIGTERM',()=>void close());process.on('SIGINT',()=>void close());
 }
 
-void main().catch(error=>{process.stderr.write(`Opnex AgentMem MCP gateway: ${error instanceof Error?error.message:'startup failed'}\n`);process.exitCode=1;});
+void main().catch(error=>{process.stderr.write(`Opnex AgentMem project adapter: ${error instanceof Error?error.message:'startup failed'}\n`);process.exitCode=1;});

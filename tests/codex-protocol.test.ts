@@ -7,13 +7,16 @@ import { settingsSchema } from '../server/contracts.js';
 import { authorizesWorkerWorkspaceTool, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from '../server/workspace-tools.js';
 
 describe('Codex approval and turn configuration',()=>{
-  it('omits absent MCP servers instead of emitting malformed disabled entries',()=>{
-    for(const role of ['router','direct','simple','orchestrator','worker'] as const){const config=appAgentConfig('/repo',role);expect(config).not.toHaveProperty('mcp_servers');}
+  it('attaches AgentMem only to a project role with a supplied scoped adapter',()=>{
+    for(const role of ['router','direct','simple','orchestrator','worker'] as const){const config=appAgentConfig('/repo',role);expect((config as any).mcp_servers.agentmem).toEqual({enabled:false});}
     const skills={command:'node',args:['gateway.js'],enabled:true,enabled_tools:['skills_list']};
     const worker=appAgentConfig('/repo','worker',undefined,skills) as any;
-    expect(worker.mcp_servers).toEqual({pseudoharness_skills:skills});
-    expect(worker.mcp_servers).not.toHaveProperty('agentmem');
-    const router=appAgentConfig('/repo','router',undefined,skills);expect(router).not.toHaveProperty('mcp_servers');
+    expect(worker.mcp_servers).toEqual({agentmem:{enabled:false},pseudoharness_skills:skills});
+    const scoped={command:'node',args:['agentmem-mcp-gateway.js'],enabled:true,env:{OPNEX_AGENTMEM_PROJECT_ID:'alpha'}};
+    expect((appAgentConfig('/repo','direct',scoped) as any).mcp_servers.agentmem).toEqual(scoped);
+    expect((appAgentConfig('/repo','worker',scoped) as any).mcp_servers.agentmem).toEqual(scoped);
+    const router=appAgentConfig('/repo','router',scoped,skills) as any;expect(router.mcp_servers).toEqual({agentmem:{enabled:false}});
+    const qa=appAgentConfig('/repo','qa',scoped,skills) as any;expect(qa.mcp_servers).toEqual({agentmem:{enabled:false}});
   });
   it('resolves the normal Codex SQLite home while keeping the instruction-filtered home separate',async()=>{
     expect(normalCodexSqliteHome({CODEX_HOME:'D:/Users/test/.codex'},'C:/Users/test')).toBe('D:/Users/test/.codex');
@@ -26,18 +29,17 @@ describe('Codex approval and turn configuration',()=>{
   const verifiedRuntimeConfig={config:{mcp_servers:{agentmem:{command:'agentmem'}},plugins:{example:{enabled:true}}}};
   it('loads the app-owned delegation policy into orchestrator developer instructions',()=>{
     const instructions=buildOrchestratorDeveloperInstructions('ORCHESTRATOR POLICY COPY');
-    expect(instructions).toContain('ORCHESTRATOR POLICY COPY');expect(instructions).toContain('policy-bound orchestration model');expect(instructions).toContain('setup/tool-use stage');expect(instructions).toContain('do not create an assignment in that stage');
+    expect(instructions).toContain('ORCHESTRATOR POLICY COPY');expect(instructions).toContain('policy-bound orchestration model');expect(instructions).toContain('app does not fetch context for you');expect(instructions).not.toContain('setup/tool-use stage');
   });
-  it('accepts only supported approval presets and keeps the safe default',()=>{
-    const base={projectRoot:'D:/repo',agentmemProjectId:'demo',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low'};
+  it('keeps application settings global and rejects workspace or AgentMem identity fields',()=>{
+    const base={orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low'};
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
     expect(settingsSchema.parse(base)).toMatchObject({deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'});
     for(const approvalPolicy of ['on-request','untrusted','never','full-access'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
     expect(settingsSchema.safeParse({...base,approvalPolicy:'custom'}).success).toBe(false);
-    expect(settingsSchema.parse({...base,agentmemProjectId:''}).agentmemProjectId).toBe('');
-    expect(settingsSchema.parse({...base,agentmemProjectId:'   '}).agentmemProjectId).toBe('');
-    expect(settingsSchema.safeParse({...base,agentmemProjectId:'x'.repeat(129)}).success).toBe(false);
-    expect(settingsSchema.safeParse({...base,projectRoot:'',agentmemProjectId:'',agentmemAutoSetup:false}).success).toBe(true);
+    expect(settingsSchema.safeParse({...base,projectRoot:'D:/repo'}).success).toBe(false);
+    expect(settingsSchema.safeParse({...base,agentmemProjectId:'demo'}).success).toBe(false);
+    expect(settingsSchema.safeParse({...base,agentmemAutoSetup:true}).success).toBe(false);
   });
   it('requests the most detailed supported summaries and available provider text for new and resumed role threads',()=>{
     const orchestrator=makeThreadParams({role:'orchestrator',root:'D:/repo',model:'gpt-6.1-sol',approvalPolicy:'on-request',ownedPolicy:'policy'});
@@ -67,7 +69,7 @@ describe('Codex approval and turn configuration',()=>{
   it('gives QA a distinct read-only thread config with external MCP, plugins, apps, and dynamic tools disabled',()=>{
     const qa=makeThreadParams({role:'qa',root:'/tmp/project',model:'gpt-6.1-terra',approvalPolicy:'full-access',dynamicTools:workerWorkspaceTool,agentmemMcpConfig:{command:'agentmem',env:{TOKEN:'private'}},skillsMcpConfig:{command:'skills'},disabledMcpServerNames:['github','linear']});
     expect(qa).toMatchObject({approvalPolicy:'never',sandbox:'read-only',dynamicTools:[],config:{'mcp_servers.github.enabled':false,'mcp_servers.linear.enabled':false,features:{apps:false,plugins:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false},web_search:'disabled'}});
-    expect(qa.config).not.toHaveProperty('mcp_servers');expect(qa.config).not.toHaveProperty('agentmem');expect(qa.config).not.toHaveProperty('pseudoharness_skills');expect(qa.developerInstructions).not.toContain('PROJECT KNOWLEDGE AND REPOSITORY INDEX USE');expect(()=>appAgentConfig('/tmp/project','qa',undefined,undefined,['server.with-dot'])).toThrow('cannot safely disable');
+    expect((qa.config.mcp_servers as any).agentmem).toEqual({enabled:false});expect(qa.config.mcp_servers).not.toHaveProperty('pseudoharness_skills');expect(qa.developerInstructions).not.toContain('PROJECT KNOWLEDGE AND REPOSITORY INDEX USE');expect(()=>appAgentConfig('/tmp/project','qa',undefined,undefined,['server.with-dot'])).toThrow('cannot safely disable');
     const turn=makeTurnParams({threadId:'qa-thread',input:'Audit read only',role:'qa',model:'gpt-6.1-terra',effort:'high',writeRoots:['/tmp/project'],approvalPolicy:'on-request',schema:null});
     expect(turn).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'readOnly',networkAccess:false}});
     const resumed=makeThreadResumeParams('qa-thread','full-access','qa','/tmp/project',undefined,{command:'agentmem'},undefined,workerWorkspaceTool,['github','linear']);
@@ -78,9 +80,9 @@ describe('Codex approval and turn configuration',()=>{
     const first={config:{mcp_servers:{github:{command:'github',env:{TOKEN:'SENSITIVE_CONFIG_VALUE_42'}},linear:{url:'https://linear.invalid'}},plugins:{fixture:{enabled:true}}},layers:[{config:{mcp_servers:{project_private:{command:'hidden-project-server',env:{TOKEN:'SENSITIVE_CONFIG_VALUE_42'}}}}}]};const second={config:{mcp_servers:{github:{command:'github'},private_server:{command:'private'}},plugins:{fixture:{enabled:true}}},layers:[{config:{mcp_servers:{workspace_private:{command:'hidden-workspace-server'}}}}]};
     const request=vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'qa-thread'}}).mockResolvedValueOnce(second).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'qa-thread'}});(client as any).request=request;
     await expect(client.startThread('qa','/repo','gpt-6.1-terra','high','on-request')).resolves.toBe('qa-thread');
-    const start=request.mock.calls[1][1];expect(start).toMatchObject({model:'gpt-6.1-terra',approvalPolicy:'never',sandbox:'read-only',dynamicTools:[],config:{'mcp_servers.github.enabled':false,'mcp_servers.linear.enabled':false,'mcp_servers.project_private.enabled':false,features:{apps:false,plugins:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false},web_search:'disabled'}});expect(start.config).not.toHaveProperty('mcp_servers');expect(JSON.stringify(start.config)).not.toContain('SENSITIVE_CONFIG_VALUE_42');
+    const start=request.mock.calls[1][1];expect(start).toMatchObject({model:'gpt-6.1-terra',approvalPolicy:'never',sandbox:'read-only',dynamicTools:[],config:{mcp_servers:{agentmem:{enabled:false}},'mcp_servers.github.enabled':false,'mcp_servers.linear.enabled':false,'mcp_servers.project_private.enabled':false,features:{apps:false,plugins:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false},web_search:'disabled'}});expect(JSON.stringify(start.config)).not.toContain('SENSITIVE_CONFIG_VALUE_42');
     await expect(client.resumeThread('qa-thread','on-request','qa','/repo')).resolves.toBe('qa-thread');
-    const resume=request.mock.calls[3][1];expect(resume).toMatchObject({approvalPolicy:'never',sandbox:'read-only'});expect(resume.config).toMatchObject({'mcp_servers.github.enabled':false,'mcp_servers.private_server.enabled':false,'mcp_servers.workspace_private.enabled':false});expect(resume.config).not.toHaveProperty('mcp_servers');const configReads=request.mock.calls.filter(([method]:any[])=>method==='config/read');expect(configReads).toHaveLength(2);expect(configReads.map(([,params]:any[])=>params)).toEqual([{cwd:'/repo',includeLayers:true},{cwd:'/repo',includeLayers:true}]);client.close();
+    const resume=request.mock.calls[3][1];expect(resume).toMatchObject({approvalPolicy:'never',sandbox:'read-only'});expect(resume.config).toMatchObject({mcp_servers:{agentmem:{enabled:false}},'mcp_servers.github.enabled':false,'mcp_servers.private_server.enabled':false,'mcp_servers.workspace_private.enabled':false});const configReads=request.mock.calls.filter(([method]:any[])=>method==='config/read');expect(configReads).toHaveLength(2);expect(configReads.map(([,params]:any[])=>params)).toEqual([{cwd:'/repo',includeLayers:true},{cwd:'/repo',includeLayers:true}]);client.close();
     const incomplete=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(incomplete as any).ready=true;(incomplete as any).child={killed:false,stdin:{write:()=>{}}};const missingLayers=(incomplete as any).request=vi.fn().mockResolvedValue({config:{mcp_servers:{github:{}},plugins:{fixture:{enabled:true}}}});await expect(incomplete.startThread('qa','/repo','gpt-6.1-terra','high','on-request')).rejects.toThrow('could not report all configuration layers');expect(missingLayers).toHaveBeenCalledTimes(1);incomplete.close();
   });
   it('isolates the router with a classification-only thread and assigns the Fast tier only to its low-effort turn',()=>{

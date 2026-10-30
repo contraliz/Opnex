@@ -5,6 +5,7 @@ import { Markdown } from './Markdown';
 import Composer from './Composer';
 import { prepareMarkdownSubmission } from './LiveMarkdownEditor';
 import SettingsDialog from './SettingsDialog';
+import { ProjectEditorDialog } from './ProjectEditorDialog';
 import { SessionDialog, SessionRow } from './SessionControls';
 import { HeadsUpPanel } from './HeadsUpPanel';
 import { PassGitDiff } from './PassGitDiff';
@@ -18,10 +19,9 @@ import { qualityCorrectionPlannerInFlight, qualityLoopCanAcceptFindings, quality
 const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
 
 const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
-const fallbackSettings:Settings={projectRoot:'',agentmemProjectId:'',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'};
+const fallbackSettings:Settings={orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'};
 const stamp=(s:string)=>new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(new Date(s));
 const auditStamp=(s:string)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(s));
-const rootLabel=(root?:string)=>root?.split(/[\\/]/).filter(Boolean).at(-1)||'Choose project root';
 const makePaneId=()=>`pane:${Date.now()}:${Math.random().toString(36).slice(2,7)}`;
 const makeFallbackTab=()=>`new:${Date.now()}:${Math.random().toString(36).slice(2,6)}`;
 async function encodeAttachments(files:FileList|null,existing:TaskAttachment[]):Promise<TaskAttachment[]>{
@@ -64,14 +64,6 @@ export default function App() {
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [sessionDialogMounted, setSessionDialogMounted] = useState(false);
   const [projectEditor, setProjectEditor] = useState<Project | 'new' | null>(null);
-  const [projectName, setProjectName] = useState('');
-  const [projectRootDraft, setProjectRootDraft] = useState('');
-  const [projectAgentMemId, setProjectAgentMemId] = useState('');
-  const [projectAgentMemEnabled, setProjectAgentMemEnabled] = useState(false);
-  const [projectAgentMemAuto, setProjectAgentMemAuto] = useState(false);
-  const [projectPinned, setProjectPinned] = useState(false);
-  const [projectSaving, setProjectSaving] = useState(false);
-  const [projectError, setProjectError] = useState('');
   const [showAllProjects, setShowAllProjects] = useState<Record<string, boolean>>({});
   const [projectMoveError, setProjectMoveError] = useState('');
   const [projectDropTarget, setProjectDropTarget] = useState<string|null>(null);
@@ -83,7 +75,6 @@ export default function App() {
     const frame=requestAnimationFrame(()=>window.dispatchEvent(new Event('opnex:shell-layout')));
     return()=>cancelAnimationFrame(frame);
   },[sidebarCollapsed,sidebarWidth]);
-  const [retryingPassId, setRetryingPassId] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState('');
   const paneInputRefs = useRef<Record<string, any>>({});
@@ -146,12 +137,13 @@ export default function App() {
     setSettingsOpen(true);
   };
   const openProjectEditor = (project:Project|'new') => {
-    setProjectEditor(project);setProjectName(project==='new'?'':project.name);setProjectRootDraft(project==='new'?(selectedProject?.projectRoot||state?.settings.projectRoot||''):project.projectRoot);setProjectAgentMemId(project==='new'?'':project.agentmemProjectId);setProjectAgentMemEnabled(project==='new'?false:project.agentmemEnabled);setProjectAgentMemAuto(project==='new'?false:project.agentmemAutoSetup);setProjectPinned(project==='new'?false:project.pinned);setProjectError('');
+    setProjectEditor(project);
   };
-  const saveProject = async(event:React.FormEvent) => {
-    event.preventDefault();if(!projectEditor||projectSaving)return;setProjectSaving(true);setProjectError('');
-    const id=projectEditor==='new'?crypto.randomUUID():projectEditor.id;
-    try{await api('/api/projects',{id,name:projectName,projectRoot:projectRootDraft,agentmemProjectId:projectAgentMemId,agentmemEnabled:projectAgentMemEnabled,agentmemAutoSetup:projectAgentMemAuto,pinned:projectPinned});if(projectEditor==='new'){await queueContextSelection('/api/projects/select',{projectId:id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}await refresh();setProjectEditor(null);}catch(cause){setProjectError(String(cause));}finally{setProjectSaving(false);}
+  const projectSaved = async(project:Project,duplicate:boolean) => {
+    const shouldSelect=projectEditor==='new'||duplicate;
+    setProjectEditor(null);
+    if(shouldSelect){setState(current=>current?{...current,selectedProjectId:project.id}:current);await queueContextSelection('/api/projects/select',{projectId:project.id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}
+    await refresh();
   };
   const selectProject = async(id:string|null) => {setState(current=>current?{...current,selectedProjectId:id}:current);try{await queueContextSelection('/api/projects/select',{projectId:id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}catch(cause){setError(String(cause));await refresh();}};
   const toggleProjectExpanded = (id:string) => {const current=projectExpandedRef.current;const expanded=!current.includes(id);const next=expanded?[...current,id]:current.filter(value=>value!==id);projectExpandedRef.current=next;setState(value=>value?{...value,expandedProjectIds:next}:value);projectExpansionQueue.current=projectExpansionQueue.current.then(()=>api(`/api/projects/${id}/expanded`,{expanded})).then(()=>undefined).catch(cause=>setError(String(cause)));};
@@ -203,10 +195,12 @@ export default function App() {
       : contextTabId && workspaceTabKind(contextTabId) === 'session' ? contextTabId : null;
     const originTaskId = originTabId && !originTabId.startsWith('new:') ? originTabId : null;
     const originTask = originTaskId ? taskForTab(originTaskId) : null;
-    const projectRoot = currentWorkspace?.projectRoot || originTask?.userRoot || selectedProject?.projectRoot || state?.settings.projectRoot || '';
+    const projectId = currentWorkspace?.projectId || originTask?.projectId || selectedProject?.id || '';
+    const projectRoot = currentWorkspace?.projectRoot || originTask?.userRoot || selectedProject?.projectRoot || '';
     const id = createWorkspaceTabId(kind, Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9));
     const record = createWorkspaceTabRecord(kind, id, {
       originTabId,
+      projectId,
       projectRoot,
       ...(kind === 'browser' && initialUrl ? { initialUrl } : {}),
       ...(kind === 'git' && initialUrl ? { focusUrl: initialUrl } : {}),
@@ -414,6 +408,7 @@ export default function App() {
     const task = taskForTab(tab);
     const qaEnabled=qualityModes[tab]??task?.passes?.find(pass=>pass.id===task.currentPassId)?.qualityLoop?.enabled??false;
     if (sendingRef.current.has(tab) || (!files.length && submitted === null)) return;
+    if(!task&&(!selectedProject||selectedProject.needsLocation)){setTabError(tab,'Select a project with a working directory before starting a session.');return;}
     const message = submitted || '';
     sendingRef.current.add(tab);
     setSendingTabs(current => ({ ...current, [tab]: true }));
@@ -424,7 +419,7 @@ export default function App() {
       else if (task) await api('/api/tasks/' + task.id + '/messages', { message, attachments: files, qaEnabled, ...(recruitmentSteerTargets[task.id]?{recruitmentWorkerId:recruitmentSteerTargets[task.id]}:{}) });
       else {
         await contextSelectionQueue.current;
-        const created = await api('/api/tasks', { message, attachments: files, qaEnabled });
+        const created = await api('/api/tasks', { message, attachments: files, qaEnabled, projectId:selectedProject!.id });
         if (created?.id) {
           setPanes(current => current.map(pane => pane.tabs.includes(tab)
             ? { ...pane, tabs: pane.tabs.map(item => item === tab ? created.id : item), activeTab: pane.activeTab === tab ? created.id : pane.activeTab }
@@ -457,18 +452,6 @@ export default function App() {
   const qualityAction=async(taskId:string,action:'accept'|'pause'|'resume')=>{
     try{await api(`/api/tasks/${taskId}/qa/${action}`,{});await refresh();}
     catch(cause){setTabError(taskId,String(cause));}
-  };
-  const retryAgentMemFor = async (taskId: string, passId: string) => {
-    setRetryingPassId(passId);
-    clearTabError(taskId);
-    try {
-      await api('/api/tasks/' + taskId + '/passes/' + passId + '/agentmem/retry', {});
-      await refresh();
-    } catch (cause) {
-      setTabError(taskId, String(cause));
-    } finally {
-      setRetryingPassId('');
-    }
   };
   const approveTask = async (taskId: string, requestId: string | number, decision: 'accept' | 'decline' | 'cancel', content?:Record<string,unknown>) => {
     try {
@@ -537,10 +520,7 @@ export default function App() {
         const id = value.state.activeTaskId;
         setPanes([{ id: 'pane:root', tabs: [id], activeTab: id, weight: 1 }]);
       }
-      if (!value.state.settings.projectRoot && !value.state.selectedProjectId) {
-        setSettingsMounted(true);
-        setSettingsOpen(true);
-      }
+      if(!value.state.projects.length)openProjectEditor('new');
       setLoading(false);
     }).catch(cause => {
       if (alive) {
@@ -652,13 +632,13 @@ export default function App() {
     const value = drafts[tab] || '';
     const files = pendingAttachments[tab] || [];
     const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
-    const disabled = !value.trim() && !files.length || !!sendingTabs[tab] || !runtime;
+    const disabled = (!value.trim() && !files.length) || !!sendingTabs[tab] || !runtime || (!task&&(!selectedProject||selectedProject.needsLocation));
     return <Composer
       value={value}
       setValue={next => setDrafts(current => ({ ...current, [tab]: next }))}
       submit={() => void submitTab(tab)}
       disabled={disabled}
-      hint={task?.phase === 'escalated' ? 'A decision will be sent to this session’s orchestrator…' : 'Ask a question or describe work for the router to classify.'}
+      hint={task?.phase === 'escalated' ? 'A decision will be sent to this session’s orchestrator…' : !task&&!selectedProject ? 'Choose or create a project before starting a session.' : !task&&selectedProject?.needsLocation ? 'Choose a working directory for this project before starting a session.' : 'Ask a question or describe work for the router to classify.'}
       inputRef={tabInputRef(tab)}
       model={state?.settings.orchestratorModel || 'gpt-6-sol'}
       effort={state?.settings.orchestratorEffort || 'high'}
@@ -682,7 +662,7 @@ export default function App() {
       <button onClick={() => openNewTabInPane(pane.id)}><MessageSquarePlus size={14} />SESSION</button>
       <button onClick={() => openWorkspaceTab('browser', pane.id, tab)}><Globe size={14} />BROWSER</button>
       <button onClick={() => openWorkspaceTab('git', pane.id, tab)}><GitBranch size={14} />GIT</button>
-      <div className="new-tab-context"><Folder size={12}/><span>{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span><span>·</span><span>Codex {runtime?.codex.state==='connected'?'connected':'offline'}</span><span>·</span><span>{selectedProject?selectedProject.agentmemEnabled?'AgentMem enabled · service '+(runtime?.agentmem.connected?'connected':'offline'):'AgentMem disabled':state?.settings.agentmemProjectId?'AgentMem enabled · service '+(runtime?.agentmem.connected?'connected':'offline'):'AgentMem disabled'}</span></div>
+      <div className="new-tab-context"><Folder size={12}/><span>{selectedProject?.name||'Choose a project'}</span><span>·</span><span>Codex {runtime?.codex.state==='connected'?'connected':'offline'}</span><span>·</span><span>{selectedProject?.agentmemEnabled?'AgentMem project knowledge enabled':'AgentMem disabled'}</span></div>
     </div>
   );
   const renderSessionPaneActions = (tab: string, task: Task | null) => {
@@ -754,7 +734,8 @@ export default function App() {
     const task = kind === 'session' ? taskForTab(tab) : null;
     const record = workspaceTabs[tab];
     const contextTask = record?.originTaskId ? taskForTab(record.originTaskId) : null;
-    const workspaceRoot = record?.originTaskId ? (contextTask?.userRoot || record.projectRoot) : (selectedProject?.projectRoot || record?.projectRoot || state?.settings.projectRoot || '');
+    const workspaceRoot = record?.originTaskId ? (contextTask?.userRoot || record.projectRoot) : (record?.projectRoot || selectedProject?.projectRoot || '');
+    const workspaceProjectId = record?.originTaskId ? (contextTask?.projectId || record.projectId) : (record?.projectId || selectedProject?.id || '');
     const isSession = kind === 'session';
     const baseClass = (index > 0 ? 'session-pane side-session-view ' : 'task-view ') + 'pane-body ' + (!task && isSession ? 'new-tab-view ' : '') + (sessionArrival === tab ? 'session-entering ' : '') + (selected ? 'workspace-tab-active ' : '') + (dropTarget?.paneId === pane.id ? 'drop-half-' + dropTarget.half : '');
     const row = panes.length > 1 ? 2 : 1;
@@ -776,7 +757,7 @@ export default function App() {
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
         onDrop={event => dropPane(event, pane.id)}>
         <EmbeddedWorkspace mode={kind === 'browser' ? 'browser' : 'github'} task={contextTask} placement="full" docked={false}
-          workspaceId={tab} active={selected} sidebarCollapsed={sidebarCollapsed} sidebarWidth={sidebarWidth} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={workspaceRoot}
+          workspaceId={tab} active={selected} sidebarCollapsed={sidebarCollapsed} sidebarWidth={sidebarWidth} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={workspaceRoot} projectId={workspaceProjectId}
           onOpenBrowserTab={url => openWorkspaceTab('browser', pane.id, tab, url)}
           onSummary={() => returnToOrigin(record)}
           onAnnotation={(annotation, comment) => record && addBrowserAnnotation(record, annotation, comment)} />
@@ -794,8 +775,7 @@ export default function App() {
         onQualityAction={action=>void qualityAction(task.id,action)}
         selectedSteerWorkerId={pass.recruitmentTeam?recruitmentSteerTargets[task.id]:undefined} onSelectSteerWorker={workerId=>setRecruitmentSteerTargets(current=>({...current,[task.id]:workerId}))}
         assignmentExpanded={expanded['assignment:' + pass.id] ?? false} receiptExpanded={expanded['receipt:' + pass.id] ?? false}
-        workerActivityExpanded={expanded['workerActivity:' + pass.id] ?? false} agentmemAuditExpanded={expanded['agentmemAudit:' + pass.id] ?? false} retrying={retryingPassId === pass.id}
-        onRetryAgentMem={() => void retryAgentMemFor(task.id, pass.id)}
+        workerActivityExpanded={expanded['workerActivity:' + pass.id] ?? false} agentmemAuditExpanded={expanded['agentmemAudit:' + pass.id] ?? false}
         toggleAssignment={() => setExpanded(current => ({ ...current, ['assignment:' + pass.id]: !current['assignment:' + pass.id] }))}
         toggleReceipt={() => setExpanded(current => ({ ...current, ['receipt:' + pass.id]: !current['receipt:' + pass.id] }))}
         toggleWorkerActivity={() => setExpanded(current => ({ ...current, ['workerActivity:' + pass.id]: !current['workerActivity:' + pass.id] }))}
@@ -813,7 +793,7 @@ export default function App() {
       {renderSessionPaneActions(tab, task)}
       {task && <>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task, pane.id)}</div></>}
       {!task && taskView}
-      <HeadsUpPanel task={task} settings={task?{...(state?.settings||fallbackSettings),projectRoot:task.userRoot,agentmemProjectId:task.agentmemProjectId||''}:selectedProject?{...(state?.settings||fallbackSettings),projectRoot:selectedProject.projectRoot,agentmemProjectId:selectedProject.agentmemProjectId}:state?.settings||fallbackSettings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
+      <HeadsUpPanel task={task} project={task?state?.projects.find(project=>project.id===task.projectId)||null:selectedProject} settings={state?.settings||fallbackSettings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
         onClose={() => setHeadsUpOpen(current => ({ ...current, [tab]: false }))}
         onOpenSettings={openSettings} triggerRef={headsUpTriggerRef(tab)} />
     </div>;
@@ -858,7 +838,7 @@ export default function App() {
         <section className={`project-session-group unclassified-group ${projectDropTarget==='unclassified'?'is-drop-target':''}`} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget('unclassified');}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,null)}><div className="project-group-heading"><button className="project-expand" aria-label={`${unclassifiedExpanded?'Collapse':'Expand'} Unclassified`} aria-expanded={unclassifiedExpanded} onClick={()=>toggleProjectExpanded('unclassified')}>{unclassifiedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>Unclassified</span><small>{unclassifiedTasks.length}</small></button></div>{unclassifiedExpanded&&<div className="project-session-rows">{renderSessionRows(showAllProjects.unclassified?unclassifiedTasks:unclassifiedTasks.slice(0,5))}{unclassifiedTasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,unclassified:!current.unclassified}))}>{showAllProjects.unclassified?'Show recent five':`Show all ${unclassifiedTasks.length} sessions`}</button>}</div>}</section>
       </nav>
       {projectMoveError&&<div className="project-move-error" role="alert">{projectMoveError}<button className="icon-btn" aria-label="Dismiss move error" onClick={()=>setProjectMoveError('')}><X size={13}/></button></div>}
-      <div className="sidebar-bottom"><button className="project-mini" aria-label={selectedProject?.name||rootLabel(state?.settings.projectRoot)+' project settings'} onClick={()=>selectedProject?openProjectEditor(selectedProject):openSettings}><Folder size={15} /><span className="project-mini-text">{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span></button></div>
+      <div className="sidebar-bottom"><button className="project-mini" aria-label={selectedProject?.name||'Create or select project'} onClick={()=>selectedProject?openProjectEditor(selectedProject):openProjectEditor('new')}><Folder size={15} /><span className="project-mini-text">{selectedProject?.name||'Choose project'}</span></button></div>
     </aside>
     <div className="sidebar-resizer" role="separator" aria-label="Resize session explorer" aria-orientation="vertical" aria-valuemin={112} aria-valuenow={sidebarCollapsed ? 0 : sidebarWidth} tabIndex={0}
       onPointerDown={event => {
@@ -946,22 +926,11 @@ export default function App() {
       </main>
     </div>
     {error && <div className="toast-error" role="alert"><AlertCircle size={15} />{error}<button className="icon-btn" aria-label="Dismiss app error" onClick={() => setError('')}><X size={14} /></button></div>}
-    {projectEditor&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!projectSaving&&setProjectEditor(null)}><form className="project-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="project-editor-title" onSubmit={saveProject}>
-      <header><div><h2 id="project-editor-title">{projectEditor==='new'?'Create project':`Configure ${projectEditor.name}`}</h2><p>Project settings apply to new sessions and future passes. Saved pass roots and knowledge base audit snapshots remain unchanged.</p></div><button type="button" className="icon-btn" aria-label="Close project settings" onClick={()=>setProjectEditor(null)} disabled={projectSaving}><X size={16}/></button></header>
-      <label>Project name<input autoFocus value={projectName} maxLength={80} onChange={event=>setProjectName(event.target.value)} required/></label>
-      <label>Working directory<input value={projectRootDraft} maxLength={1024} placeholder="D:\\work\\project" onChange={event=>{const next=event.currentTarget.value;setProjectRootDraft(next);if(projectAgentMemAuto)setProjectAgentMemId('');}} required/><small>Choose an existing folder. The server resolves and validates the path when saving.</small></label>
-      <label className="project-editor-toggle"><input type="checkbox" checked={projectPinned} onChange={event=>setProjectPinned(event.target.checked)}/><span>Pin project above the rest</span></label>
-      <label className="project-editor-toggle"><input type="checkbox" checked={projectAgentMemEnabled} onChange={event=>setProjectAgentMemEnabled(event.target.checked)}/><span>Enable AgentMem for this project</span></label>
-      {projectAgentMemEnabled&&<><label>AgentMem project ID<input value={projectAgentMemId} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" onChange={event=>setProjectAgentMemId(event.target.value)} disabled={projectAgentMemAuto}/><small>Use the exact ID for a registered knowledge base. Automatic setup derives a stable ID for this folder.</small></label><label className="project-editor-toggle"><input type="checkbox" checked={projectAgentMemAuto} onChange={event=>setProjectAgentMemAuto(event.target.checked)}/><span>Set up a knowledge base for this folder automatically</span></label></>}
-      {projectError&&<p className="project-editor-error" role="alert">{projectError}</p>}
-      <footer><button type="button" className="secondary-btn" onClick={()=>setProjectEditor(null)} disabled={projectSaving}>Cancel</button><button className="primary-btn" disabled={projectSaving||!projectName.trim()||!projectRootDraft.trim()}>{projectSaving?'Saving…':'Save project'}</button></footer>
-    </form></div>}
+    {projectEditor&&<ProjectEditorDialog project={projectEditor} initialRoot={selectedProject?.projectRoot||''} close={()=>setProjectEditor(null)} saved={(project,duplicate)=>void projectSaved(project,duplicate)}/>}
     {shortcutsOpen&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setShortcutsOpen(false)}><section className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"><header><div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p>Use Ctrl on Windows/Linux or Command on macOS.</p></div><button type="button" className="icon-btn" aria-label="Close shortcuts" onClick={()=>setShortcutsOpen(false)}><X size={16}/></button></header><dl><dt>New session</dt><dd>Ctrl/⌘ + N</dd><dt>Previous / next session</dt><dd>Ctrl/⌘ + Shift + ↑ / ↓</dd><dt>Choose project</dt><dd>Ctrl/⌘ + Alt + P</dd><dt>Settings</dt><dd>Ctrl/⌘ + ,</dd><dt>Git</dt><dd>Ctrl/⌘ + Shift + G</dd><dt>Skills</dt><dd>Ctrl/⌘ + Shift + L</dd><dt>Toggle sidebar</dt><dd>Ctrl/⌘ + B</dd><dt>Dismiss dialog</dt><dd>Escape</dd></dl></section></div>}
-    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={selectedProject?{...state.settings,projectRoot:selectedProject.projectRoot,agentmemProjectId:selectedProject.agentmemProjectId,agentmemAutoSetup:selectedProject.agentmemAutoSetup}:state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={refresh} saved={async settings => {
+    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={refresh} saved={async settings => {
       try {
-        const project=selectedProject;
-        await api('/api/settings',project?{...settings,projectRoot:state.settings.projectRoot,agentmemProjectId:state.settings.agentmemProjectId,agentmemAutoSetup:state.settings.agentmemAutoSetup}:settings);
-        if(project)await api('/api/projects',{id:project.id,name:project.name,projectRoot:settings.projectRoot,agentmemEnabled:!!settings.agentmemProjectId||!!settings.agentmemAutoSetup,agentmemProjectId:settings.agentmemProjectId,agentmemAutoSetup:!!settings.agentmemAutoSetup,pinned:project.pinned});
+        await api('/api/settings',settings);
         await refresh();
         return true;
       } catch (cause) {
@@ -1003,7 +972,7 @@ function ReasoningResponse({turn,summaries,activities,live,fallbackTime}:{turn:N
   </section>;
 }
 
-function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpanded,workerActivityExpanded,agentmemAuditExpanded,retrying,selectedSteerWorkerId,onRetryAgentMem,onSelectSteerWorker,onQualityAction,toggleAssignment,toggleReceipt,toggleWorkerActivity,toggleAgentMemAudit}:{pass:TaskPass;messages:Message[];active:boolean;task:Task;assignmentExpanded:boolean;receiptExpanded:boolean;workerActivityExpanded:boolean;agentmemAuditExpanded:boolean;retrying:boolean;selectedSteerWorkerId?:string;onRetryAgentMem:()=>void;onSelectSteerWorker:(workerId:string)=>void;onQualityAction:(action:'accept'|'pause'|'resume')=>void;toggleAssignment:()=>void;toggleReceipt:()=>void;toggleWorkerActivity:()=>void;toggleAgentMemAudit:()=>void}){
+function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpanded,workerActivityExpanded,agentmemAuditExpanded,selectedSteerWorkerId,onSelectSteerWorker,onQualityAction,toggleAssignment,toggleReceipt,toggleWorkerActivity,toggleAgentMemAudit}:{pass:TaskPass;messages:Message[];active:boolean;task:Task;assignmentExpanded:boolean;receiptExpanded:boolean;workerActivityExpanded:boolean;agentmemAuditExpanded:boolean;selectedSteerWorkerId?:string;onSelectSteerWorker:(workerId:string)=>void;onQualityAction:(action:'accept'|'pause'|'resume')=>void;toggleAssignment:()=>void;toggleReceipt:()=>void;toggleWorkerActivity:()=>void;toggleAgentMemAudit:()=>void}){
   const live=active&&task.phase===p.phase&&['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(p.phase);
   const recruitedExecution=p.recruitmentTeam?p.deepSeekExecution:undefined;
   const recruitedWorkerLabel=recruitedExecution?`${recruitedExecution.provider} / ${recruitedExecution.model} · requested native effort ${recruitedExecution.nativeReasoningEffort} · effective effort unknown`:'gpt-6-luna · high';
@@ -1013,8 +982,6 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
   const workerRows=timeline.filter(row=>row.kind==='reasoning'?row.turn.role==='worker':row.message.role==='worker'||row.message.role==='system'&&row.message.text.startsWith('Worker activity:'));
   const workerActivityCount=workerRows.reduce((count,row)=>count+(row.kind==='reasoning'?Math.max(1,(p.reasoningSummaries||[]).filter(item=>item.role===row.turn.role&&item.threadId===row.turn.threadId&&item.turnId===row.turn.turnId).length+(p.liveActivity||[]).filter(item=>item.role===row.turn.role&&item.threadId===row.turn.threadId&&item.turnId===row.turn.turnId).length):1),0);
   const visibleTimeline=timeline.filter(row=>row.kind==='reasoning'?row.turn.role!=='worker':row.message.role!=='worker'&&!(row.message.role==='system'&&row.message.text.startsWith('Worker activity:')));
-  const recordStatus=p.agentmemRecordStatus||(p.agentmemTaskId?undefined:task.agentmemRecordStatus);
-  const recordError=p.agentmemRecordError||(p.agentmemTaskId?undefined:task.agentmemRecordError);
   return <section className={`pass-panel ${p.legacyUnassociated?'legacy-pass':''}`} aria-label={p.legacyUnassociated?'Legacy pass with unassociated history':`Pass ${p.index}`}>
     <header className="pass-heading"><span>{p.legacyUnassociated?'Legacy history':`Pass ${p.index}`}</span><span className={`pass-status ${p.phase}`}>{phaseText[p.phase]||p.phase}</span><time>{stamp(p.createdAt)}</time></header>
     {p.legacyUnassociated&&<div className="legacy-association-note">This older session predates per-pass records. Its messages and saved artifacts cannot be reliably matched, so they are shown as unassociated history.</div>}
@@ -1028,7 +995,6 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
     <Disclosure title={agentMemAuditTitle(p)} icon={<Database size={15}/>} open={agentmemAuditExpanded} onToggle={toggleAgentMemAudit}><AgentMemAuditView pass={p}/></Disclosure>
     {p.escalation&&<div className="escalation-card"><div className="escalation-head"><AlertCircle size={16}/><strong>Worker needs a decision</strong></div><p>{p.escalation.decision_needed}</p>{p.escalation.evidence?.map((x:string,i:number)=><div className="escalation-detail" key={i}>{x}</div>)}<div className="escalation-options">{p.escalation.options?.map((x:string,i:number)=><span key={i}>{x}</span>)}</div>{p.escalation.recommendation&&<p className="rec-line"><b>Recommendation:</b> {p.escalation.recommendation}</p>}</div>}
     {p.reviewNote&&<div className={`review-outcome ${p.phase}`}><span>{p.phase==='accepted'?<Check size={15}/>:<AlertCircle size={15}/>}</span><div><strong>{p.phase==='accepted'?(p.resolution==='direct'?'Direct answer':p.resolution==='simple'?'Simple implementation complete':'Receipt accepted'):phaseText[p.phase]}</strong><div className="markdown-body"><Markdown>{p.reviewNote}</Markdown></div>{p.resolution==='direct'&&p.routingNote&&<small className="routing-note">Routing basis: {p.routingNote}</small>}</div></div>}
-    {p.phase==='accepted'&&task.agentmemProjectId&&recordStatus&&recordStatus!=='done'&&<div className={`agentmem-pass-status ${recordStatus==='failed'?'is-error':''}`} role="status"><span>{recordStatus==='saving'?'Saving AgentMem receipt…':recordStatus==='failed'?'AgentMem save failed':recordStatus==='in_progress'?'Receipt saved · AgentMem task still open':recordStatus==='released'?'AgentMem lease released':'Checking AgentMem receipt status…'}</span>{recordError&&<small>{recordError}</small>}{p.agentmemTaskId&&(recordStatus==='failed'||recordStatus==='in_progress')&&<button className="text-button" disabled={retrying} onClick={onRetryAgentMem}>{retrying?'Retrying…':'Retry AgentMem completion'}</button>}</div>}
     {p.error&&<div className="error-card"><AlertCircle size={16}/><div><strong>{p.phase==='needs_attention'?'Action needed':'Workflow error'}</strong><p>{p.error}</p>{p.phase==='paused_after_restart'&&<small>Send an explicit update to reattach the saved threads and continue.</small>}</div></div>}
     <PassUsagePanel pass={p}/>
     {output&&<section className="final-artifact" aria-label="Final output"><header><FileText size={16}/><strong>Final output</strong><span>{p.resolution==='direct'?directOutputLabel:p.resolution==='simple'?'GPT-6 Luna · xhigh · self-verified':recruitedExecution?`DeepSeek Harness (${recruitedExecution.provider}) · reviewed by orchestrator`:'Luna · reviewed by orchestrator'}</span></header><div className="final-artifact-body markdown-body"><Markdown>{output}</Markdown></div></section>}
