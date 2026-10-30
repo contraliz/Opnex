@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream';
 import path from 'node:path';
 import { AppServer, AppServerRequestError, approvalResponse, assertAgentRuntimeConfig, assertInstructionIsolation, appAgentBaseInstructions, appAgentConfig, buildOrchestratorDeveloperInstructions, makeAppServerUserInput, makeThreadParams, makeThreadResumeParams, makeTurnParams, normalCodexSqliteHome } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
-import { authorizesWorkerWorkspaceTool, authorizesWorkspaceRepositoryInitialization, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from '../server/workspace-tools.js';
+import { authorizesWorkerWorkspaceTool, authorizesWorkspaceRepositoryInitialization, normalizeAgentWorkspaceUrl, recruitedWorkerWorkspaceTool, workerWorkspaceTool, workspaceToolRequiresDesktop } from '../server/workspace-tools.js';
 
 describe('Codex approval and turn configuration',()=>{
   it('injects only the generic saved-skills server and leaves host MCP configuration external',()=>{
@@ -54,6 +54,7 @@ describe('Codex approval and turn configuration',()=>{
   it('registers only the scoped workspace tool on worker threads and rejects stale or pre-execution calls',()=>{
     const params=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request',dynamicTools:workerWorkspaceTool});
     expect(params.dynamicTools).toEqual(workerWorkspaceTool);
+    expect(recruitedWorkerWorkspaceTool[0].inputSchema.properties.action.enum).not.toContain('initialize_git_repository');
     expect(workerWorkspaceTool[0].inputSchema).toMatchObject({properties:{action:{enum:expect.not.arrayContaining(['push','create_pr'])}}});
     expect(makeThreadParams({role:'router',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request',dynamicTools:workerWorkspaceTool}).dynamicTools).toEqual([]);
     const task:any={id:'task',currentPassId:'pass',phase:'worker_running',workerStage:'execute',workerThreadId:'worker-thread'};const pass:any={id:'pass',workerStage:'execute'};const target={taskId:'task',passId:'pass'};
