@@ -19,7 +19,8 @@ export default function ModelPicker({label,providerKey,model,effort,choices,disa
   useEffect(()=>{if(open)setMounted(true);else if(mounted){const timer=window.setTimeout(()=>setMounted(false),105);return()=>window.clearTimeout(timer);}},[open,mounted]);
   useLayoutEffect(()=>{
     const container=root.current;
-    if(!open||!container||!trigger.current){container?.style.removeProperty('--model-menu-max-height');setOpenBelow(false);return;}
+    if(!container||!trigger.current)return;
+    if(!open){if(!mounted){container.style.removeProperty('--model-menu-max-height');setOpenBelow(false);}return;}
     const menu=container.querySelector<HTMLElement>('.execution-model-menu');if(!menu)return;
     const position=()=>{
       const triggerBox=trigger.current?.getBoundingClientRect();if(!triggerBox)return;
@@ -29,7 +30,7 @@ export default function ModelPicker({label,providerKey,model,effort,choices,disa
       setOpenBelow(below);
     };
     position();window.addEventListener('resize',position);return()=>window.removeEventListener('resize',position);
-  },[open,rows.length]);
+  },[open,rows.length,mounted]);
   useEffect(()=>{if(!open)return;const onPointer=(event:PointerEvent)=>{if(root.current&&!root.current.contains(event.target as Node))close();};const onKey=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();close();trigger.current?.focus();}};document.addEventListener('pointerdown',onPointer);document.addEventListener('keydown',onKey);return()=>{document.removeEventListener('pointerdown',onPointer);document.removeEventListener('keydown',onKey);};},[open]);
   const pick=(choice:ModelChoice)=>{if(!choice.available)return;onChange(choice,preferredEffort(effort,choice.efforts));close();trigger.current?.focus();};
   return <div className="execution-model-popover" ref={root} data-open-below={openBelow}>
