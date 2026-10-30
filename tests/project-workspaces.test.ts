@@ -77,4 +77,13 @@ describe('project-owned workspaces',()=>{
     const first=project();const s=state([first]);
     expect(()=>saveProjectInState(s,{...project({id:'22222222-2222-4222-8222-222222222222',name:'Same directory, other name'}),projectRoot:'d:\\work\\alpha'})).toThrow(/already belongs/);
   });
+
+  it('derives each workspace display name from its folder while keeping same-named roots distinct',()=>{
+    const s=state();
+    const first=saveProjectInState(s,{...project({name:'A custom title'}),projectRoot:'D:/clients/one/app'});
+    const second=saveProjectInState(s,{...project({id:'22222222-2222-4222-8222-222222222222',name:'Another title'}),projectRoot:'D:/clients/two/app'});
+    expect(first.name).toBe('app');
+    expect(second.name).toBe('app');
+    expect(s.projects.map(row=>row.projectRoot)).toEqual(['D:/clients/one/app','D:/clients/two/app']);
+  });
 });

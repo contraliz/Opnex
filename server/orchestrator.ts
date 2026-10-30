@@ -2,7 +2,7 @@ import { AppServer, AppServerRequestError, approvalResponse, extractAssistantTex
 import { safeError } from './errors.js';
 import { assertTaskCanResumeInProject } from './project-identity.js';
 import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, qaAuditJsonSchema, qaAuditOutcomeSchema, receiptSchema, recruitmentToolSchema, recruitmentWorkersSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
-import { addMessage, beginPass, cancelRecruitmentTeamState, claimRecruitmentCompletion, claimRecruitmentIntegration, currentPass, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, recruitmentTeamsForPass, sealRecruitmentTeam, terminalRecruitmentWorkerStatuses, type AgentReceiptRecord, type DeepSeekPhaseRun, type DeepSeekProviderEventSummary, type QAAuditRound, type QAFinding, type QualityLoop, type ReceiptProvenance, type RecruitmentIntegration, type RecruitmentTeam, type RecruitmentWorker, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
+import { addMessage, beginPass, cancelRecruitmentTeamState, claimRecruitmentCompletion, claimRecruitmentIntegration, currentPass, executionProfileForSettings, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, recruitmentTeamsForPass, sealRecruitmentTeam, terminalRecruitmentWorkerStatuses, type AgentReceiptRecord, type DeepSeekExecutionProfile, type DeepSeekPhaseRun, type DeepSeekProviderEventSummary, type ExecutionProfile, type QAAuditRound, type QAFinding, type QualityLoop, type ReceiptProvenance, type RecruitmentIntegration, type RecruitmentTeam, type RecruitmentWorker, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
 import { assignmentWriteRoots, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
 import { applyCodexReasoningNotification, beginReasoningTurn } from './reasoning.js';
@@ -23,10 +23,13 @@ import { loadConfiguredSkill, parseWorkerStructuredOutput, workerExecutePrompt, 
 import { readGitHubWorkspace } from './github.js';
 import { authorizesWorkerWorkspaceTool, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from './workspace-tools.js';
 import { recordAgentReceipt } from './receipt-provenance.js';
+import { createToolCallLog, interruptRunningToolCalls, recordToolCall, type ToolCallStatus } from './tool-call-log.js';
 import { captureTurnSourceFingerprint, compareTurnSourceFingerprints, type TurnSourceFingerprint } from './turn-source-snapshot.js';
 import { getSkill, getSkillRevision, recordedSkillLoads, recordedSkillSaves } from './skill-library.js';
 import { skillLibraryMcpServerConfig } from './skill-library-mcp-config.js';
-import { applyDeepSeekHarnessTaskProfileLaunch, prepareDeepSeekHarnessTaskProfile, resolveDeepSeekHarnessCredentialStorePath } from './deepseek-harness-profile.js';
+import { workspaceMcpServerConfig } from './workspace-mcp-config.js';
+import { ensureWorkspaceRepository } from './workspace-git-init.js';
+import { applyDeepSeekHarnessTaskProfileLaunch, prepareDeepSeekHarnessTaskProfile, resolveDeepSeekHarnessCredentialStorePath, type DeepSeekHarnessMcpServerConfig } from './deepseek-harness-profile.js';
 import type { SavedSkillSnapshot } from './state.js';
 import { parseExplicitSkillCommands } from './skill-commands.js';
 import { cleanupPreparedRecruitmentWorktrees, mergeRecruitmentCommits, mergeRecruitmentWorkerDependencies, prepareRecruitmentWorktrees, readRecruitmentBranchHead, recruitmentWorkspaceRoot, validateRecruitmentRoot, verifyRecruitmentIntegration } from './recruitment-git.js';
@@ -62,9 +65,9 @@ function recruitmentToolResponse(team:RecruitmentTeam){return {success:true,cont
 const workerWorkspaceTargets=new Map<string,{taskId:string;passId:string}>();
 const sourceFingerprints=new Map<string,TurnSourceFingerprint>();
 const recruitmentIntegrationClaims=new Set<string>();
-type DeepSeekMcpCall={seq:number;callId:string;serverName:'pseudoharness_skills'|'native';toolName:string};
+type DeepSeekMcpCall={seq:number;callId:string;serverName:'pseudoharness_skills'|'pseudoharness_workspace'|'native';toolName:string};
 type DeepSeekRecruitmentRun={taskId:string;passId:string;threadId:string;turnId:string;stage:WorkerStage;baselineTurn:number;endedTurn?:number;idleAfterEnd:boolean;messages:{turn:number;step:number;text:string}[];providerEvents:DeepSeekProviderEventSummary[];pendingMcpCalls:Map<number,DeepSeekMcpCall>;pendingStateWrites:Promise<unknown>[];expectedMcpTools:string[];configuredMcpServers:string[];profileName:string;failure?:string;finished:boolean};
-type DeepSeekRecruitmentSession={runtime:DeepSeekHarnessSdkRuntime;permission:DeepSeekHarnessPermissionGrant;taskId:string;passId:string;workerId:string;integration:boolean;latestTurn:number;expectedMcpTools:string[];configuredMcpServers:string[];profileName:string;active?:DeepSeekRecruitmentRun};
+type DeepSeekRecruitmentSession={runtime:DeepSeekHarnessSdkRuntime;permission:DeepSeekHarnessPermissionGrant;taskId:string;passId:string;workerId:string;integration:boolean;routedRole?:'direct'|'simple'|'worker';latestTurn:number;expectedMcpTools:string[];configuredMcpServers:string[];profileName:string;active?:DeepSeekRecruitmentRun};
 const deepSeekRecruitmentSessions=new Map<string,DeepSeekRecruitmentSession>();
 type DeepSeekRecruitmentStageTask={taskId:string;passId:string;threadId:string;turnId:string;promise:Promise<void>};
 const deepSeekRecruitmentStageTasks=new Set<DeepSeekRecruitmentStageTask>();
@@ -117,6 +120,25 @@ const serviceTierList=(m:Model)=>Array.isArray((m as any).serviceTiers)?(m as an
 function roleThreadId(task:Task,role:WorkflowRole){if(role==='orchestrator'&&task.activeTurnId){const round=currentPass(task)?.qualityLoop?.rounds.find(row=>row.threadId&&row.turnId===task.activeTurnId&&row.status==='auditing');if(round)return round.threadId;}return task[`${role}ThreadId` as keyof Task] as string|undefined;}
 function roleForThread(task:Task,threadId:string):WorkflowRole|undefined{return (['router','direct','simple','orchestrator','worker'] as const).find(role=>roleThreadId(task,role)===threadId)||((currentPass(task)&&passThreadRole(currentPass(task)!,threadId))||undefined);}
 function recruitmentTarget(task:Task,threadId:string):{pass:TaskPass;team:RecruitmentTeam;record:RecruitmentWorker;integration:false}|{pass:TaskPass;team:RecruitmentTeam;record:RecruitmentIntegration;integration:true}|undefined{for(const pass of task.passes||[])for(const team of recruitmentTeamsForPass(pass)){const worker=team.workers.find(row=>row.threadId===threadId);if(worker)return {pass,team,record:worker,integration:false};if(team.integration.threadId===threadId)return {pass,team,record:team.integration,integration:true};}return undefined;}
+const codexToolTypes=new Set(['commandExecution','fileChange','mcpToolCall','webSearchCall','dynamicToolCall','collabAgentToolCall']);
+function safeToolName(item:any){
+  if(item?.type==='mcpToolCall')return [item.serverName??item.server,item.toolName??item.tool].filter((value):value is string=>typeof value==='string'&&value.length>0).join(' · ')||'MCP tool';
+  if(item?.type==='dynamicToolCall'||item?.type==='collabAgentToolCall')return [item.toolName??item.tool??item.name].find((value):value is string=>typeof value==='string'&&value.length>0)||'Application tool';
+  return item?.type==='commandExecution'?'Command execution':item?.type==='fileChange'?'File change':item?.type==='webSearchCall'?'Web search':'Tool call';
+}
+function recordToolObservation(pass:TaskPass,event:{provider:string;agentId:string;threadId:string;turnId:string;callId:string;name:string;type:string;agentRole:string;source:'application'|'model';lifecycle:ToolCallStatus;timestamp?:string;summary?:string}){
+  pass.toolCalls??=createToolCallLog();
+  try{pass.toolCalls=recordToolCall(pass.toolCalls,{identity:{provider:event.provider,agentId:event.agentId,threadId:event.threadId,turnId:event.turnId,callId:event.callId},name:event.name,type:event.type,agentRole:event.agentRole,source:event.source,lifecycle:event.lifecycle,timestamp:event.timestamp||new Date().toISOString(),...(event.summary?{summary:event.summary}:{})});}
+  catch{pass.toolCallTrackingIssueCount=(pass.toolCallTrackingIssueCount||0)+1;}
+}
+function recordCodexToolItem(task:Task,pass:TaskPass,threadId:string,turnId:string,item:any,lifecycle?:ToolCallStatus,source:'application'|'model'='model'){
+  if(!codexToolTypes.has(item?.type))return;
+  const callId=typeof item.id==='string'?item.id:typeof item.toolCallId==='string'?item.toolCallId:'';
+  if(!callId){pass.toolCallTrackingIssueCount=(pass.toolCallTrackingIssueCount||0)+1;return;}
+  const target=recruitmentTarget(task,threadId),role=passThreadRole(pass,threadId)||'worker';
+  const status=lifecycle||((item.status==='failed'||item.status==='declined'||item.status==='error'||item.exitCode!==undefined&&item.exitCode!==null&&item.exitCode!==0)?'failed':'completed');
+  recordToolObservation(pass,{provider:'codex',agentId:target?(target.integration?`integrator:${target.team.teamId}`:target.record.workerId):role,threadId,turnId,callId,name:safeToolName(item),type:item.type,agentRole:target?(target.integration?'integrator':`worker · ${target.record.name}`):role,source,lifecycle:status});
+}
 function qualityAuditResultIsCurrent(task:Task|undefined,passId:string,teamId:string,roundId:string,threadId:string,turnId:string){
   if(!task||task.currentPassId!==passId||task.phase==='cancelled')return false;
   const pass=task.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam,loop=pass?.qualityLoop,round=loop?.rounds.find(row=>row.roundId===roundId);
@@ -253,6 +275,11 @@ function requireModel(id:string,effort:string){const found=model(id);if(!found)t
 function requireRouterModel(){requireModel('gpt-6-luna','low');const found=model('gpt-6-luna')!;if(!serviceTierList(found).includes('priority'))throw new Error('GPT-6 Luna does not advertise its Fast service tier (priority). Routing cannot start without the required Fast capability.');}
 function jsonFromTurn(turn:any){const raw=extractAssistantText(turn); if(!raw)throw new Error('The worker completed without a structured final message.'); try{return parseWorkerStructuredOutput(raw);}catch{throw new Error('The worker final message was not valid JSON. No follow-up work was scheduled.');}}
 const stageConfig={router:{effort:'low',phase:'routing'},direct:{effort:'high',phase:'direct_running'},simple:{effort:'xhigh',phase:'simple_running'}} as const;
+function executionDisplay(profile:ExecutionProfile,deepSeek?:DeepSeekExecutionProfile){
+  const model=profile.model==='gpt-6-luna'?'GPT-6 Luna':profile.model==='deepseek-v4.1-flash'?'DeepSeek V4.1 Flash':profile.model;
+  if(profile.provider==='deepseek')return `DeepSeek Harness (${deepSeek?.provider==='opencode-go'?'OpenCode Go':deepSeek?.provider||'provider'}) used ${model} at requested native ${profile.effort} effort; effective effort unknown`;
+  return `${model} at ${profile.effort} effort`;
+}
 function stagePrompt(task:Task,role:'router'|'direct'|'simple'){
   const pass=currentPass(task)!;const history=buildPriorConversationContext(task.passes,pass.id);
   const current=`CURRENT OPERATION ONLY (use history to resolve references; do not repeat old work):\n${JSON.stringify(pass.userInputs)}\n\nPRIOR CONVERSATION CONTEXT:\n${JSON.stringify(history)}\n\nCURRENT APP STATE: phase=${task.phase}; selected project root=${task.userRoot}; current pass=${pass.index}.`;
@@ -268,19 +295,22 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
     await startHardRoute(task,reason);
     return;
   }
-  if(role==='router')requireRouterModel();else requireModel('gpt-6-luna',stageConfig[role].effort);
+  const selectedProfile=pass.executionProfile||executionProfileForSettings(getState().settings);
+  if(role==='router')requireRouterModel();else if(selectedProfile.provider==='codex')requireModel(selectedProfile.model,selectedProfile.effort);else{await startDeepSeekRoutedTurn(task,role,selectedProfile,simpleWriteRoots||[]);return;}
   await ensureAgentAuth();
   if(pass.agentContextVersion!==1)throw new Error('This pass predates the current Opnex role configuration. Send a follow-up to start a fresh pass.');
   const skillsConfig=role==='router'?undefined:skillLibraryMcpServerConfig({taskId:task.id,role});
   const client=agentCodex;
-  const modelId='gpt-6-luna',effort=stageConfig[role].effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
+  const modelId=role==='router'?'gpt-6-luna':selectedProfile.model,effort=role==='router'?stageConfig.router.effort:selectedProfile.effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
   const approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;
   let threadId=task[threadKey];
-  if(!threadId){const started=await awaitCurrentPassOperation(()=>client.startThread(role,task.userRoot,modelId,effort,approvalPolicy,undefined,undefined,skillsConfig),()=>routedPassIsCurrent(task.id,pass.id));if(!started)return;threadId=started;task[threadKey]=threadId;}
-  else if(!attachedThreads.has(threadId)){const resumed=await awaitCurrentPassOperation(()=>client.resumeThread(threadId!,approvalPolicy,role,task.userRoot,undefined,skillsConfig),()=>routedPassIsCurrent(task.id,pass.id));if(!resumed)return;}
+  const dynamicTools=role==='simple'?workerWorkspaceTool:undefined;
+  if(!threadId){const started=await awaitCurrentPassOperation(()=>client.startThread(role,task.userRoot,modelId,effort,approvalPolicy,undefined,dynamicTools,skillsConfig),()=>routedPassIsCurrent(task.id,pass.id));if(!started)return;threadId=started;task[threadKey]=threadId;}
+  else if(!attachedThreads.has(threadId)){const resumed=await awaitCurrentPassOperation(()=>client.resumeThread(threadId!,approvalPolicy,role,task.userRoot,undefined,skillsConfig,dynamicTools),()=>routedPassIsCurrent(task.id,pass.id));if(!resumed)return;}
   attachedThreads.add(threadId);
   if(role!=='router')await verifySkillMcpAvailability(threadId);
   task.phase=stageConfig[role].phase;task.activeRole=role;task.activeModelId=modelId;task.activeEffort=effort;task.activeTurnId=undefined;task.error=undefined;task.allowDirectResponse=false;
+  if(role==='simple')workerWorkspaceTargets.set(threadId,{taskId:task.id,passId:pass.id});
   await mutate(s=>{const live=s.tasks.find(x=>x.id===task.id);if(!live||live.phase==='cancelled'||live.currentPassId!==pass.id)return;Object.assign(live,task);});
   if(!getTask(task.id)||getTask(task.id)!.phase==='cancelled'||getTask(task.id)!.currentPassId!==pass.id)return;
   allowanceBaselines.set(threadId,await readAllowanceSnapshot());
@@ -297,6 +327,58 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.activeTurnId=id;t.activeRole=role;if(id&&(role==='direct'||role==='simple'))beginReasoningTurn(t,role,threadId!,id,modelId,effort);});
   if(id)await processDeferred(task.id,id);
+}
+async function prepareRoutedDeepSeekProfile(task:Task,pass:TaskPass,role:'direct'|'simple'|'worker',permission:DeepSeekHarnessPermissionGrant,sessionId:string){
+  const profile=pass.deepSeekExecution;if(!profile||profile.provider!=='opencode-go')throw new DeepSeekHarnessError('unsupported-capability','The saved DeepSeek Harness profile does not match the verified OpenCode Go provider. No alternate provider was started.');
+  const skillConfig=skillLibraryMcpServerConfig({taskId:task.id,role});const skillTools=Array.isArray(skillConfig.enabled_tools)?skillConfig.enabled_tools.filter((name):name is string=>typeof name==='string'):[];
+  const mcpServers:DeepSeekHarnessMcpServerConfig[]=[{serverName:'pseudoharness_skills',command:String(skillConfig.command),args:skillConfig.args as string[],cwd:String(skillConfig.cwd),env:skillConfig.env as Record<string,string>}];
+  const expectedMcpTools=skillTools.map(name=>`mcp__pseudoharness_skills__${name}`);
+  if(role==='simple'||role==='worker'){const config=workspaceMcpServerConfig({taskId:task.id,passId:pass.id,role,sessionId});mcpServers.push({serverName:'pseudoharness_workspace' as const,command:String(config.command),args:config.args as string[],cwd:String(config.cwd),env:config.env as Record<string,string>});expectedMcpTools.push('mcp__pseudoharness_workspace__initialize_git_repository');}
+  const digest=createHash('sha256').update([task.id,pass.id,role,permission.permissionMode,path.resolve(task.userRoot),profile.provider,profile.model,profile.nativeReasoningEffort].join('\n')).digest('hex').slice(0,32),profileName=`pseudoharness-${digest}`;
+  const template=deepSeekSdkLaunch??discoverWindowsDeepSeekHarnessSdkLaunch();deepSeekSdkLaunch=template;
+  const prepared=await prepareDeepSeekHarnessTaskProfile({dshHome:path.join(stateDirectory(),'deepseek-profiles',profileName),credentialStorePath:resolveDeepSeekHarnessCredentialStorePath(),profileName,provider:profile.provider,launch:template,mcpServers});
+  return {launch:applyDeepSeekHarnessTaskProfileLaunch(template,prepared),profileName,expectedMcpTools,configuredMcpServers:[...prepared.configuredMcpServers]};
+}
+async function startDeepSeekRoutedTurn(task:Task,role:'direct'|'simple'|'worker',selection:ExecutionProfile,writeScope:string[],assignment?:Assignment){
+  const pass=currentPass(task);if(!pass)throw new Error('The active pass is missing.');
+  if(selection.provider!=='deepseek'||selection.model!=='deepseek-v4.1-flash'||selection.effort!=='max')throw new DeepSeekHarnessError('unsupported-capability','The selected DeepSeek Harness model and reasoning effort are not available in the verified OpenCode Go profile. No fallback was started.');
+  const approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;
+  const permission=resolveDeepSeekHarnessPermission({approvalPolicy,selectedForTask:true,workspaceRoot:task.userRoot,writeScope:role==='direct'?[]:writeScope,requiresFilesystemConfinement:false});
+  if(pass.agentContextVersion!==1)throw new Error('This pass predates the current Opnex role configuration. Send a follow-up to start a fresh pass.');
+  const carried=attachmentUserInput(pass.attachments||[]);if(carried.images.length)throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness image attachments have not been verified by the installed SDK. No turn was started; choose a provider that supports these attachments.');
+  const threadKey=role==='direct'?'directThreadId':role==='simple'?'simpleThreadId':'workerThreadId',existingThread=task[threadKey];if(existingThread)throw new DeepSeekHarnessError('interrupted','The saved DeepSeek Harness thread is not attached to this kernel and will not be resumed automatically. Start a fresh pass after checking the paused task.');
+  const threadId=randomUUID(),turnId=randomUUID(),isolated=await prepareRoutedDeepSeekProfile(task,pass,role,permission,threadId);
+  const selected=pass.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (immutable pass snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';
+  const context=`CURRENT OPERATION ONLY (use history to resolve references; do not repeat old work):\n${JSON.stringify(pass.userInputs)}\n\nPRIOR CONVERSATION CONTEXT:\n${JSON.stringify(buildPriorConversationContext(task.passes,pass.id))}\n\nCURRENT WORKSPACE ROOT: ${task.userRoot}\n`;
+  const prompt=role==='direct'
+    ? `${context}${selected}\nAnswer directly, or escalate when implementation is needed. Return only JSON matching one of these forms: {"type":"answer","answer":"...","escalation":null,"route":null,"justification":null} or {"type":"escalate","answer":null,"escalation":"...","route":"simple_implementation|hard_task","justification":"..."}. Do not use tools to mutate the workspace.`
+    : `${context}${selected}\n${workerExecutePrompt(assignment||task.assignment||{outcome:'Complete the bounded workspace task.',deliverable:'Return a verified receipt.',read_scope:[],write_scope:writeScope,exclusions:[],constraints:[],context_refs:[],acceptance:[],verification:[],ordinary_authority:[],escalation_conditions:[],receipt_requirements:[]},pass.selectedSkills?.length?skillSnapshotsText(pass.selectedSkills):'').replace('the runtime independently enforces the write roots.','DeepSeek Harness does not enforce narrower assignment paths in Full Access mode. Keep changes within the listed paths as an assignment constraint and report any limit honestly.')}`;
+  const runtime=new DeepSeekHarnessSdkRuntime({launch:isolated.launch,cwd:task.userRoot,provider:pass.deepSeekExecution!.provider,model:selection.model,reasoningEffort:selection.effort,permission,sessionId:threadId});
+  const session:DeepSeekRecruitmentSession={runtime,permission,taskId:task.id,passId:pass.id,workerId:role,integration:false,routedRole:role,latestTurn:0,expectedMcpTools:isolated.expectedMcpTools,configuredMcpServers:isolated.configuredMcpServers,profileName:isolated.profileName};
+   const run:DeepSeekRecruitmentRun={taskId:task.id,passId:pass.id,threadId,turnId,stage:'execute',baselineTurn:0,idleAfterEnd:false,messages:[],providerEvents:[],pendingMcpCalls:new Map(),pendingStateWrites:[],expectedMcpTools:session.expectedMcpTools,configuredMcpServers:session.configuredMcpServers,profileName:session.profileName,finished:false};session.active=run;
+  await mutate(state=>{const current=state.tasks.find(row=>row.id===task.id),currentPassRow=current?.passes?.find(row=>row.id===pass.id);if(!current||!currentPassRow||current.currentPassId!==pass.id||current.phase==='cancelled')return;current[threadKey]=threadId;current.phase=role==='direct'?'direct_running':role==='simple'?'simple_running':'worker_running';current.activeRole=role;current.activeModelId=selection.model;current.activeEffort=selection.effort;current.activeTurnId=turnId;current.error=undefined;if(role==='worker')current.workerStage='execute';beginReasoningTurn(current,role,threadId,turnId,selection.model,selection.effort,'deepseek');});
+  if(!routedDeepSeekStageStillActive(task.id,pass.id,role,threadId,turnId)){await runtime.shutdown();return;}
+  deepSeekRecruitmentSessions.set(threadId,session);attachDeepSeekRuntime(session);
+  try{
+    await runtime.connect();if(path.resolve(await runtime.getWorkingDirectory())!==path.resolve(task.userRoot))throw new DeepSeekHarnessError('protocol-error','DeepSeek Harness returned a working directory outside the selected workspace root.');
+    const start=runtime.startSession([{type:'text',text:`${prompt}${carried.text}`}]);
+    const promise=finishDeepSeekRoutedStage(task.id,pass.id,role,threadId,turnId,session,run,start),launch:DeepSeekRecruitmentStageLaunch={taskId:task.id,passId:pass.id,promise};deepSeekRecruitmentStageLaunches.add(launch);void promise.finally(()=>deepSeekRecruitmentStageLaunches.delete(launch));
+  }catch(error){deepSeekRecruitmentSessions.delete(threadId);await runtime.cancel();throw error;}
+}
+function routedDeepSeekStageStillActive(taskId:string,passId:string,role:'direct'|'simple'|'worker',threadId:string,turnId:string){const task=getTask(taskId);return !!task&&task.currentPassId===passId&&task.phase===(role==='direct'?'direct_running':role==='simple'?'simple_running':'worker_running')&&task.activeRole===role&&task.activeTurnId===turnId&&task[`${role}ThreadId` as 'directThreadId'|'simpleThreadId'|'workerThreadId']===threadId;}
+async function finishDeepSeekRoutedStage(taskId:string,passId:string,role:'direct'|'simple'|'worker',threadId:string,turnId:string,session:DeepSeekRecruitmentSession,run:DeepSeekRecruitmentRun,start:Promise<unknown>){
+  try{
+    await start;await session.runtime.waitSession(threadId,DEEPSEEK_RECRUITMENT_STAGE_TIMEOUT_MS);await Promise.all(run.pendingStateWrites);
+    const text=validatedDeepSeekOutput(session,run),task=getTask(taskId);if(!task||!routedDeepSeekStageStillActive(taskId,passId,role,threadId,turnId)){run.finished=true;return;}
+    if(role==='worker'){run.finished=true;await setDeepSeekTurnStatus(taskId,passId,threadId,turnId,'completed');await onTurnCompleted({threadId,turn:{id:turnId,status:'completed',items:[{type:'agentMessage',text}]}});return;}
+    if(!claimCompletion(taskId,turnId,task.processedTurns)){run.finished=true;return;}
+    run.finished=true;await setDeepSeekTurnStatus(taskId,passId,threadId,turnId,'completed');
+    await mutate(state=>{const current=state.tasks.find(row=>row.id===taskId),pass=current?.passes?.find(row=>row.id===passId);if(!current||!pass)return;if(!pass.processedTurns.includes(turnId))pass.processedTurns.push(turnId);});
+    const value=parseWorkerStructuredOutput(text);if(role==='direct')await completeRoutedDirect(getTask(taskId)!,value);else await completeSimpleExecution(getTask(taskId)!,value,threadId,turnId);
+  }catch(error){
+    const detail=run.failure||safeError(error);run.finished=true;await Promise.all(run.pendingStateWrites).catch(()=>{});
+    await mutate(state=>{const task=state.tasks.find(row=>row.id===taskId),pass=task?.passes?.find(row=>row.id===passId);if(!task||!pass||task.currentPassId!==passId||task.activeTurnId!==turnId)return;if(pass.toolCalls)pass.toolCalls=interruptRunningToolCalls(pass.toolCalls,new Date().toISOString());const turn=pass.reasoningTurns?.find(row=>row.threadId===threadId&&row.turnId===turnId);if(turn)turn.status='failed';task.phase='needs_attention';task.activeRole=undefined;task.activeTurnId=undefined;task.activeModelId=undefined;task.activeEffort=undefined;task.error=`DeepSeek Harness execution failed: ${detail}`;addMessage(task,'system',task.error,undefined,passId);});
+  }finally{session.active=undefined;if(deepSeekRecruitmentSessions.get(threadId)===session)deepSeekRecruitmentSessions.delete(threadId);try{await session.runtime.shutdown();}catch{}}
 }
 async function beginRouting(task:Task){
   const pass=currentPass(task);if(!pass)throw new Error('The active pass is missing.');
@@ -366,9 +448,9 @@ async function startWorker(task:Task,assignment:Assignment){
 }
 function workerPassIsCurrent(taskId:string,passId:string){const task=getTask(taskId);return !!task&&task.phase!=='cancelled'&&task.currentPassId===passId;}
 async function startWorkerStage(task:Task,assignment:Assignment){
-  requireModel('gpt-6-luna','high');
   const writeRoots=assignmentWriteRoots(assignment,task.userRoot);
   const pass=currentPass(task);if(!pass)throw new Error('The active pass is missing.');const passId=pass.id;
+  const selectedProfile=pass.executionProfile||executionProfileForSettings(getState().settings);if(selectedProfile.provider==='deepseek'){await startDeepSeekRoutedTurn(task,'worker',selectedProfile,writeRoots,assignment);return;}requireModel(selectedProfile.model,selectedProfile.effort);
   if(!workerPassIsCurrent(task.id,passId))return;
   const selected=pass.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (explicitly authorized for this pass; immutable snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';
   const workerPrompt=workerExecutePrompt(assignment,selected);const stageWriteRoots=writeRoots;
@@ -376,22 +458,22 @@ async function startWorkerStage(task:Task,assignment:Assignment){
   await ensureAgentAuth();if(currentPass(task)?.agentContextVersion!==1)throw new Error('This pass predates the current Opnex role configuration. Send a follow-up to start a fresh pass.');
   if(!workerPassIsCurrent(task.id,passId))return;
   const skillsConfig=skillLibraryMcpServerConfig({taskId:task.id,role:'worker'});
-  if(!task.workerThreadId) task.workerThreadId=await agentCodex.startThread('worker',task.userRoot,'gpt-6-luna','high',approvalPolicy,undefined,workerWorkspaceTool,skillsConfig);
-  else if(!attachedThreads.has(task.workerThreadId)) await agentCodex.resumeThread(task.workerThreadId,approvalPolicy,'worker',task.userRoot,undefined,skillsConfig);
+  if(!task.workerThreadId) task.workerThreadId=await agentCodex.startThread('worker',task.userRoot,selectedProfile.model,selectedProfile.effort,approvalPolicy,undefined,workerWorkspaceTool,skillsConfig);
+  else if(!attachedThreads.has(task.workerThreadId)) await agentCodex.resumeThread(task.workerThreadId,approvalPolicy,'worker',task.userRoot,undefined,skillsConfig,workerWorkspaceTool);
   if(!workerPassIsCurrent(task.id,passId))return;
   attachedThreads.add(task.workerThreadId);
   await verifySkillMcpAvailability(task.workerThreadId);
   workerWorkspaceTargets.set(task.workerThreadId,{taskId:task.id,passId});
-  task.phase='worker_running';task.workerStage='execute';task.activeRole='worker';task.activeModelId='gpt-6-luna';task.activeEffort='high';task.activeTurnId=undefined;task.error=undefined;
+  task.phase='worker_running';task.workerStage='execute';task.activeRole='worker';task.activeModelId=selectedProfile.model;task.activeEffort=selectedProfile.effort;task.activeTurnId=undefined;task.error=undefined;
   await mutate(s=>Object.assign(s.tasks.find(x=>x.id===task.id)!,task));
   if(!workerPassIsCurrent(task.id,passId))return;
   allowanceBaselines.set(task.workerThreadId,await readAllowanceSnapshot());
   if(!workerPassIsCurrent(task.id,passId))return;
   const carried=attachmentUserInput(pass.attachments||[]);
-  const response=await agentCodex.startTurn(task.workerThreadId,`${workerPrompt}${carried.text}`,'worker','gpt-6-luna','high',task.userRoot,stageWriteRoots,approvalPolicy,undefined,undefined,carried.images);
+  const response=await agentCodex.startTurn(task.workerThreadId,`${workerPrompt}${carried.text}`,'worker',selectedProfile.model,selectedProfile.effort,task.userRoot,stageWriteRoots,approvalPolicy,undefined,undefined,carried.images);
   if(!workerPassIsCurrent(task.id,passId)){const id=response.turn?.id||response.turnId;if(id)try{await agentCodex.interrupt(task.workerThreadId,id);}catch{}return;}
   const id=response.turn?.id||response.turnId;
-  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled')return;t.activeTurnId=id;t.activeRole='worker';if(id)beginReasoningTurn(t,'worker',task.workerThreadId!,id,'gpt-6-luna','high');});
+  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled')return;t.activeTurnId=id;t.activeRole='worker';if(id)beginReasoningTurn(t,'worker',task.workerThreadId!,id,selectedProfile.model,selectedProfile.effort,'codex');});
   if(id) await processDeferred(task.id,id);
 }
 function branchSlug(input:string){return input.normalize('NFKD').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase().slice(0,36)||'worker';}
@@ -420,8 +502,10 @@ function validateWorkerPlanDependencies(plan:ReturnType<typeof recruitmentWorker
 function orderedWorkersByDependency(workers:RecruitmentWorker[]){const order:RecruitmentWorker[]=[],visited=new Set<string>();const visit=(worker:RecruitmentWorker)=>{if(visited.has(worker.workerId))return;visited.add(worker.workerId);for(const dependency of worker.dependsOn||[]){const parent=workers.find(row=>row.workerId===dependency);if(parent)visit(parent);}order.push(worker);};for(const worker of workers)visit(worker);return order;}
 function preflightDeepSeekRecruitment(task:Task,pass:TaskPass,plan:ReturnType<typeof recruitmentWorkersSchema.parse>,base:string){
   const profile=pass.deepSeekExecution;
+  const selected=pass.executionProfile||executionProfileForSettings(getState().settings);
   if(!profile||profile.kind!=='deepseek-harness-sdk')throw new DeepSeekHarnessError('configuration','This pass has no persisted DeepSeek Harness worker profile. The selected provider was not changed and no Codex worker fallback was started.');
   if(profile.provider!=='opencode-go')throw new DeepSeekHarnessError('unsupported-capability','Only the verified OpenCode Go provider route is currently enabled for recruited DeepSeek Harness workers. Choose opencode-go in settings; no provider fallback was started.');
+  if(selected.provider!=='deepseek'||selected.model!==profile.model||selected.effort!==profile.nativeReasoningEffort)throw new DeepSeekHarnessError('configuration','The pass model selection does not match its persisted DeepSeek Harness runtime profile. No different model or effort was started.');
   if(!pass.approvalPolicy)throw new DeepSeekHarnessError('configuration','This pass has no persisted approval policy. DeepSeek Harness recruitment cannot infer or change permissions.');
   deepSeekSdkLaunch??=discoverWindowsDeepSeekHarnessSdkLaunch();
   for(const worker of plan.workers){
@@ -463,16 +547,17 @@ async function recruitWorkers(task:Task,pass:TaskPass,raw:unknown,owner:Recruitm
   const base=task.userRoot,baseRef=correctionAllowed&&prior?`refs/heads/${prior.integration.branch}`:'HEAD';
   requireCurrentRecruitmentLaunch(owner);const validatedBase=await validateRecruitmentRoot(base,baseRef);requireCurrentRecruitmentLaunch(owner);
   if(correctionAllowed&&prior?.integration.headCommit?.toLowerCase()!==validatedBase.baseCommit.toLowerCase())throw new Error('The saved QA correction baseline no longer matches the actual integration branch HEAD. No worker team was started.');
-  const preparationBaseRef=correctionAllowed?validatedBase.baseCommit:baseRef,provider=preflightDeepSeekRecruitment(task,pass,plan,base),teamId=randomUUID(),workspaceParent=recruitmentWorkspaceRoot(stateDirectory(),taskId,passId,teamId),workers:RecruitmentWorker[]=[];
+  const executionProfile=pass.executionProfile||executionProfileForSettings(getState().settings);if(executionProfile.provider==='codex')requireModel(executionProfile.model,executionProfile.effort);const deepSeekProfile=executionProfile.provider==='deepseek'?preflightDeepSeekRecruitment(task,pass,plan,base).profile:undefined;
+  const preparationBaseRef=correctionAllowed?validatedBase.baseCommit:baseRef,teamId=randomUUID(),workspaceParent=recruitmentWorkspaceRoot(stateDirectory(),taskId,passId,teamId),workers:RecruitmentWorker[]=[];
   let prepared:Awaited<ReturnType<typeof prepareRecruitmentWorktrees>>|undefined,committed=false,integrationBranch='';
   try{
     requireCurrentRecruitmentLaunch(owner);await mkdir(path.dirname(workspaceParent),{recursive:true});requireCurrentRecruitmentLaunch(owner);
     const taskBranchScope=branchSlug(task.title),workerIds=new Map(plan.workers.map(row=>[row.name.trim().toLocaleLowerCase(),randomUUID()]));
-    for(const selected of plan.workers){assignmentWriteRoots(selected.assignment,base);requireCurrentRecruitmentLaunch(owner);const skills=await snapshotSelectedSkills(selected.skill_refs,base);requireCurrentRecruitmentLaunch(owner);const workerId=workerIds.get(selected.name.trim().toLocaleLowerCase())!;workers.push({workerId,name:selected.name.trim(),step:selected.step,dependsOn:selected.depends_on.map(name=>workerIds.get(name.trim().toLocaleLowerCase())!),assignment:structuredClone({...selected.assignment,skill_refs:undefined}),effort:selected.effort||'high',skills,deepSeekExecution:structuredClone(provider.profile),branch:`recruitment/${taskBranchScope}/${workerId}/${branchSlug(selected.name)}`,worktreeRoot:'',status:'queued'});}
+    for(const selected of plan.workers){assignmentWriteRoots(selected.assignment,base);requireCurrentRecruitmentLaunch(owner);const skills=await snapshotSelectedSkills(selected.skill_refs,base);requireCurrentRecruitmentLaunch(owner);const workerId=workerIds.get(selected.name.trim().toLocaleLowerCase())!;workers.push({workerId,name:selected.name.trim(),step:selected.step,dependsOn:selected.depends_on.map(name=>workerIds.get(name.trim().toLocaleLowerCase())!),assignment:structuredClone({...selected.assignment,skill_refs:undefined}),effort:selected.effort||'high',skills,executionProfile:structuredClone(executionProfile),...(deepSeekProfile?{deepSeekExecution:structuredClone(deepSeekProfile)}:{}),branch:`recruitment/${taskBranchScope}/${workerId}/${branchSlug(selected.name)}`,worktreeRoot:'',status:'queued'});}
     const integrationId=randomUUID();integrationBranch=`recruitment/${taskBranchScope}/${integrationId}/integration`;
     requireCurrentRecruitmentLaunch(owner);prepared=await prepareRecruitmentWorktrees({canonicalRoot:base,taskRoot:workspaceParent,baseRef:preparationBaseRef,workers:workers.map(worker=>({workerId:worker.workerId,branch:worker.branch})),integrationBranch});requireCurrentRecruitmentLaunch(owner);
     for(const worker of workers){const actual=prepared.workers.find(row=>row.workerId===worker.workerId);if(!actual)throw new Error(`Git worktree preparation omitted worker ${worker.workerId}; no worker turns were started.`);worker.worktreeRoot=actual.worktreeRoot;}
-    const team:RecruitmentTeam={teamId,passId,createdAt:new Date().toISOString(),canonicalProjectRoot:base,workspaceParent,baseRef,baseCommit:prepared.baseCommit,status:'recruiting',sealed:false,workers,integration:{status:'queued',branch:integrationBranch,worktreeRoot:prepared.integration.worktreeRoot,assignment:integrationAssignment(workers),effort:'high',skills:[...new Map(workers.flatMap(row=>row.skills).map(skill=>[`${skill.id}@${skill.revision}`,skill])).values()],deepSeekExecution:structuredClone(provider.profile)},toolCallIds:[toolCallId],completionWakeSent:false};
+    const team:RecruitmentTeam={teamId,passId,createdAt:new Date().toISOString(),canonicalProjectRoot:base,workspaceParent,baseRef,baseCommit:prepared.baseCommit,status:'recruiting',sealed:false,workers,integration:{status:'queued',branch:integrationBranch,worktreeRoot:prepared.integration.worktreeRoot,assignment:integrationAssignment(workers),effort:'high',skills:[...new Map(workers.flatMap(row=>row.skills).map(skill=>[`${skill.id}@${skill.revision}`,skill])).values()],executionProfile:structuredClone(executionProfile),...(deepSeekProfile?{deepSeekExecution:structuredClone(deepSeekProfile)}:{})},toolCallIds:[toolCallId],completionWakeSent:false};
     const master=teamMasterAssignment(team);
     requireCurrentRecruitmentLaunch(owner);await mutate(state=>{const live=state.tasks.find(row=>row.id===taskId),current=live&&currentPass(live);if(!live||!current||current.id!==passId||!recruitmentLaunchIsCurrent(owner))throw new Error('The hard-task pass or orchestrator turn changed before recruitment could be sealed.');if(correctionAllowed&&current.recruitmentTeam){current.recruitmentHistory=[...(current.recruitmentHistory||[]),current.recruitmentTeam];const currentAudit=current.qualityLoop?.rounds.at(-1);if(currentAudit){currentAudit.teamId=team.teamId;currentAudit.status='correcting';}if(current.qualityLoop){current.qualityLoop.status='correcting';current.qualityLoop.resumeAction=undefined;}}sealRecruitmentTeam(team);current.recruitmentTeam=team;live.assignment=master;live.resolution='delegated';live.allowDirectResponse=false;live.phase='worker_running';live.activeRole=undefined;live.activeTurnId=undefined;addMessage(live,'orchestrator',`Recruitment team sealed with ${workers.length} worker${workers.length===1?'':'s'}; dependent steps will start after their prerequisites complete.`);});
     committed=true;
@@ -485,16 +570,17 @@ async function recruitWorkers(task:Task,pass:TaskPass,raw:unknown,owner:Recruitm
     throw error;
   }
 }
-async function prepareRecruitmentDeepSeekProfile(task:Task,pass:TaskPass,record:RecruitmentWorker|RecruitmentIntegration,workspace:string,template:DeepSeekHarnessSdkLaunch,permission:DeepSeekHarnessPermissionGrant,integration:boolean){
+async function prepareRecruitmentDeepSeekProfile(task:Task,pass:TaskPass,record:RecruitmentWorker|RecruitmentIntegration,workspace:string,template:DeepSeekHarnessSdkLaunch,permission:DeepSeekHarnessPermissionGrant,integration:boolean,sessionId:string){
   const selection=pass.deepSeekExecution;
   if(!selection||selection.kind!=='deepseek-harness-sdk'||selection.provider!=='opencode-go')throw new DeepSeekHarnessError('unsupported-capability','The persisted worker provider is not the verified OpenCode Go route. No fallback was started.');
   const skillsConfig=skillLibraryMcpServerConfig({taskId:task.id,role:'worker'});
   const skillTools=Array.isArray(skillsConfig.enabled_tools)?skillsConfig.enabled_tools.filter((name):name is string=>typeof name==='string'):[];
-  const expectedMcpTools=skillTools.map(name=>`mcp__pseudoharness_skills__${name}`).sort();
+  const workspaceConfig=workspaceMcpServerConfig({taskId:task.id,passId:pass.id,role:'worker',sessionId});
+  const expectedMcpTools=[...skillTools.map(name=>`mcp__pseudoharness_skills__${name}`),'mcp__pseudoharness_workspace__initialize_git_repository'].sort();
   const owner=integration?'integration':(record as RecruitmentWorker).workerId;
   const digest=createHash('sha256').update([task.id,pass.id,owner,permission.permissionMode,path.resolve(workspace),selection.provider,selection.model,selection.nativeReasoningEffort].join('\n')).digest('hex').slice(0,32);
   const profileName=`pseudoharness-${digest}`;
-  const prepared=await prepareDeepSeekHarnessTaskProfile({dshHome:path.join(stateDirectory(),'deepseek-profiles',profileName),credentialStorePath:resolveDeepSeekHarnessCredentialStorePath(),profileName,provider:selection.provider,launch:template,mcpServers:[{serverName:'pseudoharness_skills',command:String(skillsConfig.command),args:skillsConfig.args as string[],cwd:String(skillsConfig.cwd),env:skillsConfig.env as Record<string,string>} ]});
+  const prepared=await prepareDeepSeekHarnessTaskProfile({dshHome:path.join(stateDirectory(),'deepseek-profiles',profileName),credentialStorePath:resolveDeepSeekHarnessCredentialStorePath(),profileName,provider:selection.provider,launch:template,mcpServers:[{serverName:'pseudoharness_skills',command:String(skillsConfig.command),args:skillsConfig.args as string[],cwd:String(skillsConfig.cwd),env:skillsConfig.env as Record<string,string>},{serverName:'pseudoharness_workspace',command:String(workspaceConfig.command),args:workspaceConfig.args as string[],cwd:String(workspaceConfig.cwd),env:workspaceConfig.env as Record<string,string>} ]});
   return {launch:applyDeepSeekHarnessTaskProfileLaunch(template,prepared),profileName,expectedMcpTools,configuredMcpServers:[...prepared.configuredMcpServers]};
 }
 function assistantMessageText(event:any){
@@ -534,11 +620,16 @@ function persistDeepSeekCatalog(session:DeepSeekRecruitmentSession,run:DeepSeekR
   const info=session.runtime.runtimeInfo,catalog=session.runtime.mcpToolCatalog;if(!info)return;
   const missing=run.expectedMcpTools.filter(name=>!catalog.toolNames.includes(name));
   if(missing.length)run.failure??=`Required saved-skills MCP tools are missing (${missing.join(', ')}); no receipt was accepted.`;
+  if(session.routedRole)return;
   const updatedAt=new Date().toISOString();
   queueDeepSeekStateWrite(run,()=>mutate(state=>{const task=state.tasks.find(row=>row.id===session.taskId),pass=task?.passes?.find(row=>row.id===session.passId),team=pass?.recruitmentTeam,target=session.integration?team?.integration:team?.workers.find(row=>row.workerId===session.workerId);if(!target||target.threadId!==session.runtime.sessionId)return;target.deepSeekRuntime={...info,mcpToolCatalog:catalog};const phaseRun=target.deepSeekPhaseRuns?.find(row=>row.sessionId===session.runtime.sessionId&&row.turnId===run.turnId);if(phaseRun){phaseRun.mcpToolCatalog=catalog;phaseRun.updatedAt=updatedAt;}}));
 }
 function processDeepSeekMcpEvent(session:DeepSeekRecruitmentSession,run:DeepSeekRecruitmentRun,event:any,data:any){
   const fail=(message:string)=>{run.failure??=message;};
+  const recordObserved=(call:DeepSeekMcpCall,lifecycle:ToolCallStatus,source:'application'|'model',summary?:string)=>{
+    const agentId=session.routedRole||(session.integration?`integrator:${session.passId}`:session.workerId),agentRole=session.routedRole||(session.integration?'integrator':'worker');
+    queueDeepSeekStateWrite(run,()=>mutate(state=>{const pass=state.tasks.find(row=>row.id===session.taskId)?.passes?.find(row=>row.id===session.passId);if(!pass)return;recordToolObservation(pass,{provider:session.runtime.runtimeInfo?.provider||'opencode-go',agentId,threadId:run.threadId,turnId:run.turnId,callId:call.callId,name:call.toolName,type:call.serverName==='native'?'provider tool':'MCP tool',agentRole,source,lifecycle,...(summary?{summary}:{})});}));
+  };
   if(event.type==='request/header'){
     if(!Array.isArray(data?.header?.tools)){fail('DeepSeek Harness returned an invalid task-scoped MCP catalog. No receipt was accepted.');return;}
     persistDeepSeekCatalog(session,run);return;
@@ -546,7 +637,7 @@ function processDeepSeekMcpEvent(session:DeepSeekRecruitmentSession,run:DeepSeek
   if(event.type==='tool/call'){
     const seq=event.seq,callId=data.callId,name=data.name,argsText=data.arguments;
     if(!Number.isSafeInteger(seq)||seq<0||typeof callId!=='string'||!callId||typeof name!=='string'||!name||typeof argsText!=='string') {fail('DeepSeek Harness returned an invalid model-tool call envelope. No receipt was accepted.');return;}
-    const match=name.match(/^mcp__(pseudoharness_skills)__(.+)$/);
+    const match=name.match(/^mcp__(pseudoharness_skills|pseudoharness_workspace)__(.+)$/);
     // The request/header MCP catalog is distinct from the SDK's native tools.
     // Enforce exact provenance for all MCP calls while letting native events
     // pass through to the common sequence/correlation audit below.
@@ -555,14 +646,14 @@ function processDeepSeekMcpEvent(session:DeepSeekRecruitmentSession,run:DeepSeek
     if(match){try{args=JSON.parse(argsText);}catch{args=undefined;}
       if(!args||typeof args!=='object'||Array.isArray(args)){fail('DeepSeek Harness emitted malformed task-scoped MCP arguments. No receipt was accepted.');return;}}
     if(run.pendingMcpCalls.has(seq)){fail('DeepSeek Harness reused a model-tool event sequence. No receipt was accepted.');return;}
-    const call:DeepSeekMcpCall={seq,callId,serverName:match?'pseudoharness_skills':'native',toolName:match?match[2]:name};run.pendingMcpCalls.set(seq,call);
+    const call:DeepSeekMcpCall={seq,callId,serverName:match?match[1] as 'pseudoharness_skills'|'pseudoharness_workspace':'native',toolName:match?match[2]:name};run.pendingMcpCalls.set(seq,call);recordObserved(call,'started','model');
     return;
   }
   if(event.type==='tool/result'){
     const sources=event.sourceEventSeqs,message=data.message;
     if(!Array.isArray(sources)||sources.length!==1||!Number.isSafeInteger(sources[0])||!message||message.role!=='tool'||typeof message.toolCallId!=='string'||typeof message.source?.callId!=='string'||message.toolCallId!==message.source.callId){fail('DeepSeek Harness returned an uncorrelated model-tool result. No receipt was accepted.');return;}
     const call=run.pendingMcpCalls.get(sources[0]);if(!call||call.callId!==message.toolCallId){fail('DeepSeek Harness model-tool result did not match its recorded call. No receipt was accepted.');return;}
-    run.pendingMcpCalls.delete(sources[0]);
+    run.pendingMcpCalls.delete(sources[0]);recordObserved(call,message.isError===true?'failed':'completed','application',message.isError===true?'The application tool reported an error.':undefined);
   }
 }
 function onDeepSeekNotification(session:DeepSeekRecruitmentSession,notification:DeepSeekHarnessNotification){
@@ -665,7 +756,9 @@ async function startRecruitmentStageInner(taskId:string,passId:string,workerId:s
   const task=getTask(taskId),pass=task?.passes?.find(row=>row.id===passId),team=pass?.recruitmentTeam;if(!task||task.currentPassId!==passId||task.phase!=='worker_running'||!pass||!team||team.passId!==passId||!team.sealed)return;
   const record=integration?team.integration:team.workers.find(row=>row.workerId===workerId);if(!record||integration&&team.status!=='integrating'||!integration&&!['running','recruiting'].includes(team.status))return;
   if(record.activeTurnId&&record.workerStage==='execute')return;
+  const selected=record.executionProfile||pass.executionProfile||executionProfileForSettings(getState().settings);if(selected.provider==='codex')return startCodexRecruitmentStageInner(task,pass,team,record,workerId,integration,selected);
   const profile=record.deepSeekExecution||pass.deepSeekExecution;if(!profile)throw new DeepSeekHarnessError('configuration','The recruited role has no saved DeepSeek Harness profile. No Codex worker fallback was started.');
+  if(selected.provider!=='deepseek'||selected.model!==profile.model||selected.effort!==profile.nativeReasoningEffort)throw new DeepSeekHarnessError('configuration','The recruited role model does not match its saved DeepSeek Harness profile. No alternate model or effort was started.');
   const canonical=team.canonicalProjectRoot,workspace=record.worktreeRoot,assignment=record.assignment,localAssignment=rebaseRecruitmentAssignment(assignment,canonical,workspace),writeScope=assignmentWriteRoots(localAssignment,workspace);
   const approvalPolicy=pass.approvalPolicy;if(!approvalPolicy)throw new DeepSeekHarnessError('configuration','This pass has no saved approval policy. DeepSeek Harness will not infer permissions.');
   const permission=resolveDeepSeekHarnessPermission({approvalPolicy,selectedForTask:true,workspaceRoot:workspace,writeScope,requiresFilesystemConfinement:false});
@@ -676,19 +769,19 @@ async function startRecruitmentStageInner(taskId:string,passId:string,workerId:s
   const carried=integration?{images:[],text:''}:attachmentUserInput(pass.attachments||[]);
   if(carried.images.length)throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness image attachments have not been verified by the installed SDK. No worker turn was started; use a provider that supports the selected attachment type.');
   const templateLaunch=deepSeekSdkLaunch??discoverWindowsDeepSeekHarnessSdkLaunch();deepSeekSdkLaunch=templateLaunch;
-  let sessionId=record.threadId;
-  let session=sessionId?deepSeekRecruitmentSessions.get(sessionId):undefined;
+  const existingSessionId=record.threadId;let sessionId=existingSessionId||randomUUID();
+  let session=existingSessionId?deepSeekRecruitmentSessions.get(existingSessionId):undefined;
   if(session&&!sameDeepSeekPermission(session.permission,permission)){
     if(session.active)throw new DeepSeekHarnessError('configuration','A DeepSeek Harness permission phase cannot change while its prior turn is active. The next phase was not started.');
     deepSeekRecruitmentSessions.delete(session.runtime.sessionId);
     await session.runtime.shutdown();
-    session=undefined;sessionId=undefined;
+    session=undefined;
   }
-  if(sessionId&&!session)throw new DeepSeekHarnessError('interrupted','This DeepSeek Harness session is not attached to the current kernel process. It was not resumed automatically; start a fresh task after checking the saved paused session.');
+  if(existingSessionId&&!session)throw new DeepSeekHarnessError('interrupted','This DeepSeek Harness session is not attached to the current kernel process. It was not resumed automatically; start a fresh task after checking the saved paused session.');
   let isNewSession=false;
   if(!session){
-    const isolated=await prepareRecruitmentDeepSeekProfile(task,pass,record,workspace,templateLaunch,permission,integration);
-    const runtime=new DeepSeekHarnessSdkRuntime({launch:isolated.launch,cwd:workspace,provider:profile.provider,model:profile.model,reasoningEffort:profile.nativeReasoningEffort,permission,...(sessionId?{sessionId}:{})});
+    const isolated=await prepareRecruitmentDeepSeekProfile(task,pass,record,workspace,templateLaunch,permission,integration,sessionId);
+    const runtime=new DeepSeekHarnessSdkRuntime({launch:isolated.launch,cwd:workspace,provider:profile.provider,model:profile.model,reasoningEffort:profile.nativeReasoningEffort,permission,sessionId});
     session={runtime,permission,taskId,passId,workerId,integration,latestTurn:0,expectedMcpTools:isolated.expectedMcpTools,configuredMcpServers:isolated.configuredMcpServers,profileName:isolated.profileName};isNewSession=true;
   }
   const runtime=session.runtime;const threadId=runtime.sessionId;const turnId=randomUUID();const now=new Date().toISOString();const run:DeepSeekRecruitmentRun={taskId,passId,threadId,turnId,stage:'execute',baselineTurn:session.latestTurn,idleAfterEnd:false,messages:[],providerEvents:[],pendingMcpCalls:new Map(),pendingStateWrites:[],expectedMcpTools:session.expectedMcpTools,configuredMcpServers:session.configuredMcpServers,profileName:session.profileName,finished:false};session.active=run;
@@ -710,6 +803,25 @@ async function startRecruitmentStageInner(taskId:string,passId:string,workerId:s
   }catch(error){
     trackDeepSeekRecruitmentStage(taskId,passId,threadId,turnId,'execute',session,run,Promise.reject(error));
   }
+}
+async function startCodexRecruitmentStageInner(task:Task,pass:TaskPass,team:RecruitmentTeam,record:RecruitmentWorker|RecruitmentIntegration,workerId:string,integration:boolean,profile:ExecutionProfile){
+  requireModel(profile.model,profile.effort);if(record.deepSeekRuntime||record.deepSeekExecution)throw new Error('This recruited role is bound to a saved DeepSeek Harness session and cannot be moved to Codex. Start a fresh pass with the selected provider.');
+  const workspace=record.worktreeRoot,assignment=record.assignment,localAssignment=rebaseRecruitmentAssignment(assignment,team.canonicalProjectRoot,workspace),writeScope=assignmentWriteRoots(localAssignment,workspace),approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;
+  const selectedSkills=skillSnapshotsText(integration?team.integration.skills:record.skills),receipts=integration?JSON.stringify(team.workers.map(row=>({workerId:row.workerId,name:row.name,status:row.status,branch:row.branch,headCommit:row.headCommit,receipt:row.receipt||workerReceiptFromStatus(row),error:row.error})),null,2):'';
+  let prompt=integration?`INTEGRATE. Review all contributions already merged into this isolated integration worktree. Resolve conflicts only within the validated write scope. Run relevant verification; commit the final integrated changes on this integration branch. Do not push, open or merge a remote pull request, modify the user’s canonical checkout, or claim unverified work.\n\nPreserve each worker's complete original receipt as a full JSON object labeled with that worker ID. If the records cannot fit the structured output, return an honest incomplete receipt. The app performs independent review after your integration receipt.\n\nASSIGNMENT:\n${JSON.stringify(localAssignment,null,2)}\n\nWORKER RECEIPTS:\n${receipts}\n\nSELECTED SKILLS:\n${selectedSkills||'No skills were selected.'}\n\n${workerOutcomeResponseFormatPrompt()}`:workerExecutePrompt(localAssignment,selectedSkills);
+  if(integration){const requests=pass.userInputs?.length?pass.userInputs:[pass.userInput];prompt+=`\n\nORIGINAL USER REQUESTS:\n${requests.map((request,index)=>`${index+1}. ${request}`).join('\n')}`;}
+  const carried=integration?{images:[],text:''}:attachmentUserInput(pass.attachments||[]),skillsConfig=skillLibraryMcpServerConfig({taskId:task.id,role:'worker'});
+  await ensureAgentAuth();
+  let threadId=record.threadId;
+  if(!threadId){threadId=await agentCodex.startThread('worker',workspace,profile.model,profile.effort,approvalPolicy,undefined,workerWorkspaceTool,skillsConfig);record.threadId=threadId;}
+  else if(!attachedThreads.has(threadId))await agentCodex.resumeThread(threadId,approvalPolicy,'worker',workspace,undefined,skillsConfig,workerWorkspaceTool);
+  attachedThreads.add(threadId);workerWorkspaceTargets.set(threadId,{taskId:task.id,passId:pass.id});
+  await verifySkillMcpAvailability(threadId);
+  const now=new Date().toISOString();await mutate(state=>{const current=state.tasks.find(row=>row.id===task.id),currentPassRow=current?.passes?.find(row=>row.id===pass.id),currentTeam=currentPassRow?.recruitmentTeam,target=integration?currentTeam?.integration:currentTeam?.workers.find(row=>row.workerId===workerId);if(!current||!currentPassRow||!currentTeam||!target||current.currentPassId!==pass.id||current.phase==='cancelled')return;currentTeam.status=integration?'integrating':'running';target.threadId=threadId;target.activeTurnId=undefined;target.workerStage='execute';target.status='running';target.startedAt??=now;target.executionStartedAt=now;});
+  const target=getTask(task.id);if(!target||target.currentPassId!==pass.id||target.phase!=='worker_running')return;
+  const response=await agentCodex.startTurn(threadId,`${prompt}${carried.text}`,'worker',profile.model,profile.effort,workspace,writeScope,approvalPolicy,undefined,undefined,carried.images);
+  if(!getTask(task.id)||getTask(task.id)!.currentPassId!==pass.id||getTask(task.id)!.phase==='cancelled'){const id=response.turn?.id||response.turnId;if(id)try{await agentCodex.interrupt(threadId,id);}catch{}return;}
+  const turnId=response.turn?.id||response.turnId;await mutate(state=>{const current=state.tasks.find(row=>row.id===task.id),currentPassRow=current?.passes?.find(row=>row.id===pass.id);if(!current||!currentPassRow)return;const currentTeam=currentPassRow.recruitmentTeam,target=integration?currentTeam?.integration:currentTeam?.workers.find(row=>row.workerId===workerId);if(!target||target.threadId!==threadId)return;if(turnId){target.activeTurnId=turnId;beginReasoningTurn(current,'worker',threadId,turnId,profile.model,profile.effort,'codex');}});if(turnId)await processDeferred(task.id,turnId);
 }
 async function finishDeepSeekRecruitmentStage(taskId:string,passId:string,threadId:string,turnId:string,stage:WorkerStage,session:DeepSeekRecruitmentSession,run:DeepSeekRecruitmentRun,start:Promise<unknown>){
   const runtime=session.runtime;
@@ -963,11 +1075,12 @@ async function startQualityCorrectionPlanning(taskId:string,passId:string,round:
   }catch(error){const detail=safeError(error),stage=qualityCorrectionClaims.get(claim)?.stage;const current=getTask(taskId),latestPass=current?.passes?.find(row=>row.id===passId),latestLoop=latestPass?.qualityLoop,latestRound=latestLoop?.rounds.at(-1);if(!current||current.currentPassId!==passId||current.phase==='cancelled'||latestRound?.roundId!==round.roundId||latestRound.integrationHead!==round.integrationHead||latestRound.findingsFingerprint!==round.findingsFingerprint||!latestRound.findings?.length||latestLoop?.status!=='awaiting_corrections'||latestRound?.status!=='awaiting_corrections')return;await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),pass=owner?.passes?.find(row=>row.id===passId),loop=pass?.qualityLoop,saved=loop?.rounds.at(-1);if(!owner||!pass||!loop||owner.currentPassId!==passId||owner.phase==='cancelled'||loop.status!=='awaiting_corrections'||saved?.roundId!==round.roundId||saved.status!=='awaiting_corrections'||saved.integrationHead!==round.integrationHead||saved.findingsFingerprint!==round.findingsFingerprint||!saved.findings?.length)return;const dispatched=stage==='turn_start_sent';loop.status=dispatched?'needs_attention':'paused';loop.resumeAction='corrections';if(!dispatched&&loop.correctionPlanner?.roundId===round.roundId&&loop.correctionPlanner.status==='preflight')loop.correctionPlanner=undefined;loop.correctionPlannerNotDispatchedRoundId=dispatched?undefined:round.roundId;loop.terminalReason=dispatched?`QA correction planning could not be confirmed after its turn may have been sent: ${detail}`:`QA correction planning could not start before a planner turn was sent: ${detail}`;owner.phase='reviewing';owner.activeRole=undefined;owner.activeTurnId=undefined;owner.activeModelId=undefined;owner.activeEffort=undefined;owner.error=loop.terminalReason;addMessage(owner,'system',loop.terminalReason);});}
   finally{const pending=qualityCorrectionClaims.get(claim);if(pending?.settled===settled){await mutate(state=>{const owner=state.tasks.find(row=>row.id===taskId),pass=owner?.passes?.find(row=>row.id===passId),loop=pass?.qualityLoop,latest=loop?.rounds.at(-1);if(!loop||latest?.roundId!==round.roundId||loop.correctionPlanner?.roundId!==round.roundId||loop.correctionPlanner.status!=='preflight')return;loop.correctionPlanner=undefined;if(owner?.currentPassId===passId&&owner.phase!=='cancelled'&&latest.status==='awaiting_corrections'&&['awaiting_corrections','needs_attention','paused','paused_after_restart'].includes(loop.status)){loop.correctionPlannerNotDispatchedRoundId=round.roundId;if(['awaiting_corrections','needs_attention'].includes(loop.status)){loop.status='paused';loop.resumeAction='corrections';loop.terminalReason='Correction planner setup stopped before a turn was sent. Resume will plan from the saved findings.';owner.phase='reviewing';owner.error=undefined;}}});qualityCorrectionClaims.delete(claim);pending.settle();}}
 }
-function passProjection(task:Task,pass:TaskPass,threadId:string,turnId?:string):Task{
+type TaskPassProjection=Task&Pick<TaskPass,'toolCalls'|'toolCallTrackingIssueCount'>;
+function passProjection(task:Task,pass:TaskPass,threadId:string,turnId?:string):TaskPassProjection{
   const role=passThreadRole(pass,threadId);
-  return {...task,currentPassId:pass.id,phase:pass.phase,routeDecision:pass.routeDecision,executionEscalation:pass.executionEscalation,assignment:pass.assignment,receipt:pass.receipt,reviewNote:pass.reviewNote,resolution:pass.resolution,routingNote:pass.routingNote,error:pass.error,escalation:pass.escalation,workerStage:pass.workerStage,reasoningSummaries:pass.reasoningSummaries||[],reasoningTurns:pass.reasoningTurns||[],liveActivity:pass.liveActivity||[],correctionCount:pass.correctionCount,routerThreadId:pass.routerThreadId,directThreadId:pass.directThreadId,simpleThreadId:pass.simpleThreadId,orchestratorThreadId:pass.orchestratorThreadId,workerThreadId:pass.workerThreadId,recruitmentTeam:pass.recruitmentTeam,recruitmentHistory:pass.recruitmentHistory,qualityLoop:pass.qualityLoop,activeTurnId:turnId??pass.activeTurnId,activeRole:role??pass.activeRole,processedTurns:pass.processedTurns} as Task;
+  return {...task,currentPassId:pass.id,phase:pass.phase,routeDecision:pass.routeDecision,executionEscalation:pass.executionEscalation,assignment:pass.assignment,receipt:pass.receipt,reviewNote:pass.reviewNote,resolution:pass.resolution,routingNote:pass.routingNote,error:pass.error,escalation:pass.escalation,workerStage:pass.workerStage,reasoningSummaries:pass.reasoningSummaries||[],reasoningTurns:pass.reasoningTurns||[],liveActivity:pass.liveActivity||[],toolCalls:pass.toolCalls,toolCallTrackingIssueCount:pass.toolCallTrackingIssueCount,correctionCount:pass.correctionCount,routerThreadId:pass.routerThreadId,directThreadId:pass.directThreadId,simpleThreadId:pass.simpleThreadId,orchestratorThreadId:pass.orchestratorThreadId,workerThreadId:pass.workerThreadId,recruitmentTeam:pass.recruitmentTeam,recruitmentHistory:pass.recruitmentHistory,qualityLoop:pass.qualityLoop,activeTurnId:turnId??pass.activeTurnId,activeRole:role??pass.activeRole,processedTurns:pass.processedTurns} as TaskPassProjection;
 }
-function savePassProjection(pass:TaskPass,projection:Task){pass.reasoningSummaries=projection.reasoningSummaries;pass.reasoningTurns=projection.reasoningTurns;pass.liveActivity=projection.liveActivity;}
+function savePassProjection(pass:TaskPass,projection:TaskPassProjection){pass.reasoningSummaries=projection.reasoningSummaries;pass.reasoningTurns=projection.reasoningTurns;pass.liveActivity=projection.liveActivity;pass.toolCalls=projection.toolCalls;pass.toolCallTrackingIssueCount=projection.toolCallTrackingIssueCount;}
 function passRole(pass:TaskPass,threadId:string){return passThreadRole(pass,threadId);}
 async function onTurnStarted(params:any){
   const threadId=params?.threadId,turnId=params?.turn?.id;if(!threadId||!turnId)return;
@@ -981,7 +1094,7 @@ async function onTurnStarted(params:any){
   }
   let lateAuditTurn:{taskId:string;passId:string;roundId:string;threadId:string;turnId:string}|undefined;
   await mutate(s=>{const t=s.tasks.find(x=>isCurrentPassThread(x,threadId)||passForThread(x,threadId));if(!t)return;
-    const target=recruitmentTarget(t,threadId);if(target){const team=t.passes?.find(row=>row.id===target.pass.id)?.recruitmentTeam;if(t.phase!=='cancelled'&&team&&['running','context_plan','context_compose'].includes(target.record.status)){const record=team.workers.find(row=>row.threadId===threadId)||team.integration.threadId===threadId&&team.integration;if(record)record.activeTurnId=turnId;beginReasoningTurn(t,'worker',threadId,turnId,'gpt-6-luna',target.record.effort);}return;}
+    const target=recruitmentTarget(t,threadId);if(target){const team=t.passes?.find(row=>row.id===target.pass.id)?.recruitmentTeam;if(t.phase!=='cancelled'&&team&&['running','context_plan','context_compose'].includes(target.record.status)){const record=team.workers.find(row=>row.threadId===threadId)||team.integration.threadId===threadId&&team.integration;if(record)record.activeTurnId=turnId;const selected=target.record.executionProfile||target.pass.executionProfile||{provider:'codex',model:'gpt-6-luna',effort:target.record.effort};beginReasoningTurn(t,'worker',threadId,turnId,selected.model,selected.effort,selected.provider);}return;}
     const pending=pendingQualityAuditStarts.get(threadId);let pendingStart=pending?.find(row=>row.turnId===turnId);if(!pendingStart){pendingStart=pending?.find(row=>!row.turnId);if(pendingStart)pendingStart.turnId=turnId;}
     const auditPasses=t.passes?.filter(row=>row.qualityLoop?.rounds.some(round=>round.threadId===threadId))||[],auditPass=pendingStart?t.passes?.find(row=>row.id===pendingStart.passId):auditPasses.find(row=>row.qualityLoop?.rounds.some(round=>round.threadId===threadId&&round.turnId===turnId))||auditPasses.find(row=>row.qualityLoop?.rounds.some(round=>round.threadId===threadId&&!round.turnId&&['starting','auditing'].includes(round.status)));
     const loop=auditPass?.qualityLoop,auditRounds=loop?.rounds||[];const round=auditRounds.find(row=>row.threadId===threadId&&row.turnId===turnId)||(pendingStart?auditRounds.find(row=>row.roundId===pendingStart!.roundId):undefined)||auditRounds.find(row=>row.threadId===threadId&&!row.turnId&&['starting','auditing'].includes(row.status));
@@ -1001,7 +1114,7 @@ async function onReasoningSummary(method:string,params:any){
   const threadId=params?.threadId;if(!threadId)return;
   const task=getState().tasks.find(x=>passForThread(x,threadId));if(!task)return;
   if(task.phase==='cancelled'&&isCurrentPassThread(task,threadId))return;
-  void mutate(s=>{const current=s.tasks.find(x=>x.id===task.id);const pass=current?.passes?.find(row=>passThreadRole(row,threadId));if(!current||!pass)return;const recruited=!!recruitmentTarget(current,threadId);if(pass.id===current.currentPassId&&!recruited){applyCodexReasoningNotification(current,method,params);return;}const projection=passProjection(current,pass,threadId,params?.turnId);if(recruited)projection.workerThreadId=threadId;applyCodexReasoningNotification(projection,method,params);savePassProjection(pass,projection);});
+  void mutate(s=>{const current=s.tasks.find(x=>x.id===task.id);const pass=current?.passes?.find(row=>passThreadRole(row,threadId));if(!current||!pass)return;const recruited=!!recruitmentTarget(current,threadId);if(pass.id===current.currentPassId&&!recruited){applyCodexReasoningNotification(current,method,params);}else{const projection=passProjection(current,pass,threadId,params?.turnId);if(recruited)projection.workerThreadId=threadId;applyCodexReasoningNotification(projection,method,params);savePassProjection(pass,projection);}const turnId=typeof params?.turnId==='string'?params.turnId:'';if(method==='item/started'||method==='item/completed'){const item=params?.item;if(turnId&&item)recordCodexToolItem(current,pass,threadId,turnId,item,method==='item/started'?'started':undefined);}});
 }
 function usageTarget(threadId:unknown){
   if(typeof threadId!=='string'||!threadId)return;
@@ -1052,7 +1165,7 @@ async function applyRouteDecision(task:Task,value:unknown,fallbackReason?:string
   await startRoutedTurn(live,effectiveRoute==='direct_answer'?'direct':'simple');
 }
 async function finishRoutedDirect(task:Task,answer:string){
-  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled')return;t.phase='accepted';t.resolution='direct';t.activeRole=undefined;t.activeTurnId=undefined;t.reviewNote='GPT-6 Luna answered directly at high effort. No implementation or Sol review occurred.';const p=currentPass(t);if(p)p.publicAnswer=answer;addMessage(t,'direct',answer);});
+  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled')return;const p=currentPass(t),profile=p?.executionProfile||executionProfileForSettings(s.settings);t.phase='accepted';t.resolution='direct';t.activeRole=undefined;t.activeTurnId=undefined;t.reviewNote=`${executionDisplay(profile,p?.deepSeekExecution)} answered directly. No implementation or Sol review occurred.`;if(p)p.publicAnswer=answer;addMessage(t,'direct',answer);});
 }
 async function escalateExecutor(task:Task,from:'direct_answer'|'simple_implementation',to:'simple_implementation'|'hard_task',reason:string,completedActions:string[]=[],evidence:string[]=[]){
   const escalation={from,to,reason,completedActions,evidence};
@@ -1076,7 +1189,7 @@ async function completeSimpleExecution(task:Task,value:unknown,threadId:string,t
   if(!verified){
     await escalateExecutor(task,'simple_implementation','hard_task','The self-reported completion receipt did not show a complete, fully verified result.',receipt.changes,receipt.verification.map(item=>`${item.check}: ${item.result}${item.evidence?` (${item.evidence})`:''}`));return;
   }
-  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled')return;const p=currentPass(t);if(p)recordAgentReceipt(p,'simple',threadId,turnId,receipt);t.phase='accepted';t.resolution='simple';t.receipt=receipt;t.activeRole=undefined;t.activeTurnId=undefined;t.reviewNote='GPT-6 Luna completed and verified this simple implementation at xhigh effort. No Sol review occurred.';addMessage(t,'simple',receipt.result);});
+  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled')return;const p=currentPass(t),profile=p?.executionProfile||executionProfileForSettings(s.settings);if(p)recordAgentReceipt(p,'simple',threadId,turnId,receipt);t.phase='accepted';t.resolution='simple';t.receipt=receipt;t.activeRole=undefined;t.activeTurnId=undefined;t.reviewNote=`${executionDisplay(profile,p?.deepSeekExecution)} completed and verified this simple implementation. No Sol review occurred.`;addMessage(t,'simple',receipt.result);});
 }
 async function completeDelegatedAssignment(task:Task,assignment:Assignment,threadId:string,turnId:string){
   void threadId;void turnId;
@@ -1097,7 +1210,7 @@ async function onTurnCompleted(params:any){
   if(owningPass.id!==t.currentPassId){await recordLatePassTurn(t,owningPass,params);return;}
   if(!t.activeTurnId){const arr=deferredCompletions.get(t.id)||[];arr.push(params);deferredCompletions.set(t.id,arr);return;}
   if(params.turn.id!==t.activeTurnId)return;
-  await mutate(s=>{const row=s.tasks.find(x=>x.id===t.id);if(row)applyCodexReasoningNotification(row,'turn/completed',params);});
+  await mutate(s=>{const row=s.tasks.find(x=>x.id===t.id);if(!row)return;applyCodexReasoningNotification(row,'turn/completed',params);const pass=row.passes?.find(item=>item.id===owningPass.id);if(pass)for(const item of Array.isArray(params.turn.items)?params.turn.items:[])recordCodexToolItem(row,pass,params.threadId,params.turn.id,item);});
   if(!claimCompletion(t.id,params.turn.id,t.processedTurns))return;
   const taskId=t.id; const role=t.activeRole||roleForThread(t,params.threadId); const endedStatus=params.turn.status;if(!role)return;
   const passId=currentPass(t)?.id;if(!passId)return;
@@ -1241,7 +1354,15 @@ async function onServerRequest(id:string|number,method:string,params:any,client:
     const fail=(message:string)=>{try{client.respondServerRequest(id,{success:false,contentItems:[{type:'inputText',text:message}]});}catch{}};
     if(params?.namespace!=='pseudoharness'||params?.tool!=='workspace'||!authorizesWorkerWorkspaceTool(task,pass,target,threadId)||!task||!pass||!target){fail('Workspace action rejected: this tool is limited to the active task’s execution stage. No workspace action was applied.');return;}
     try{
-      if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(key=>!['action','url'].includes(key))||typeof args.action!=='string'||!['open_browser','open_github','open_pull_request','dock_browser','dock_github','undock','inspect_github'].includes(args.action)||args.url!==undefined&&(typeof args.url!=='string'||args.url.length>2048))throw new Error('The workspace action arguments are invalid.');
+      if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(key=>!['action','url'].includes(key))||typeof args.action!=='string'||!['open_browser','open_github','open_pull_request','dock_browser','dock_github','undock','inspect_github','initialize_git_repository'].includes(args.action)||args.url!==undefined&&(typeof args.url!=='string'||args.url.length>2048))throw new Error('The workspace action arguments are invalid.');
+      if(action==='initialize_git_repository'){
+        if(Object.keys(args).some(key=>key!=='action'))throw new Error('Git initialization accepts no directory or repository arguments.');
+        const result=await ensureWorkspaceRepository(task.userRoot),active=getTask(task.id),activePass=active?.passes?.find(row=>row.id===target.passId);
+        if(!authorizesWorkerWorkspaceTool(active,activePass,target,threadId))throw new Error('The active task changed during Git initialization. No additional workspace action was applied.');
+        const role=passThreadRole(pass,threadId)||'worker',turnId=typeof params?.turnId==='string'?params.turnId:typeof task.activeTurnId==='string'?task.activeTurnId:'';
+        if(turnId)await mutate(state=>{const live=state.tasks.find(row=>row.id===task.id),saved=live?.passes?.find(row=>row.id===target.passId);if(!saved)return;const recruited=recruitmentTarget(live!,threadId);recordToolObservation(saved,{provider:'codex',agentId:recruited?(recruited.integration?`integrator:${recruited.team.teamId}`:recruited.record.workerId):role,threadId,turnId,callId:String(params?.callId||params?.itemId||id),name:'Initialize Git repository',type:'workspace action',agentRole:recruited?(recruited.integration?'integrator':`worker · ${recruited.record.name}`):role,source:'application',lifecycle:'completed',summary:result.created?'Initialized in the active workspace root.':'The active workspace is already inside a Git repository.'});});
+        client.respondServerRequest(id,{success:true,contentItems:[{type:'inputText',text:JSON.stringify({created:result.created,repositoryRoot:result.repositoryRoot})}]});return;
+      }
       if(workspaceToolRequiresDesktop(action)&&(process.env.OPNEX_DESKTOP??process.env.PSEUDOHARNESS_DESKTOP)!=='1')throw new Error('Opening or docking embedded views requires the Electron desktop shell. You can still use inspect_github in the portable app.');
       let mode:'browser'|'github'='github';let placement:'side'|'full'='side';let url:string|undefined;let detail='';
       if(action==='open_browser'){

@@ -50,7 +50,7 @@ export async function readGitHubMetadata(inputRoot:string,runner:GitWorkspaceCom
   if(typeof inputRoot!=='string'||!inputRoot.trim())return emptyGithub('GitHub inspection needs a selected local repository and GitHub CLI.');
   let root:string;try{root=await realpath(inputRoot);}catch{return emptyGithub('The selected project folder is no longer available.');}
   let repo:string;try{repo=(await call(runner,'git',['rev-parse','--show-toplevel'],root)).trim();}catch{return emptyGithub('GitHub inspection needs a selected local Git repository.');}
-  const repositoryRoot=await realpath(repo);if(!isWithin(root,repositoryRoot))return emptyGithub('The Git repository is outside the selected project folder.');
+  const repositoryRoot=await realpath(repo);if(!isWithin(repositoryRoot,root))return emptyGithub('The selected folder is not inside the discovered Git repository.');
   const version=await runner('gh',['--version'],repositoryRoot).catch(()=>({code:127,stdout:'',stderr:''}));
   if(version.code!==0)return {available:false,authenticated:false,detail:'GitHub CLI (gh) is not installed or is unavailable on PATH. Local Git data is available independently.'};
   const auth=await runner('gh',['auth','status','--hostname','github.com'],repositoryRoot).catch(()=>({code:127,stdout:'',stderr:''}));
@@ -77,7 +77,7 @@ export async function readGitWorkspace(inputRoot:string,offset=0,runner:GitWorks
   try{repo=(await call(runner,'git',['rev-parse','--show-toplevel'],authorizedRoot)).trim();}
   catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {available:false,authorizedRoot,detail:'Git is not installed or is unavailable on PATH.',branches:[],worktrees:[],commits:[],history:{offset,pageSize:100,hasMore:false,nextOffset:null},github:{available:false,authenticated:false,detail:'GitHub inspection needs Git and GitHub CLI.'}};return {available:false,authorizedRoot,detail:'Choose a folder inside a Git repository to see local branches and history.',branches:[],worktrees:[],commits:[],history:{offset,pageSize:100,hasMore:false,nextOffset:null},github:{available:false,authenticated:false,detail:'GitHub repository details are unavailable without a local Git repository.'}};}
   let repositoryRoot:string;try{repositoryRoot=await realpath(repo);}catch{throw new Error('Git returned a repository folder that is no longer available.');}
-  if(!isWithin(authorizedRoot,repositoryRoot))return {available:false,authorizedRoot,repositoryRoot,detail:'The Git repository is outside the selected project folder.',branches:[],worktrees:[],commits:[],history:{offset,pageSize:100,hasMore:false,nextOffset:null},github:{available:false,authenticated:false,detail:'The Git repository is outside the selected project folder.'}};
+  if(!isWithin(repositoryRoot,authorizedRoot))return {available:false,authorizedRoot,repositoryRoot,detail:'The selected folder is not inside the discovered Git repository.',branches:[],worktrees:[],commits:[],history:{offset,pageSize:100,hasMore:false,nextOffset:null},github:{available:false,authenticated:false,detail:'The selected folder is not inside the discovered Git repository.'}};
   const [branchText,branchCountText,worktreeText,logResult,currentBranchText]=await Promise.all([
     call(runner,'git',['for-each-ref','--sort=refname',`--count=${branchOffset+101}`,'--format=%(refname)%09%(objectname:short)%09%(upstream:short)%09%(HEAD)','refs/heads','refs/remotes'],repositoryRoot,16_000_000),
     call(runner,'git',['for-each-ref','--count=100001','--format=.','refs/heads','refs/remotes'],repositoryRoot),

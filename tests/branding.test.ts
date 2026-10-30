@@ -36,6 +36,9 @@ describe('Opnex branding and compatibility', () => {
     for (const relativePath of ['desktop/opnex.ico', 'desktop/opnex.icns', 'desktop/opnex-tray-icon.png']) {
       expect(() => readFileSync(path.join(root, relativePath))).not.toThrow();
     }
+    const generator = read('scripts/generate-brand-icons.ps1');
+    expect(generator).toContain("'opnex-icon-grid-1_5-margin.svg'");
+    expect(generator).not.toContain("'opnex-icon-grid-1_5-margin.png'");
   });
 
   it('uses the Opnex GitHub URL in current setup instructions', () => {

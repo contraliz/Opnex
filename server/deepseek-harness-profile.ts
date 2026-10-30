@@ -9,11 +9,11 @@ const PROFILE_TEMPLATE = 'sdk';
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client';
 const PI_AI_PLUGIN_ID = 'llm-pi-ai';
 const VERIFIED_PROVIDER_ROUTE = 'opencode-go';
-const ALLOWED_MCP_SERVER_NAMES = new Set(['pseudoharness_skills']);
+const ALLOWED_MCP_SERVER_NAMES = new Set(['pseudoharness_skills','pseudoharness_workspace']);
 const MAX_SERVER_CONFIG_BYTES = 16 * 1024;
 
 export type DeepSeekHarnessMcpServerConfig = {
-  serverName: 'pseudoharness_skills';
+  serverName: 'pseudoharness_skills'|'pseudoharness_workspace';
   command: string;
   args: readonly string[];
   cwd: string;
@@ -194,7 +194,7 @@ function validateMcpServers(servers: readonly DeepSeekHarnessMcpServerConfig[]) 
   const seen = new Set<string>();
   for (const server of servers) {
     if (!server || !ALLOWED_MCP_SERVER_NAMES.has(server.serverName)) {
-      throw new DeepSeekHarnessError('configuration', 'Only the existing Opnex Skills MCP gateway can be registered in this task profile.');
+      throw new DeepSeekHarnessError('configuration', 'Only the task-scoped Opnex Skills and workspace Git MCP gateways can be registered in this task profile.');
     }
     if (seen.has(server.serverName)) {
       throw new DeepSeekHarnessError('configuration', `The ${server.serverName} MCP gateway is listed more than once.`);

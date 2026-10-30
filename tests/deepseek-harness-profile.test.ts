@@ -197,7 +197,7 @@ describe('DeepSeek Harness isolated SDK profiles', () => {
     await expect(prepareDeepSeekHarnessTaskProfile({
       ...base,
       mcpServers: [{ ...server('pseudoharness_skills'), serverName: 'external' as 'pseudoharness_skills' }],
-    })).rejects.toThrow('Only the existing Opnex Skills MCP gateway');
+    })).rejects.toThrow('Only the task-scoped Opnex Skills and workspace Git MCP gateways');
     await expect(prepareDeepSeekHarnessTaskProfile({ ...base, mcpServers: [] })).rejects.toThrow('At least one scoped');
     await expect(prepareDeepSeekHarnessTaskProfile({ ...base, provider: 'deepseek-official', mcpServers: [server('pseudoharness_skills')] }))
       .rejects.toThrow('Only the verified OpenCode Go provider route');

@@ -1,33 +1,53 @@
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$sourcePath = Join-Path $repositoryRoot 'opnex-icon-grid-1_5-margin.png'
+$sourcePath = Join-Path $repositoryRoot 'opnex-icon-grid-1_5-margin.svg'
 $desktopPath = Join-Path $repositoryRoot 'desktop'
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-  throw "The supplied Opnex PNG was not found: $sourcePath"
+  throw "The supplied Opnex SVG was not found: $sourcePath"
 }
 
 Add-Type -AssemblyName System.Drawing
-$source = [System.Drawing.Bitmap]::new($sourcePath)
+$svg = [System.Xml.XmlDocument]::new()
+$svg.XmlResolver = $null
+$svg.Load($sourcePath)
+$svgRoot = $svg.DocumentElement
+$viewBox = @($svgRoot.GetAttribute('viewBox') -split '\s+' | ForEach-Object { [double]::Parse($_, [System.Globalization.CultureInfo]::InvariantCulture) })
+if ($svgRoot.LocalName -ne 'svg' -or $viewBox.Count -ne 4 -or $viewBox[2] -le 0 -or $viewBox[3] -le 0) {
+  throw "The supplied Opnex SVG needs a valid viewBox: $sourcePath"
+}
+$namespace = [System.Xml.XmlNamespaceManager]::new($svg.NameTable)
+$namespace.AddNamespace('svg', $svgRoot.NamespaceURI)
+$rectangles = @($svg.SelectNodes('/svg:svg/svg:rect', $namespace))
+if ($rectangles.Count -eq 0 -or $svg.SelectNodes('/svg:svg/*[not(self::svg:rect)]', $namespace).Count -gt 0) {
+  throw "The Opnex icon generator only supports the supplied rectangle-based SVG: $sourcePath"
+}
+$viewX, $viewY, $viewWidth, $viewHeight = $viewBox
 $pngBySize = @{}
-try {
-  foreach ($size in @(16, 32, 48, 64, 128, 256, 512, 1024)) {
-    $bitmap = [System.Drawing.Bitmap]::new($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-    $graphics.DrawImage($source, 0, 0, $size, $size)
-    $stream = [System.IO.MemoryStream]::new()
-    $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-    $pngBySize[$size] = [byte[]]$stream.ToArray()
-    $stream.Dispose()
-    $graphics.Dispose()
-    $bitmap.Dispose()
+foreach ($size in @(16, 32, 48, 64, 128, 256, 512, 1024)) {
+  $bitmap = [System.Drawing.Bitmap]::new($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  $graphics.Clear([System.Drawing.Color]::Transparent)
+  foreach ($rectangle in $rectangles) {
+    $x = if ($rectangle.HasAttribute('x')) { [double]::Parse($rectangle.GetAttribute('x'), [System.Globalization.CultureInfo]::InvariantCulture) } else { 0 }
+    $y = if ($rectangle.HasAttribute('y')) { [double]::Parse($rectangle.GetAttribute('y'), [System.Globalization.CultureInfo]::InvariantCulture) } else { 0 }
+    $width = [double]::Parse($rectangle.GetAttribute('width'), [System.Globalization.CultureInfo]::InvariantCulture)
+    $height = [double]::Parse($rectangle.GetAttribute('height'), [System.Globalization.CultureInfo]::InvariantCulture)
+    $left = [int][Math]::Round(($x - $viewX) * $size / $viewWidth, [MidpointRounding]::AwayFromZero)
+    $top = [int][Math]::Round(($y - $viewY) * $size / $viewHeight, [MidpointRounding]::AwayFromZero)
+    $right = [int][Math]::Round(($x + $width - $viewX) * $size / $viewWidth, [MidpointRounding]::AwayFromZero)
+    $bottom = [int][Math]::Round(($y + $height - $viewY) * $size / $viewHeight, [MidpointRounding]::AwayFromZero)
+    $color = [System.Drawing.ColorTranslator]::FromHtml($rectangle.GetAttribute('fill'))
+    $brush = [System.Drawing.SolidBrush]::new($color)
+    $graphics.FillRectangle($brush, $left, $top, $right - $left, $bottom - $top)
+    $brush.Dispose()
   }
-} finally {
-  $source.Dispose()
+  $stream = [System.IO.MemoryStream]::new()
+  $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+  $pngBySize[$size] = [byte[]]$stream.ToArray()
+  $stream.Dispose()
+  $graphics.Dispose()
+  $bitmap.Dispose()
 }
 
 # ICO stores PNG frames for modern Windows shell support.
@@ -84,4 +104,4 @@ $icnsWriter.Dispose()
 $icnsStream.Dispose()
 
 [System.IO.File]::WriteAllBytes((Join-Path $desktopPath 'opnex-tray-icon.png'), [byte[]]$pngBySize[128])
-Write-Output 'Generated Opnex desktop and tray icons from the supplied PNG.'
+Write-Output 'Generated Opnex desktop and tray icons from the supplied SVG.'

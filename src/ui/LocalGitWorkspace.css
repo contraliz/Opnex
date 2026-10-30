@@ -1,5 +1,11 @@
 .git-auth-controls { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-left: auto; }
 .git-workspace-header .git-auth-state { margin-left: 0; }
+.git-workspace-selector { min-width: 130px; max-width: 240px; display: grid; gap: 3px; color: #888; font-size: 9px; }
+.git-workspace-selector select { min-width: 0; max-width: 100%; height: 30px; padding: 0 28px 0 9px; border: 1px solid #3c3c3c; border-radius: 6px; background: #242424; color: #ddd; font-size: 10px; }
+.git-workspace-selector select:focus-visible,.git-create-repository:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+.git-create-repository { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; margin-top: 10px; padding: 0 13px; border: 1px solid #625584; border-radius: 7px; background: #322d40; color: #f0ebff; cursor: pointer; font-size: 11px; }
+.git-create-repository:hover:not(:disabled) { background: #40384f; border-color: #9c8acb; }
+.git-create-repository:disabled { opacity: .55; cursor: default; }
 .git-sign-in-button,.github-device-actions button {
   min-height: 30px;
   display: inline-flex;
@@ -82,6 +88,7 @@
 
 @media (max-width: 720px) {
   .git-workspace-header { flex-wrap: wrap; padding: 10px 14px; }
+  .git-workspace-selector { flex: 1 1 100%; max-width: none; }
   .git-auth-controls { flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-start; margin-left: 0; }
   .github-device-panel { align-items: flex-start; flex-wrap: wrap; padding: 12px 14px; }
   .github-device-actions { flex: 1 1 100%; justify-content: flex-start; }
