@@ -327,7 +327,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,`${finalPrompt}${carried.text}`,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier,carried.images),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
   if(!response)return;
   const id=response.turn?.id||response.turnId;
-  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.activeTurnId=id;t.activeRole=role;if(id&&(role==='direct'||role==='simple'))beginReasoningTurn(t,role,threadId!,id,modelId,effort);});
+  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.activeTurnId=id;t.activeRole=role;if(id&&(role==='direct'||role==='simple'))beginReasoningTurn(t,role,threadId!,id,modelId,effort,'codex');});
   if(id)await processDeferred(task.id,id);
 }
 async function prepareRoutedDeepSeekProfile(task:Task,pass:TaskPass,role:'direct'|'simple'|'worker',permission:DeepSeekHarnessPermissionGrant,sessionId:string,writeScope:string[]){
