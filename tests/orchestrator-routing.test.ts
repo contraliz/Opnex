@@ -26,6 +26,7 @@ vi.mock('../server/codex.js',()=>{
       {id:'gpt-6-luna',supportedReasoningEfforts:['low','high','xhigh','max'].map(reasoningEffort=>({reasoningEffort})),serviceTiers:fake.fastAvailable?[{id:'priority'}]:[]},
       {id:'gpt-6.1-sol',supportedReasoningEfforts:['low'].map(reasoningEffort=>({reasoningEffort}))},
       {id:'gpt-6.1-terra',supportedReasoningEfforts:['high'].map(reasoningEffort=>({reasoningEffort}))},
+      {id:'codex-runtime-entry',supportedReasoningEfforts:['low'].map(reasoningEffort=>({reasoningEffort}))},
     ] as any;}
     async startThread(role:string,root:string,model:string,effort:string,approvalPolicy:string,ownedPolicy?:string,dynamicTools?:unknown,skillsMcpConfig?:unknown){const threadId=`${role}-${++fake.threadCount}`;fake.threadOwners.set(threadId,this);fake.threadConfigs.set(threadId,{skillsMcpConfig});fake.calls.push({kind:'thread',server:this===fake.agentInstance?'agent':'broker',role,root,model,effort,approvalPolicy,dynamicTools,skillsMcpConfig,threadId});return threadId;}
     async resumeThread(threadId:string,approvalPolicy?:string,role?:string,root?:string,ownedPolicy?:string,skillsMcpConfig?:unknown,_dynamicTools?:unknown){fake.threadConfigs.set(threadId,{skillsMcpConfig});return threadId;}
@@ -222,6 +223,12 @@ describe('routed request workflow',()=>{
     expect(direct).toMatchObject({model:'gpt-6.1-sol',effort:'low'});expect(fake.profileCalls).toHaveLength(0);expect(fake.dshSessions.size).toBe(0);
     await complete('direct',{type:'answer',answer:'Answered by the configured orchestrator.',escalation:null,route:null,justification:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');
     expect(state.getTask(task.id)?.reviewNote).toContain('GPT-6.1 Sol at low effort');
+  });
+  it('records the Codex provider for runtime-listed models without a gpt-prefixed ID',async()=>{
+    const {orchestrator,state}=await setup();await state.mutate((saved:any)=>{saved.settings.orchestratorModel='codex-runtime-entry';saved.settings.orchestratorEffort='low';});const task=await orchestrator.submitTask('Answer this short question.');
+    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short answer needs no implementation.'});const direct=await waitForRole('direct');expect(direct).toMatchObject({model:'codex-runtime-entry',effort:'low'});
+    expect(state.getTask(task.id)?.passes?.[0]?.reasoningTurns?.find((turn:any)=>turn.role==='direct')).toMatchObject({provider:'codex',requestedModel:'codex-runtime-entry',requestedEffort:'low'});
+    await complete('direct',{type:'answer',answer:'Runtime-listed model completed the direct path.',escalation:null,route:null,justification:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');expect(state.getTask(task.id)?.reviewNote).toContain('codex-runtime-entry at low effort');
   });
   it('runs direct and delegated sessions without an application-owned knowledge service lifecycle',async()=>{
     const {orchestrator,state}=await setup();
