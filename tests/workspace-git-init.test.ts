@@ -84,6 +84,20 @@ describe('workspace repository initialization', () => {
     await expect(readFile(path.join(temporary, 'notes.txt'), 'utf8')).resolves.toBe('keep this file');
     await expect(inspectWorkspaceRepository(temporary)).resolves.toMatchObject({ status: 'repository', repositoryRoot: temporary });
   });
+  it.runIf(canRunGit)('rechecks agent authorization immediately before creating a missing repository', async () => {
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-authorization-')));
+    let initCalls = 0, authorizationCalls = 0;
+    const runner: GitWorkspaceCommand = async (_executable, args) => {
+      if (args[0] === 'init') { initCalls++; return { code: 0, stdout: '', stderr: '' }; }
+      return { code: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' };
+    };
+
+    await expect(ensureWorkspaceRepository(temporary, runner, () => { authorizationCalls++; return false; }))
+      .rejects.toThrow('no longer authorized');
+    expect(authorizationCalls).toBe(1);
+    expect(initCalls).toBe(0);
+    await expect(lstat(path.join(temporary, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
   it.runIf(canRunGit)('does not create a nested repository inside an existing parent repository', async () => {
     temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-parent-init-')));
     git(['init', '--quiet'], temporary);

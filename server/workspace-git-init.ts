@@ -139,13 +139,14 @@ export async function inspectWorkspaceRepository(workspaceRoot: string, runner: 
 
 const pendingInitializations = new Map<string, Promise<void>>();
 
-async function ensureCanonicalWorkspaceRepository(workspaceRoot: string, runner: GitWorkspaceCommand) {
+async function ensureCanonicalWorkspaceRepository(workspaceRoot: string, runner: GitWorkspaceCommand, authorizeInitialization?: () => boolean | Promise<boolean>) {
   const existing = await inspectCanonicalWorkspaceRepository(workspaceRoot, runner);
   if (existing.status === 'repository') return { created: false, workspaceRoot, repositoryRoot: existing.repositoryRoot };
 
   await canonicalWorkspaceRoot(workspaceRoot);
   const raced = await inspectCanonicalWorkspaceRepository(workspaceRoot, runner);
   if (raced.status === 'repository') return { created: false, workspaceRoot, repositoryRoot: raced.repositoryRoot };
+  if (authorizeInitialization && !await authorizeInitialization()) throw new Error('Git initialization is no longer authorized for the active workspace execution.');
 
   let initialized: GitCommandResult;
   try {
@@ -167,7 +168,7 @@ async function ensureCanonicalWorkspaceRepository(workspaceRoot: string, runner:
   return { created: samePath(result.repositoryRoot, workspaceRoot), workspaceRoot, repositoryRoot: result.repositoryRoot };
 }
 
-export async function ensureWorkspaceRepository(workspaceRoot: string, runner: GitWorkspaceCommand = runGit) {
+export async function ensureWorkspaceRepository(workspaceRoot: string, runner: GitWorkspaceCommand = runGit, authorizeInitialization?: () => boolean | Promise<boolean>) {
   const root = await canonicalWorkspaceRoot(workspaceRoot);
   const key = process.platform === 'win32' ? root.toLowerCase() : root;
   const previous = pendingInitializations.get(key);
@@ -176,7 +177,7 @@ export async function ensureWorkspaceRepository(workspaceRoot: string, runner: G
   pendingInitializations.set(key, current);
   await previous;
   try {
-    return await ensureCanonicalWorkspaceRepository(root, runner);
+    return await ensureCanonicalWorkspaceRepository(root, runner, authorizeInitialization);
   } finally {
     release();
     if (pendingInitializations.get(key) === current) pendingInitializations.delete(key);

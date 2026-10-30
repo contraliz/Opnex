@@ -182,7 +182,7 @@ export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(),
 export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never' | 'full-access';
 export const settingsSchema = z.object({
   orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
-  executionProfile:z.object({provider:z.enum(['codex','deepseek']),model:z.string().trim().min(1).max(200),effort:z.enum(['low','medium','high','xhigh','max','ultra'])}).strict().default({provider:'codex',model:'gpt-6-luna',effort:'max'}),
+  executionProfile:z.object({provider:z.enum(['codex','deepseek']),model:z.string().trim().min(1).max(200),effort:z.enum(['low','medium','high','xhigh','max','ultra'])}).strict().optional(),
   deepseekProvider:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('opencode-go'),deepseekModel:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('deepseek-v4.1-flash'),deepseekReasoningEffort:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('max'),
   approvalPolicy: z.enum(['on-request','untrusted','never','full-access']).default('on-request'),
 }).strict();

@@ -104,7 +104,7 @@ const workflowRoles:WorkflowRole[]=['router','direct','simple','orchestrator','w
 const activityRoles:ActivityRole[]=['direct','simple','orchestrator','worker'];
 function isString(value:unknown){return typeof value==='string';}
 function isExecutionProfile(value:unknown):value is ExecutionProfile{return isStoredRecord(value)&&['codex','deepseek'].includes(value.provider as string)&&isString(value.model)&&value.model.length>0&&value.model.length<=200&&['low','medium','high','xhigh','max','ultra'].includes(value.effort as string);}
-function legacyPassExecutionProfile(task:Task,pass:TaskPass,settings:Record<string,any>):ExecutionProfile|undefined{
+function legacyPassExecutionProfile(task:Task,pass:TaskPass):ExecutionProfile|undefined{
   if(isExecutionProfile(pass.executionProfile))return structuredClone(pass.executionProfile);
   const teams=[...(pass.recruitmentTeam?[pass.recruitmentTeam]:[]),...(pass.recruitmentHistory||[])];
   const deepSeekRecord=teams.flatMap(team=>[...team.workers,team.integration]).find(record=>record.deepSeekExecution||record.deepSeekRuntime||record.deepSeekPhaseRuns?.length);
@@ -117,7 +117,6 @@ function legacyPassExecutionProfile(task:Task,pass:TaskPass,settings:Record<stri
     return {provider,model:task.activeModelId,effort:task.activeEffort as ExecutionProfile['effort']};
   }
   if(deepSeekRecord){const saved=deepSeekRecord.deepSeekExecution||pass.deepSeekExecution;if(isDeepSeekExecutionProfile(saved)&&['low','medium','high','xhigh','max','ultra'].includes(saved.nativeReasoningEffort))return {provider:'deepseek',model:saved.model,effort:saved.nativeReasoningEffort as ExecutionProfile['effort']};}
-  if(pass.directThreadId||pass.simpleThreadId||pass.workerThreadId){const model=typeof settings.orchestratorModel==='string'?settings.orchestratorModel:'gpt-6-luna',effort=typeof settings.orchestratorEffort==='string'&&['low','medium','high','xhigh','max','ultra'].includes(settings.orchestratorEffort)?settings.orchestratorEffort:'max';return {provider:'codex',model,effort:effort as ExecutionProfile['effort']};}
   return undefined;
 }
 function isOptionalString(value:Record<string,any>,field:string){return value[field]===undefined||isString(value[field]);}
@@ -394,7 +393,7 @@ export function upgradeStoredState(value:any):State{
     }
     for(const pass of task.passes){
       pass.approvalPolicy=savedApprovalPolicy(pass.approvalPolicy??value.settings?.approvalPolicy);if(pass.agentContextVersion!==1)pass.agentContextVersion=0;
-      pass.executionProfile=legacyPassExecutionProfile(task,pass,legacySettings);
+      pass.executionProfile=legacyPassExecutionProfile(task,pass);
       const passLegacy=moveLegacyAgentMemFields(pass as any,{agentmemTaskId:'taskId',agentmemLease:'lease',agentmemRecordStatus:'recordStatus',agentmemRecordError:'recordError',agentmemReceiptId:'receiptId',agentmemSetupMode:'setupMode',agentmemSetupTurnId:'setupTurnId'});
       const passContextLegacy=migrateLegacyExecutionRecord(pass);if(passContextLegacy&&Object.keys(passContextLegacy).length)Object.assign(passLegacy,passContextLegacy);
       const teamLegacy=migrateLegacyTeamBinding(pass.recruitmentTeam);for(const team of pass.recruitmentHistory||[])migrateLegacyTeamBinding(team);

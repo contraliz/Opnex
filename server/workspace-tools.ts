@@ -1,4 +1,5 @@
 import type { Task, TaskPass } from './state.js';
+import { assignmentAuthorizesWorkspaceRootWrite, simpleRouteWriteRoots } from './policy.js';
 
 export type WorkspaceToolTarget={taskId:string;passId:string};
 export const workerWorkspaceTool=[{namespace:'pseudoharness',name:'workspace',description:'Open or inspect the current task’s Browser or GitHub workspace, or initialize Git in the active workspace root. Git initialization accepts no path and never creates commits or remotes.',inputSchema:{type:'object',additionalProperties:false,properties:{action:{type:'string',enum:['open_browser','open_github','open_pull_request','dock_browser','dock_github','undock','inspect_github','initialize_git_repository']},url:{type:'string',maxLength:2048}},required:['action']}}];
@@ -11,6 +12,19 @@ export function authorizesWorkerWorkspaceTool(task:Task|undefined,pass:TaskPass|
   const worker=team.workers.find(row=>row.threadId===threadId);
   if(worker)return worker.workerStage==='execute'&&['running','complete'].includes(worker.status);
   return team.integration.threadId===threadId&&team.integration.workerStage==='execute'&&['running','complete'].includes(team.integration.status);
+}
+
+export async function authorizesWorkspaceRepositoryInitialization(task:Task|undefined,pass:TaskPass|undefined,target:WorkspaceToolTarget|undefined,threadId:string){
+  if(!task||!pass||!target||!authorizesWorkerWorkspaceTool(task,pass,target,threadId))return false;
+  if(task.activeRole==='simple'){
+    const roots=await simpleRouteWriteRoots(pass.userInputs||[],task.userRoot);
+    return !!roots?.some(root=>assignmentAuthorizesWorkspaceRootWrite({write_scope:[root]},task.userRoot));
+  }
+  const team=pass.recruitmentTeam;
+  const worker=team?.workers.find(row=>row.threadId===threadId);
+  const integration=team?.integration.threadId===threadId?team.integration:undefined;
+  const assignment=worker?.assignment||integration?.assignment||pass.assignment||task.assignment;
+  return !!assignment&&assignmentAuthorizesWorkspaceRootWrite(assignment,task.userRoot);
 }
 
 export function normalizeAgentWorkspaceUrl(input:unknown){

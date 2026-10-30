@@ -20,6 +20,19 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 afterEach(()=>{cleanup();sessionStorage.clear();vi.resetAllMocks();});
 
 describe('native local Git workspace paging and routes',()=>{
+  it('shows the repository creation action when the selected workspace has no Git repository',async()=>{
+    const workspace={id:projectId,name:'project',projectRoot:'C:/repo/project',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};let status:'missing'|'repository'='missing';
+    vi.mocked(api).mockImplementation(async(url)=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.includes('/github'))return github as any;
+      if(url==='/api/git-workspace/init'){status='repository';return {created:true} as any;}
+      return {...unavailable('Choose a folder inside a Git repository to see local branches and history.'),repositoryStatus:status} as any;
+    });
+    render(<LocalGitWorkspace projectId={projectId} workspaces={[workspace]}/>);
+    fireEvent.click(await screen.findByRole('button',{name:'Create repository'}));
+    await waitFor(()=>expect(vi.mocked(api)).toHaveBeenCalledWith('/api/git-workspace/init',{projectId}));
+  });
+
   it('explains that the selected workspace root must contain the repository root',async()=>{
     vi.mocked(api).mockImplementation(async url=>{
       if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;

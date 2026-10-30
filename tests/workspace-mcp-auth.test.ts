@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
-import { authorizedWorkspaceRoot } from '../server/workspace-mcp-auth.js';
+import { authorizedWorkspaceGitInitRoot, authorizedWorkspaceRoot } from '../server/workspace-mcp-auth.js';
 
 const root=path.resolve(os.tmpdir(),'authorized-workspace');
 const scope={taskId:'task-a',passId:'pass-a',role:'worker' as const,sessionId:'worker-a'};
@@ -31,5 +31,15 @@ describe('workspace MCP authorization',()=>{
     expect(authorizedWorkspaceRoot({tasks:[task({passes:[{id:scope.passId,executionProfile:{provider:'codex'},workerStage:undefined}],workerStage:undefined})]},scope)).toBeUndefined();
     expect(authorizedWorkspaceRoot({tasks:[task()]},{...scope,sessionId:'other'})).toBeUndefined();
     expect(authorizedWorkspaceRoot({tasks:[task({userRoot:'relative/path'})]},scope)).toBeUndefined();
+  });
+
+  it('offers Git initialization only when the active DeepSeek assignment authorizes the workspace root',async()=>{
+    const assignment={write_scope:[root]};
+    const scoped=task({passes:[{id:scope.passId,workerStage:'execute',executionProfile:{provider:'deepseek'},assignment}]});
+    expect(await authorizedWorkspaceGitInitRoot({tasks:[scoped]},scope)).toBe(root);
+    const nested=task({passes:[{id:scope.passId,workerStage:'execute',executionProfile:{provider:'deepseek'},assignment:{write_scope:[path.join(root,'src')]}}]});
+    expect(await authorizedWorkspaceGitInitRoot({tasks:[nested]},scope)).toBeUndefined();
+    const readOnly=task({passes:[{id:scope.passId,workerStage:'execute',executionProfile:{provider:'deepseek'},assignment:{write_scope:[]}}]});
+    expect(await authorizedWorkspaceGitInitRoot({tasks:[readOnly]},scope)).toBeUndefined();
   });
 });
