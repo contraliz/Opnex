@@ -13,6 +13,41 @@ export const assignmentSchema = z.object({
 }).strict();
 export type Assignment = z.infer<typeof assignmentSchema>;
 
+export const forgeEffortSchema=z.enum(['low','medium','high','xhigh','max','ultra']);
+export const forgeExecutionProfileSchema=z.object({provider:z.enum(['codex','deepseek']),model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict();
+const forgeScopePaths=z.array(z.string().trim().min(1).max(1024)).max(80);
+export const forgeScopeSchema=z.object({read:forgeScopePaths,write:forgeScopePaths,knowledge:forgeScopePaths}).strict();
+export const forgeLimitsSchema=z.object({
+  maxActiveWorkers:z.number().int().min(1).max(3),
+  maxExecutionAttempts:z.number().int().min(1).max(2),
+  maxCorrectionRounds:z.number().int().min(0).max(3),
+}).strict();
+export const DEFAULT_FORGE_LIMITS={maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3} as const;
+export const MAX_FORGE_WORKITEMS=16 as const;
+export const forgeCapabilityLevelSchema=z.enum(['enforced','monitored','instruction-only','unavailable']);
+export const forgeCapabilitiesSchema=z.object({
+  filesystemWriteScope:forgeCapabilityLevelSchema,
+  knowledgeScope:forgeCapabilityLevelSchema,
+  operationBudget:forgeCapabilityLevelSchema,
+  toolAuthorization:forgeCapabilityLevelSchema,
+  cancellation:forgeCapabilityLevelSchema,
+  commitScopeValidation:forgeCapabilityLevelSchema,
+  finalMergeGate:forgeCapabilityLevelSchema,
+}).strict();
+const forgeTicketInputBaseSchema=z.object({
+  projectId:z.string().uuid(),
+  title:z.string().trim().min(1).max(120),
+  description:z.string().trim().min(1).max(12000),
+  acceptanceCriteria:z.array(text).min(1).max(30),
+  scope:forgeScopeSchema,
+  orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict(),
+  workerProfile:forgeExecutionProfileSchema,
+  skillIds:z.array(z.string().uuid()).max(12).default([]).superRefine((ids,ctx)=>{if(new Set(ids).size!==ids.length)ctx.addIssue({code:'custom',message:'Select each Forge skill only once.'});}),
+  limits:forgeLimitsSchema.partial().default({}),
+}).strict();
+export const forgeTicketInputSchema=forgeTicketInputBaseSchema.transform(input=>({...input,limits:{...DEFAULT_FORGE_LIMITS,...input.limits}}));
+export type ForgeTicketInput=z.infer<typeof forgeTicketInputSchema>;
+
 export const directAnswerSchema = z.object({
   type:z.literal('direct_answer'), answer:text, policy_basis:z.string().trim().min(1).max(400),
 }).strict();
