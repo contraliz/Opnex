@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
 
 export type ModelChoice={providerKey:string;provider:string;id:string;name:string;efforts:string[];available:boolean;availabilityNote?:string};
@@ -10,16 +10,29 @@ function preferredEffort(current:string,efforts:string[]){
 }
 
 export default function ModelPicker({label,providerKey,model,effort,choices,disabled,onChange}:Props){
-  const [open,setOpen]=useState(false),[mounted,setMounted]=useState(false),[query,setQuery]=useState('');
+  const [open,setOpen]=useState(false),[mounted,setMounted]=useState(false),[query,setQuery]=useState(''),[openBelow,setOpenBelow]=useState(false);
   const root=useRef<HTMLDivElement>(null),trigger=useRef<HTMLButtonElement>(null);
   const selected=choices.find(choice=>choice.providerKey===providerKey&&choice.id===model);
   const rows=choices.filter(choice=>`${choice.provider} ${choice.name} ${choice.id} ${choice.efforts.join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const groups=[...rows.reduce((result,choice)=>{const key=`${choice.providerKey}:${choice.provider}`;const group=result.get(key)||{key,provider:choice.provider,choices:[] as ModelChoice[]};group.choices.push(choice);result.set(key,group);return result;},new Map<string,{key:string;provider:string;choices:ModelChoice[]}>()).values()];
   const close=()=>{setOpen(false);setQuery('');};
   useEffect(()=>{if(open)setMounted(true);else if(mounted){const timer=window.setTimeout(()=>setMounted(false),105);return()=>window.clearTimeout(timer);}},[open,mounted]);
+  useLayoutEffect(()=>{
+    const container=root.current;
+    if(!open||!container||!trigger.current){container?.style.removeProperty('--model-menu-max-height');setOpenBelow(false);return;}
+    const menu=container.querySelector<HTMLElement>('.execution-model-menu');if(!menu)return;
+    const position=()=>{
+      const triggerBox=trigger.current?.getBoundingClientRect();if(!triggerBox)return;
+      const menuHeight=menu.getBoundingClientRect().height,spaceAbove=triggerBox.top,spaceBelow=window.innerHeight-triggerBox.bottom;
+      const below=spaceAbove<menuHeight+12&&spaceBelow>spaceAbove,availableSpace=(below?spaceBelow:spaceAbove)-12;
+      container.style.setProperty('--model-menu-max-height',`${Math.max(120,Math.min(380,window.innerHeight*.6,availableSpace))}px`);
+      setOpenBelow(below);
+    };
+    position();window.addEventListener('resize',position);return()=>window.removeEventListener('resize',position);
+  },[open,rows.length]);
   useEffect(()=>{if(!open)return;const onPointer=(event:PointerEvent)=>{if(root.current&&!root.current.contains(event.target as Node))close();};const onKey=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();close();trigger.current?.focus();}};document.addEventListener('pointerdown',onPointer);document.addEventListener('keydown',onKey);return()=>{document.removeEventListener('pointerdown',onPointer);document.removeEventListener('keydown',onKey);};},[open]);
   const pick=(choice:ModelChoice)=>{if(!choice.available)return;onChange(choice,preferredEffort(effort,choice.efforts));close();trigger.current?.focus();};
-  return <div className="execution-model-popover" ref={root}>
+  return <div className="execution-model-popover" ref={root} data-open-below={openBelow}>
     <button ref={trigger} type="button" className="choice-trigger execution-model-trigger" aria-label={label} title={label} aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onClick={()=>{setMounted(true);setOpen(value=>!value);}}>{selected?.name||`${model} · unavailable`}<ChevronDown size={13}/></button>
     {mounted&&<div className="execution-model-menu" data-open={open} role="dialog" aria-label={label} inert={!open}>
       <label className="execution-model-search"><Search size={13}/><input autoFocus={open} value={query} onChange={event=>setQuery(event.currentTarget.value)} placeholder="Search models" aria-label={`Search ${label.toLocaleLowerCase()}`}/></label>
