@@ -41,12 +41,13 @@ afterEach(async()=>{
 describe('optional project AgentMem adapter',()=>{
   it('builds a model MCP configuration pinned to one project without writing Codex configuration',async()=>{
     const adapter=new AgentMem();await adapter.configure();
-    const config=await adapter.modelMcpServerConfig('alpha-kb','D:/work/alpha');
-    expect(config).toMatchObject({enabled:true,env:{OPNEX_AGENTMEM_PROJECT_ID:'alpha-kb',OPNEX_AGENTMEM_PROJECT_ROOT:path.resolve('D:/work/alpha'),OPNEX_AGENTMEM_COMMAND:'fixture-agentmem'}});
+    const workspaceRoot=path.join(codexHome,'alpha-workspace');
+    const config=await adapter.modelMcpServerConfig('alpha-kb',workspaceRoot);
+    expect(config).toMatchObject({enabled:true,env:{OPNEX_AGENTMEM_PROJECT_ID:'alpha-kb',OPNEX_AGENTMEM_PROJECT_ROOT:path.resolve(workspaceRoot),OPNEX_AGENTMEM_COMMAND:'fixture-agentmem'}});
     expect(config.enabled_tools).toContain('retrieve_evidence');
     expect(config.enabled_tools).not.toContain('projects');
     expect(config.env.OPNEX_AGENTMEM_ACCESS).toBe('read-write');
-    const direct=await adapter.modelMcpServerConfig('alpha-kb','D:/work/alpha',true);
+    const direct=await adapter.modelMcpServerConfig('alpha-kb',workspaceRoot,true);
     expect(direct.env.OPNEX_AGENTMEM_ACCESS).toBe('read-only');
     expect(direct.enabled_tools).toContain('knowledge');
     expect(direct.enabled_tools).not.toContain('repository_resync');
@@ -78,10 +79,10 @@ describe('optional project AgentMem adapter',()=>{
 
   it('creates a knowledge base only through an explicit setup action and saves the returned identity',async()=>{
     const adapter=new AgentMem();await adapter.configure();
-    const id=proposedAgentMemProjectId('D:/work/new');
-    await expect(adapter.createProjectBinding(id,'D:/work/new','Knowledge base for New')).resolves.toMatchObject({id,sourceRoot:path.resolve('D:/work/new')});
+    const workspaceRoot=path.join(codexHome,'new-workspace');const id=proposedAgentMemProjectId(workspaceRoot);
+    await expect(adapter.createProjectBinding(id,workspaceRoot,'Knowledge base for New')).resolves.toMatchObject({id,sourceRoot:path.resolve(workspaceRoot)});
     expect(fake.calls.filter(row=>row.name==='projects').map(row=>row.args.action)).toEqual(['list','register','list']);
-    expect(fake.calls.find(row=>row.args.action==='register')?.args).toMatchObject({project_id:id,root:'D:\\work\\new'});
+    expect(fake.calls.find(row=>row.args.action==='register')?.args).toMatchObject({project_id:id,root:path.resolve(workspaceRoot)});
   });
 
   it('reports duplicate root registrations instead of guessing which ID to use',async()=>{
