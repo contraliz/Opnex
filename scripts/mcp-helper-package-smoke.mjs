@@ -68,10 +68,12 @@ try{
   const agentmemEnv={PSEUDOHARNESS_AGENTMEM_PROJECT_ID:'isolated-project',PSEUDOHARNESS_AGENTMEM_PROJECT_ROOT:repositoryRoot,PSEUDOHARNESS_AGENTMEM_REPOSITORY_ID:'isolated-repository',PSEUDOHARNESS_AGENTMEM_COMMAND:process.execPath,PSEUDOHARNESS_AGENTMEM_ARGS:JSON.stringify([fixture]),PSEUDOHARNESS_AGENTMEM_DATA_DIR:data};
   const {client:agentmem}=await connect(launch,agentmemEnv);
   try{
+    const statusResult=await agentmem.callTool({name:'agentmem_status',arguments:{}}),status=JSON.parse(statusResult.content.find(block=>block.type==='text').text);
+    if(status.available!==true||status.projectId!=='isolated-project'||status.projectRoot!==repositoryRoot)throw new Error(`The packaged AgentMem gateway did not verify its selected project identity: ${JSON.stringify(status)}`);
     const tools=await agentmem.listTools(),result=await agentmem.callTool({name:'repository_search',arguments:{query:'runtime helper'}});
     const returned=JSON.parse(result.content.find(block=>block.type==='text').text);
-    const verified=tools.tools.some(tool=>tool.name==='repository_search')&&returned.project_id==='isolated-project'&&returned.repository_id==='isolated-repository'&&returned.query==='runtime helper';
-    console.log(JSON.stringify({helper:'project-index-gateway',command:launch.command,tools:tools.tools.map(tool=>tool.name),scopedReadReturned:returned,verified}));
+    const verified=status.available===true&&tools.tools.some(tool=>tool.name==='repository_search')&&returned.project_id==='isolated-project'&&returned.repository_id==='isolated-repository'&&returned.query==='runtime helper';
+    console.log(JSON.stringify({helper:'project-index-gateway',command:launch.command,identityVerified:status.available,tools:tools.tools.map(tool=>tool.name),scopedReadReturned:returned,verified}));
     if(!verified)failures++;
   }finally{await agentmem.close();}
 }catch(error){console.error(error);failures++;}
