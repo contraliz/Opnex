@@ -3,7 +3,7 @@ import { safeError } from './errors.js';
 import { assertTaskCanResumeInProject } from './project-identity.js';
 import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, qaAuditJsonSchema, qaAuditOutcomeSchema, receiptSchema, recruitmentToolSchema, recruitmentWorkersSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
 import { addMessage, beginPass, cancelRecruitmentTeamState, claimRecruitmentCompletion, claimRecruitmentIntegration, currentPass, executionProfileForSettings, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, recruitmentTeamsForPass, sealRecruitmentTeam, terminalRecruitmentWorkerStatuses, type AgentReceiptRecord, type DeepSeekExecutionProfile, type DeepSeekPhaseRun, type DeepSeekProviderEventSummary, type ExecutionProfile, type QAAuditRound, type QAFinding, type QualityLoop, type ReceiptProvenance, type RecruitmentIntegration, type RecruitmentTeam, type RecruitmentWorker, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
-import { assignmentWriteRoots, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
+import { assignmentAuthorizesWorkspaceRootWrite, assignmentWriteRoots, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
 import { applyCodexReasoningNotification, beginReasoningTurn } from './reasoning.js';
 import { applyPassGitDiffUpdate } from './pass-git-diff.js';
@@ -21,7 +21,7 @@ import { qualityCorrectionPlannerInFlight, qualityCorrectionPlannerMayHaveBeenSe
 import { createHash, randomUUID } from 'node:crypto';
 import { loadConfiguredSkill, parseWorkerStructuredOutput, workerExecutePrompt, workerOutcomeResponseFormatPrompt, type WorkerStage } from './worker-staging.js';
 import { readGitHubWorkspace } from './github.js';
-import { authorizesWorkerWorkspaceTool, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from './workspace-tools.js';
+import { authorizesWorkerWorkspaceTool, authorizesWorkspaceRepositoryInitialization, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from './workspace-tools.js';
 import { recordAgentReceipt } from './receipt-provenance.js';
 import { createToolCallLog, interruptRunningToolCalls, recordToolCall, type ToolCallStatus } from './tool-call-log.js';
 import { captureTurnSourceFingerprint, compareTurnSourceFingerprints, type TurnSourceFingerprint } from './turn-source-snapshot.js';
@@ -328,12 +328,12 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.activeTurnId=id;t.activeRole=role;if(id&&(role==='direct'||role==='simple'))beginReasoningTurn(t,role,threadId!,id,modelId,effort);});
   if(id)await processDeferred(task.id,id);
 }
-async function prepareRoutedDeepSeekProfile(task:Task,pass:TaskPass,role:'direct'|'simple'|'worker',permission:DeepSeekHarnessPermissionGrant,sessionId:string){
+async function prepareRoutedDeepSeekProfile(task:Task,pass:TaskPass,role:'direct'|'simple'|'worker',permission:DeepSeekHarnessPermissionGrant,sessionId:string,writeScope:string[]){
   const profile=pass.deepSeekExecution;if(!profile||profile.provider!=='opencode-go')throw new DeepSeekHarnessError('unsupported-capability','The saved DeepSeek Harness profile does not match the verified OpenCode Go provider. No alternate provider was started.');
   const skillConfig=skillLibraryMcpServerConfig({taskId:task.id,role});const skillTools=Array.isArray(skillConfig.enabled_tools)?skillConfig.enabled_tools.filter((name):name is string=>typeof name==='string'):[];
   const mcpServers:DeepSeekHarnessMcpServerConfig[]=[{serverName:'pseudoharness_skills',command:String(skillConfig.command),args:skillConfig.args as string[],cwd:String(skillConfig.cwd),env:skillConfig.env as Record<string,string>}];
   const expectedMcpTools=skillTools.map(name=>`mcp__pseudoharness_skills__${name}`);
-  if(role==='simple'||role==='worker'){const config=workspaceMcpServerConfig({taskId:task.id,passId:pass.id,role,sessionId});mcpServers.push({serverName:'pseudoharness_workspace' as const,command:String(config.command),args:config.args as string[],cwd:String(config.cwd),env:config.env as Record<string,string>});expectedMcpTools.push('mcp__pseudoharness_workspace__initialize_git_repository');}
+  if((role==='simple'||role==='worker')&&assignmentAuthorizesWorkspaceRootWrite({write_scope:writeScope},task.userRoot)){const config=workspaceMcpServerConfig({taskId:task.id,passId:pass.id,role,sessionId});mcpServers.push({serverName:'pseudoharness_workspace' as const,command:String(config.command),args:config.args as string[],cwd:String(config.cwd),env:config.env as Record<string,string>});expectedMcpTools.push('mcp__pseudoharness_workspace__initialize_git_repository');}
   const digest=createHash('sha256').update([task.id,pass.id,role,permission.permissionMode,path.resolve(task.userRoot),profile.provider,profile.model,profile.nativeReasoningEffort].join('\n')).digest('hex').slice(0,32),profileName=`pseudoharness-${digest}`;
   const template=deepSeekSdkLaunch??discoverWindowsDeepSeekHarnessSdkLaunch();deepSeekSdkLaunch=template;
   const prepared=await prepareDeepSeekHarnessTaskProfile({dshHome:path.join(stateDirectory(),'deepseek-profiles',profileName),credentialStorePath:resolveDeepSeekHarnessCredentialStorePath(),profileName,provider:profile.provider,launch:template,mcpServers});
@@ -347,7 +347,7 @@ async function startDeepSeekRoutedTurn(task:Task,role:'direct'|'simple'|'worker'
   if(pass.agentContextVersion!==1)throw new Error('This pass predates the current Opnex role configuration. Send a follow-up to start a fresh pass.');
   const carried=attachmentUserInput(pass.attachments||[]);if(carried.images.length)throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness image attachments have not been verified by the installed SDK. No turn was started; choose a provider that supports these attachments.');
   const threadKey=role==='direct'?'directThreadId':role==='simple'?'simpleThreadId':'workerThreadId',existingThread=task[threadKey];if(existingThread)throw new DeepSeekHarnessError('interrupted','The saved DeepSeek Harness thread is not attached to this kernel and will not be resumed automatically. Start a fresh pass after checking the paused task.');
-  const threadId=randomUUID(),turnId=randomUUID(),isolated=await prepareRoutedDeepSeekProfile(task,pass,role,permission,threadId);
+  const threadId=randomUUID(),turnId=randomUUID(),isolated=await prepareRoutedDeepSeekProfile(task,pass,role,permission,threadId,writeScope);
   const selected=pass.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (immutable pass snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';
   const context=`CURRENT OPERATION ONLY (use history to resolve references; do not repeat old work):\n${JSON.stringify(pass.userInputs)}\n\nPRIOR CONVERSATION CONTEXT:\n${JSON.stringify(buildPriorConversationContext(task.passes,pass.id))}\n\nCURRENT WORKSPACE ROOT: ${task.userRoot}\n`;
   const prompt=role==='direct'
@@ -575,12 +575,13 @@ async function prepareRecruitmentDeepSeekProfile(task:Task,pass:TaskPass,record:
   if(!selection||selection.kind!=='deepseek-harness-sdk'||selection.provider!=='opencode-go')throw new DeepSeekHarnessError('unsupported-capability','The persisted worker provider is not the verified OpenCode Go route. No fallback was started.');
   const skillsConfig=skillLibraryMcpServerConfig({taskId:task.id,role:'worker'});
   const skillTools=Array.isArray(skillsConfig.enabled_tools)?skillsConfig.enabled_tools.filter((name):name is string=>typeof name==='string'):[];
-  const workspaceConfig=workspaceMcpServerConfig({taskId:task.id,passId:pass.id,role:'worker',sessionId});
-  const expectedMcpTools=[...skillTools.map(name=>`mcp__pseudoharness_skills__${name}`),'mcp__pseudoharness_workspace__initialize_git_repository'].sort();
+  const mayInitializeGit=assignmentAuthorizesWorkspaceRootWrite(record.assignment,task.userRoot),mcpServers:DeepSeekHarnessMcpServerConfig[]=[{serverName:'pseudoharness_skills',command:String(skillsConfig.command),args:skillsConfig.args as string[],cwd:String(skillsConfig.cwd),env:skillsConfig.env as Record<string,string>}];
+  const expectedMcpTools=skillTools.map(name=>`mcp__pseudoharness_skills__${name}`);
+  if(mayInitializeGit){const workspaceConfig=workspaceMcpServerConfig({taskId:task.id,passId:pass.id,role:'worker',sessionId});mcpServers.push({serverName:'pseudoharness_workspace',command:String(workspaceConfig.command),args:workspaceConfig.args as string[],cwd:String(workspaceConfig.cwd),env:workspaceConfig.env as Record<string,string>});expectedMcpTools.push('mcp__pseudoharness_workspace__initialize_git_repository');}
   const owner=integration?'integration':(record as RecruitmentWorker).workerId;
   const digest=createHash('sha256').update([task.id,pass.id,owner,permission.permissionMode,path.resolve(workspace),selection.provider,selection.model,selection.nativeReasoningEffort].join('\n')).digest('hex').slice(0,32);
   const profileName=`pseudoharness-${digest}`;
-  const prepared=await prepareDeepSeekHarnessTaskProfile({dshHome:path.join(stateDirectory(),'deepseek-profiles',profileName),credentialStorePath:resolveDeepSeekHarnessCredentialStorePath(),profileName,provider:selection.provider,launch:template,mcpServers:[{serverName:'pseudoharness_skills',command:String(skillsConfig.command),args:skillsConfig.args as string[],cwd:String(skillsConfig.cwd),env:skillsConfig.env as Record<string,string>},{serverName:'pseudoharness_workspace',command:String(workspaceConfig.command),args:workspaceConfig.args as string[],cwd:String(workspaceConfig.cwd),env:workspaceConfig.env as Record<string,string>} ]});
+  const prepared=await prepareDeepSeekHarnessTaskProfile({dshHome:path.join(stateDirectory(),'deepseek-profiles',profileName),credentialStorePath:resolveDeepSeekHarnessCredentialStorePath(),profileName,provider:selection.provider,launch:template,mcpServers});
   return {launch:applyDeepSeekHarnessTaskProfileLaunch(template,prepared),profileName,expectedMcpTools,configuredMcpServers:[...prepared.configuredMcpServers]};
 }
 function assistantMessageText(event:any){
@@ -1357,7 +1358,9 @@ async function onServerRequest(id:string|number,method:string,params:any,client:
       if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(key=>!['action','url'].includes(key))||typeof args.action!=='string'||!['open_browser','open_github','open_pull_request','dock_browser','dock_github','undock','inspect_github','initialize_git_repository'].includes(args.action)||args.url!==undefined&&(typeof args.url!=='string'||args.url.length>2048))throw new Error('The workspace action arguments are invalid.');
       if(action==='initialize_git_repository'){
         if(Object.keys(args).some(key=>key!=='action'))throw new Error('Git initialization accepts no directory or repository arguments.');
-        const result=await ensureWorkspaceRepository(task.userRoot),active=getTask(task.id),activePass=active?.passes?.find(row=>row.id===target.passId);
+        const authorizeInitialization=async()=>{const active=getTask(task.id),activePass=active?.passes?.find(row=>row.id===target.passId);return authorizesWorkspaceRepositoryInitialization(active,activePass,target,threadId);};
+        if(!await authorizeInitialization())throw new Error('Git initialization requires write authorization for the complete workspace root.');
+        const result=await ensureWorkspaceRepository(task.userRoot,undefined,authorizeInitialization),active=getTask(task.id),activePass=active?.passes?.find(row=>row.id===target.passId);
         if(!authorizesWorkerWorkspaceTool(active,activePass,target,threadId))throw new Error('The active task changed during Git initialization. No additional workspace action was applied.');
         const role=passThreadRole(pass,threadId)||'worker',turnId=typeof params?.turnId==='string'?params.turnId:typeof task.activeTurnId==='string'?task.activeTurnId:'';
         if(turnId)await mutate(state=>{const live=state.tasks.find(row=>row.id===task.id),saved=live?.passes?.find(row=>row.id===target.passId);if(!saved)return;const recruited=recruitmentTarget(live!,threadId);recordToolObservation(saved,{provider:'codex',agentId:recruited?(recruited.integration?`integrator:${recruited.team.teamId}`:recruited.record.workerId):role,threadId,turnId,callId:String(params?.callId||params?.itemId||id),name:'Initialize Git repository',type:'workspace action',agentRole:recruited?(recruited.integration?'integrator':`worker · ${recruited.record.name}`):role,source:'application',lifecycle:'completed',summary:result.created?'Initialized in the active workspace root.':'The active workspace is already inside a Git repository.'});});
@@ -1605,7 +1608,7 @@ export async function cancelTask(taskId:string){
 }
 export async function saveSettings(input:any){
   const {settingsSchema}=await import('./contracts.js');const v=settingsSchema.parse(input);
-  await mutate(s=>{s.settings={...v};});await refreshModels();return runtimeStatus();
+  await mutate(s=>{s.settings={...v,executionProfile:v.executionProfile||executionProfileForSettings(s.settings)};});await refreshModels();return runtimeStatus();
 }
 export function getRuntimeStatus(){return runtimeStatus();}
 export async function refreshConnections(){try{await codex.connect();await refreshModels();}catch(e){codexState='disconnected';codexError=safeError(e);}return runtimeStatus();}

@@ -49,6 +49,7 @@ describe('project-owned workspaces',()=>{
       expect(migrated.tasks[0]).toMatchObject({id:'alpha-one',messages:expected.tasks[0]?.messages,workerThreadId:'worker-alpha',requiresFreshSession:true,legacyAgentMem:{projectId:'alpha-kb'}});
       expect(migrated.tasks[0]).not.toHaveProperty('agentmemProjectId');
       expect(migrated.tasks[0].passes?.[0]).toMatchObject({id:'pass-alpha-1',workerThreadId:'worker-alpha',processedTurns:['turn-worker'],receipt:preservedPass.receipt,agentmemAudit:preservedPass.agentmemAudit});
+      expect(migrated.tasks[0].passes?.[0]?.executionProfile).toBeUndefined();
     }finally{rmSync(temp,{recursive:true,force:true});}
   });
 

@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ensureWorkspaceRepository } from './workspace-git-init.js';
 import { stateDirectory } from './paths.js';
-import { authorizedWorkspaceRoot } from './workspace-mcp-auth.js';
+import { authorizedWorkspaceGitInitRoot } from './workspace-mcp-auth.js';
 
 const taskId=process.env.OPNEX_WORKSPACE_TASK_ID||'';
 const passId=process.env.OPNEX_WORKSPACE_PASS_ID||'';
@@ -17,7 +17,7 @@ const tool={name:'initialize_git_repository',description:'Initialize or inspect 
 async function currentWorkspaceRoot(){
   try{
     const state=JSON.parse(await readFile(path.join(stateDirectory(),'state.json'),'utf8'));
-    return authorizedWorkspaceRoot(state,{taskId,passId,role:role as 'simple'|'worker',sessionId});
+    return await authorizedWorkspaceGitInitRoot(state,{taskId,passId,role:role as 'simple'|'worker',sessionId});
   }catch{return undefined;}
 }
 
@@ -27,7 +27,7 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   try{
     const root=await currentWorkspaceRoot();if(!root)throw new Error('The Git initialization tool is not scoped to the active workspace execution.');
     if(request.params.name!=='initialize_git_repository'||Object.keys(request.params.arguments||{}).length)throw new Error('The Git tool accepts no arguments; it always uses the active workspace root.');
-    const result=await ensureWorkspaceRepository(root);
+    const result=await ensureWorkspaceRepository(root,undefined,async()=>!!await currentWorkspaceRoot());
     return {content:[{type:'text',text:JSON.stringify({created:result.created,workspaceRoot:result.workspaceRoot,repositoryRoot:result.repositoryRoot})}]};
   }catch(error){return {isError:true,content:[{type:'text',text:error instanceof Error?error.message:'Workspace Git initialization failed.'}]};}
 });

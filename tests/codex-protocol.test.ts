@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream';
 import path from 'node:path';
 import { AppServer, AppServerRequestError, approvalResponse, assertAgentRuntimeConfig, assertInstructionIsolation, appAgentBaseInstructions, appAgentConfig, buildOrchestratorDeveloperInstructions, makeAppServerUserInput, makeThreadParams, makeThreadResumeParams, makeTurnParams, normalCodexSqliteHome } from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
-import { authorizesWorkerWorkspaceTool, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from '../server/workspace-tools.js';
+import { authorizesWorkerWorkspaceTool, authorizesWorkspaceRepositoryInitialization, normalizeAgentWorkspaceUrl, workerWorkspaceTool, workspaceToolRequiresDesktop } from '../server/workspace-tools.js';
 
 describe('Codex approval and turn configuration',()=>{
   it('injects only the generic saved-skills server and leaves host MCP configuration external',()=>{
@@ -35,6 +35,7 @@ describe('Codex approval and turn configuration',()=>{
     const base={orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low'};
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
     expect(settingsSchema.parse(base)).toMatchObject({deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'});
+    expect(settingsSchema.parse(base)).not.toHaveProperty('executionProfile');
     for(const approvalPolicy of ['on-request','untrusted','never','full-access'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
     expect(settingsSchema.safeParse({...base,approvalPolicy:'custom'}).success).toBe(false);
     expect(settingsSchema.safeParse({...base,projectRoot:'D:/repo'}).success).toBe(false);
@@ -65,6 +66,14 @@ describe('Codex approval and turn configuration',()=>{
     expect(()=>normalizeAgentWorkspaceUrl('https://github.com/org/repo?access_token=secret')).toThrow('authentication parameters');
     expect(()=>normalizeAgentWorkspaceUrl('https://user:password@example.com')).toThrow('credentials');
     expect(workspaceToolRequiresDesktop('open_browser')).toBe(true);expect(workspaceToolRequiresDesktop('inspect_github')).toBe(false);
+  });
+  it('requires full workspace-root write scope before the agent may initialize Git',async()=>{
+    const task:any={id:'task',currentPassId:'pass',phase:'worker_running',workerStage:'execute',activeRole:'worker',activeTurnId:'turn',workerThreadId:'worker-thread',userRoot:'D:/repo'};const target={taskId:'task',passId:'pass'};
+    const nestedPass:any={id:'pass',workerStage:'execute',executionProfile:{provider:'codex'},assignment:{write_scope:['D:/repo/src']}};
+    expect(await authorizesWorkspaceRepositoryInitialization(task,nestedPass,target,'worker-thread')).toBe(false);
+    const rootPass:any={...nestedPass,assignment:{write_scope:['D:/repo']}};
+    expect(await authorizesWorkspaceRepositoryInitialization(task,rootPass,target,'worker-thread')).toBe(true);
+    expect(await authorizesWorkspaceRepositoryInitialization({...task,phase:'routing',activeRole:'router',workerThreadId:undefined},rootPass,target,'router-thread')).toBe(false);
   });
   it('gives QA a distinct read-only thread config with external MCP, plugins, apps, and dynamic tools disabled',()=>{
     const qa=makeThreadParams({role:'qa',root:'/tmp/project',model:'gpt-6.1-terra',approvalPolicy:'full-access',dynamicTools:workerWorkspaceTool,skillsMcpConfig:{command:'skills'},disabledMcpServerNames:['github','linear']});

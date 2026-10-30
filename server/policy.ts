@@ -42,6 +42,10 @@ export function assignmentWriteRoots(assignment:Pick<Assignment,'write_scope'>,p
   }
   return [...new Set(result)];
 }
+export function assignmentAuthorizesWorkspaceRootWrite(assignment:Pick<Assignment,'write_scope'>,projectRoot:string){
+  const root=path.resolve(projectRoot),rootKey=process.platform==='win32'?root.toLowerCase():root;
+  return assignmentWriteRoots(assignment,root).some(candidate=>{const candidatePath=path.resolve(candidate);return (process.platform==='win32'?candidatePath.toLowerCase():candidatePath)===rootKey;});
+}
 
 /**
  * A simple route is writable only when the human explicitly names one or more
