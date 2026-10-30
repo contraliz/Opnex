@@ -18,14 +18,12 @@ function cdp(target){let id=0;const pending=new Map();const socket=new WebSocket
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function waitFor(read,condition,label,timeout=25_000){const end=Date.now()+timeout;let lastError;while(Date.now()<end){try{const value=await read();if(condition(value))return value;}catch(error){lastError=error;}if(child?.exitCode!==null&&child?.exitCode!==undefined)throw new Error(`Electron exited with code ${child.exitCode} while waiting for ${label}.`);await sleep(200);}throw new Error(`Timed out waiting for ${label}.${lastError?` Last error: ${lastError}`:''}`);}
 async function resizeApp(client,width,height){
-  const targetWidth=Math.max(720,width)-14,targetHeight=Math.max(620,height)-36;
+  const targetWidth=Math.max(720,width),targetHeight=Math.max(620,height);
   const emulate=async()=>{await client.send('Emulation.setDeviceMetricsOverride',{width:targetWidth,height:targetHeight,deviceScaleFactor:1,mobile:false});emulatedViewport=true;await waitFor(()=>evalValue(client,'innerWidth'),value=>value===targetWidth,`${width}×${height}px emulated Electron viewport`,3000);};
   if(emulatedViewport&&width<1440){await emulate();await sleep(100);return;}
   if(emulatedViewport){await client.send('Emulation.clearDeviceMetricsOverride');emulatedViewport=false;}
-  const before=await evalValue(client,`window.opnexDesktop.interactionTest.resize({width:${width},height:${height}})`);
-  if(Math.abs(before-targetWidth)<3){await sleep(100);return;}
-  let prior=before,stable=0,changed=false;
-  try{await waitFor(()=>evalValue(client,'innerWidth'),value=>{if(value!==before)changed=true;if(value===prior)stable++;else stable=0;prior=value;return changed&&stable>=2;},`${width}×${height}px Electron viewport`,2000);}
+  await evalValue(client,`window.opnexDesktop.interactionTest.resize({width:${width},height:${height}})`);
+  try{await waitFor(()=>evalValue(client,'({width:innerWidth,height:innerHeight})'),value=>value.width===targetWidth&&Math.abs(value.height-targetHeight)<=3,`${width}×${height}px Electron viewport`,2000);}
   catch{await emulate();}
   await sleep(100);
 }
@@ -198,7 +196,7 @@ try{
   await checkBrowserToolbar(appClient,'embedded browser after fixture navigation');await saveScreenshot(appClient,'electron-browser-toolbar-peer.png');
   if(emulatedViewport){await appClient.send('Emulation.clearDeviceMetricsOverride');emulatedViewport=false;}
   await evalValue(appClient,'window.pseudoharnessDesktop.interactionTest.resize({width:1440,height:960})');
-  await waitFor(()=>evalValue(appClient,'innerWidth'),value=>value===1426,'native 1440×960 browser-bounds viewport',5000);await sleep(250);
+  await waitFor(()=>evalValue(appClient,'({width:innerWidth,height:innerHeight})'),value=>value.width===1440&&Math.abs(value.height-960)<=3,'native 1440×960 browser-bounds viewport',5000);await sleep(250);
   if(emulatedViewport)throw new Error('Native BrowserView bounds must be checked without CDP viewport emulation.');
   const sidebarCollapsed=await evalValue(appClient,"document.querySelector('.app-shell').classList.contains('sidebar-collapsed')");if(sidebarCollapsed){await evalValue(appClient,"document.querySelector('.rail-toggle').click();true");await waitFor(()=>evalValue(appClient,"document.querySelector('.app-shell').classList.contains('sidebar-collapsed')"),value=>value===false,'browser sidebar expanded');}
   const nativeBrowserBeforeSidebar=await measureNativeBrowser(appClient);
