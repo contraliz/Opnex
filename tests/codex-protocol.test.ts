@@ -69,12 +69,13 @@ describe('Codex approval and turn configuration',()=>{
     expect(workspaceToolRequiresDesktop('open_browser')).toBe(true);expect(workspaceToolRequiresDesktop('inspect_github')).toBe(false);
   });
   it('requires full workspace-root write scope before the agent may initialize Git',async()=>{
-    const task:any={id:'task',currentPassId:'pass',phase:'worker_running',workerStage:'execute',activeRole:'worker',activeTurnId:'turn',workerThreadId:'worker-thread',userRoot:'D:/repo'};const target={taskId:'task',passId:'pass'};
-    const nestedPass:any={id:'pass',workerStage:'execute',executionProfile:{provider:'codex'},assignment:{write_scope:['D:/repo/src']}};
+    const root=path.resolve('repo'),nestedRoot=path.join(root,'src');
+    const task:any={id:'task',currentPassId:'pass',phase:'worker_running',workerStage:'execute',activeRole:'worker',activeTurnId:'turn',workerThreadId:'worker-thread',userRoot:root};const target={taskId:'task',passId:'pass'};
+    const nestedPass:any={id:'pass',workerStage:'execute',executionProfile:{provider:'codex'},assignment:{write_scope:[nestedRoot]}};
     expect(await authorizesWorkspaceRepositoryInitialization(task,nestedPass,target,'worker-thread')).toBe(false);
-    const rootPass:any={...nestedPass,assignment:{write_scope:['D:/repo']}};
+    const rootPass:any={...nestedPass,assignment:{write_scope:[root]}};
     expect(await authorizesWorkspaceRepositoryInitialization(task,rootPass,target,'worker-thread')).toBe(true);
-    const recruitedPass:any={...rootPass,recruitmentTeam:{sealed:true,passId:'pass',workers:[{workerId:'worker-a',threadId:'worker-thread',status:'running',workerStage:'execute',assignment:{write_scope:['D:/repo']}}],integration:{status:'queued',branch:'recruitment/task/integration',worktreeRoot:'D:/task/integration',assignment:{write_scope:['D:/repo']}}}};
+    const recruitedPass:any={...rootPass,recruitmentTeam:{sealed:true,passId:'pass',workers:[{workerId:'worker-a',threadId:'worker-thread',status:'running',workerStage:'execute',assignment:{write_scope:[root]}}],integration:{status:'queued',branch:'recruitment/task/integration',worktreeRoot:'D:/task/integration',assignment:{write_scope:[root]}}}};
     expect(await authorizesWorkspaceRepositoryInitialization({...task,workerThreadId:undefined,workerStage:undefined},recruitedPass,target,'worker-thread')).toBe(false);
     expect(await authorizesWorkspaceRepositoryInitialization({...task,phase:'routing',activeRole:'router',workerThreadId:undefined},rootPass,target,'router-thread')).toBe(false);
   });

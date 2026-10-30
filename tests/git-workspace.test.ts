@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,7 +44,7 @@ describe('local Git and GitHub workspace',()=>{
   });
 
   it('bounds pagination and shows an existing parent repository for the selected folder',async()=>{
-    const root=await repository();const nested=path.join(root,'nested');await mkdir(nested);
+    const root=await realpath(await repository());const nested=path.join(root,'nested');await mkdir(nested);
     const parentRepository=await readGitWorkspace(nested);expect(parentRepository).toMatchObject({available:true,authorizedRoot:nested,repositoryRoot:root});
     await expect(readGitWorkspace(root,-1)).rejects.toThrow(/between 0 and 9999/);
     await expect(readGitWorkspace(root,10000)).rejects.toThrow(/between 0 and 9999/);
