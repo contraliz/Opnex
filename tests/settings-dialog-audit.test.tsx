@@ -43,7 +43,7 @@ describe('Settings audit regressions',()=>{
     const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
     const opener=screen.getByRole('button',{name:'Settings'});await user.click(opener);
     const dialog=await screen.findByRole('dialog',{name:'Settings'});
-    expect(document.activeElement).toBe(within(dialog).getByRole('textbox',{name:'DeepSeek Harness provider'}));
+    expect(document.activeElement).toBe(within(dialog).getByRole('button',{name:'Worker model'}));
     for(let index=0;index<2;index++)await user.tab({shift:true});
     expect(dialog.contains(document.activeElement)).toBe(true);
     expect(document.activeElement).toBe(within(dialog).getByRole('button',{name:'Save settings'}));
@@ -88,40 +88,41 @@ describe('Settings audit regressions',()=>{
     const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
     const opener=screen.getByRole('button',{name:'Settings'});await user.click(opener);
     let dialog=await screen.findByRole('dialog',{name:'Settings'});
-    let model=within(dialog).getByRole('textbox',{name:'DeepSeek Harness model'}) as HTMLInputElement;
-    expect(model.value).toBe('deepseek-v4.1-flash');
-    await user.type(model,'cancelled-model-draft',{initialSelectionStart:0,initialSelectionEnd:model.value.length});
+    let model=within(dialog).getByRole('button',{name:'Worker model'});
+    expect(model.textContent).toContain('GPT-6 Luna');
+    await user.click(model);await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
+    expect(model.textContent).toContain('DeepSeek V4.1 Flash');
     await user.click(within(dialog).getByRole('button',{name:'Cancel'}));
     await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Settings'})).toBeNull());
 
     await user.click(opener);dialog=await screen.findByRole('dialog',{name:'Settings'});
-    model=within(dialog).getByRole('textbox',{name:'DeepSeek Harness model'}) as HTMLInputElement;
-    expect(model.value).toBe('deepseek-v4.1-flash');
-    await user.type(model,'failed-save-model',{initialSelectionStart:0,initialSelectionEnd:model.value.length});failSettingsSave=true;
+    model=within(dialog).getByRole('button',{name:'Worker model'});
+    expect(model.textContent).toContain('GPT-6 Luna');
+    await user.click(model);await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));failSettingsSave=true;
     await user.click(within(dialog).getByRole('button',{name:'Save settings'}));
     await waitFor(()=>expect(within(dialog).getByRole('button',{name:'Save settings'}).textContent).toBe('Save settings'));
     expect(screen.getByRole('dialog',{name:'Settings'})).toBeTruthy();
-    expect((within(dialog).getByRole('textbox',{name:'DeepSeek Harness model'}) as HTMLInputElement).value).toBe('failed-save-model');
-    expect(serverState.settings.deepseekModel).toBe('deepseek-v4.1-flash');
+    expect(within(dialog).getByRole('button',{name:'Worker model'}).textContent).toContain('DeepSeek V4.1 Flash');
+    expect(serverState.settings.executionProfile).toBeUndefined();
 
     failSettingsSave=false;
-    await user.type(model,'successful-save-model',{initialSelectionStart:0,initialSelectionEnd:model.value.length});
     await user.click(within(dialog).getByRole('button',{name:'Save settings'}));
     await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Settings'})).toBeNull());
-    expect(serverState.settings.deepseekModel).toBe('successful-save-model');
+    expect(serverState.settings.executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
+    expect(serverState.settings.deepseekProvider).toBe('opencode-go');
     await user.click(opener);dialog=await screen.findByRole('dialog',{name:'Settings'});
-    expect((within(dialog).getByRole('textbox',{name:'DeepSeek Harness model'}) as HTMLInputElement).value).toBe('successful-save-model');
+    expect(within(dialog).getByRole('button',{name:'Worker model'}).textContent).toContain('DeepSeek V4.1 Flash');
   });
 
   it('preserves active edits when a separate settings field changes in a live state update',async()=>{
     const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
     await user.click(screen.getByRole('button',{name:'Settings'}));
     const dialog=await screen.findByRole('dialog',{name:'Settings'});
-    const model=within(dialog).getByRole('textbox',{name:'DeepSeek Harness model'}) as HTMLInputElement;
-    await user.type(model,'local-unsaved-model',{initialSelectionStart:0,initialSelectionEnd:model.value.length});
+    const model=within(dialog).getByRole('button',{name:'Worker model'});
+    await user.click(model);await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
     const externalState={...serverState,settings:{...serverState.settings,orchestratorEffort:'high'}};
     act(()=>eventSource.onmessage({data:JSON.stringify({state:externalState,runtime:fixture.runtime})}));
-    expect((within(dialog).getByRole('textbox',{name:'DeepSeek Harness model'}) as HTMLInputElement).value).toBe('local-unsaved-model');
+    expect(within(dialog).getByRole('button',{name:'Worker model'}).textContent).toContain('DeepSeek V4.1 Flash');
   });
 
   it('lets ChoicePopover Escape close only the menu before Settings, including its Composer caller',async()=>{

@@ -479,7 +479,7 @@ export default function App() {
     });
     return settingsQueue.current;
   };
-  const updateExecutionProfile=(profile:ExecutionProfile)=>void updateSettings({executionProfile:profile,...(profile.provider==='deepseek'?{deepseekModel:profile.model,deepseekReasoningEffort:profile.effort}:{})});
+  const updateOrchestratorProfile=(profile:ExecutionProfile)=>void updateSettings({orchestratorModel:profile.model,orchestratorEffort:profile.effort});
   const renameSession = async (taskId: string, title: string) => {
     try {
       await api('/api/tasks/' + taskId + '/rename', { title });
@@ -629,6 +629,7 @@ export default function App() {
     const files = pendingAttachments[tab] || [];
     const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
     const disabled = (!value.trim() && !files.length) || !!sendingTabs[tab] || !runtime || (!task&&(!selectedProject||selectedProject.needsLocation));
+    const selectedOrchestrator:ExecutionProfile={provider:'codex',model:state?.settings.orchestratorModel||fallbackSettings.orchestratorModel,effort:(state?.settings.orchestratorEffort||fallbackSettings.orchestratorEffort) as ExecutionProfile['effort']};
     return <Composer
       value={value}
       setValue={next => setDrafts(current => ({ ...current, [tab]: next }))}
@@ -636,15 +637,13 @@ export default function App() {
       disabled={disabled}
       hint={task?.phase === 'escalated' ? 'A decision will be sent to this session’s orchestrator…' : !task&&!selectedProject ? 'Choose or create a workspace before starting a session.' : !task&&selectedProject?.needsLocation ? 'Choose a working directory for this workspace before starting a session.' : 'Ask a question or describe work for the router to classify.'}
       inputRef={tabInputRef(tab)}
-      executionProfile={state?.settings.executionProfile||fallbackSettings.executionProfile!}
+      executionProfile={selectedOrchestrator}
       projectId={task?.projectId||selectedProject?.id}
-      deepseekModel={state?.settings.deepseekModel||'deepseek-v4.1-flash'}
-      deepseekEffort={state?.settings.deepseekReasoningEffort||'max'}
       connectionState={runtime?.codex.state==='connected'?'connected':'offline'}
       approvalPolicy={state?.settings.approvalPolicy || 'on-request'}
       models={models}
       configDisabled={busy || !!sendingTabs[tab] || task?.phase==='escalated'}
-      onExecutionProfileChange={updateExecutionProfile}
+      onExecutionProfileChange={updateOrchestratorProfile}
       onApprovalChange={value => void updateSettings({ approvalPolicy: value })}
       qaEnabled={qualityModes[tab]??task?.passes?.find(pass=>pass.id===task.currentPassId)?.qualityLoop?.enabled??false}
       onQaChange={enabled=>setQualityModes(current=>({...current,[tab]:enabled}))}
@@ -941,7 +940,7 @@ function executionDescriptor(profile?:ExecutionProfile,deepSeek?:DeepSeekExecuti
   const model=executionModelName(profile.model);
   return profile.provider==='deepseek'?`DeepSeek Harness (${deepSeek?.provider==='opencode-go'?'OpenCode Go':deepSeek?.provider||'provider'}) · ${model} · requested native effort ${profile.effort} · effective effort unknown`:`${model} · ${profile.effort}`;
 }
-function executionModelName(model:string){return model==='gpt-6-luna'?'GPT-6 Luna':model==='deepseek-v4.1-flash'?'DeepSeek V4.1 Flash':model;}
+function executionModelName(model:string){return model==='gpt-6-luna'?'GPT-6 Luna':model==='gpt-6.1-sol'?'GPT-6.1 Sol':model==='gpt-6.1-terra'?'GPT-6.1 Terra':model==='gpt-6-sol'?'GPT-6 Sol':model==='gpt-6-astra'?'GPT-6 Astra':model==='deepseek-v4.1-flash'?'DeepSeek V4.1 Flash':model;}
 function compactModelName(model:string){return model==='gpt-6-luna'?'Luna':executionModelName(model);}
 function executionRoleName(role:'worker'|'direct'|'simple',model?:string){
   if(role==='worker')return model?`${compactModelName(model)} worker`:'Worker';
@@ -954,9 +953,9 @@ function ConversationMessage({message:m,executionProfile,deepSeekExecution,actua
   const actualProvider:'deepseek'|'codex'|undefined=actualTurn?.provider==='deepseek'||actualTurn?.requestedModel==='deepseek-v4.1-flash'?'deepseek':actualTurn?.provider==='codex'||actualTurn?.requestedModel.startsWith('gpt-')?'codex':undefined;
   const turnProfile:ExecutionProfile|undefined=actualTurn&&actualProvider?{provider:actualProvider,model:actualTurn.requestedModel,effort:actualTurn.requestedEffort as ExecutionProfile['effort']}:undefined;
   const profile=actualTurn?turnProfile:executionProfile;
-  const modelChip=m.role==='router'?'GPT-6 Luna · low · Fast':(['worker','direct','simple'].includes(m.role)?turnProfile?executionDescriptor(turnProfile,deepSeekExecution):actualTurn?`${executionModelName(actualTurn.requestedModel)} · ${actualTurn.requestedEffort}`:profile?executionDescriptor(profile,deepSeekExecution):executionDescriptor():undefined);
-  const model=actualTurn?.requestedModel||profile?.model;
-  const heading=m.role==='worker'?profile?.provider==='deepseek'?`DeepSeek Harness worker · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('worker',model):m.role==='router'?'Routing agent':m.role==='direct'?profile?.provider==='deepseek'?`DeepSeek Harness direct answer · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('direct',model):m.role==='simple'?profile?.provider==='deepseek'?`DeepSeek Harness simple implementation · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('simple',model):'Orchestrator';
+  const modelChip=m.role==='router'?'GPT-6 Luna · low · Fast':m.role==='direct'?turnProfile?executionDescriptor(turnProfile,deepSeekExecution):'Orchestrator · model unavailable':(['worker','simple'].includes(m.role)?turnProfile?executionDescriptor(turnProfile,deepSeekExecution):profile?executionDescriptor(profile,deepSeekExecution):executionDescriptor():undefined);
+  const model=actualTurn?.requestedModel||(m.role==='direct'?undefined:profile?.model);
+  const heading=m.role==='worker'?profile?.provider==='deepseek'?`DeepSeek Harness worker · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('worker',model):m.role==='router'?'Routing agent':m.role==='direct'?turnProfile?.provider==='deepseek'?`DeepSeek Harness direct answer · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('direct',model):m.role==='simple'?profile?.provider==='deepseek'?`DeepSeek Harness simple implementation · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('simple',model):'Orchestrator';
   return <div className="message agent-message" key={m.id}><div className={`agent-avatar ${m.role}`}>{m.role==='worker'?<Terminal size={15}/>:<Command size={15}/>}</div><div className="message-main"><div className="message-meta"><strong>{heading}</strong><span>{stamp(m.createdAt)}</span>{modelChip&&<span className="model-chip">{modelChip}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
 }
 
@@ -989,7 +988,7 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
   const recruitedWorkerLabel=executionDescriptor(selectedExecution,p.deepSeekExecution);
   const output=p.publicAnswer||p.receipt?.result||'';
   const visibleMessages=messages.filter(m=>!(m.role==='orchestrator'&&m.text==='Prepared a complete assignment.'&&(p.reasoningTurns||[]).some(turn=>turn.role==='orchestrator'))&&!(output&&m.role!=='user'&&m.text===output)&&!(p.error&&m.role==='system'&&m.text===p.error));
-  const turns=p.reasoningTurns||[];const directTurn=turns.filter(turn=>turn.role==='direct'&&turn.threadId===p.directThreadId).at(-1);const directOutputLabel=directTurn?`${directTurn.provider?`DeepSeek Harness (${p.deepSeekExecution?.provider||'OpenCode Go'}) · `:''}${directTurn.requestedModel==='gpt-6-luna'?'GPT-6 Luna':directTurn.requestedModel}${directTurn.provider?` · requested native effort ${directTurn.requestedEffort} · effective effort unknown`:directTurn.requestedEffort?` · ${directTurn.requestedEffort}`:''}`:p.directThreadId?executionDescriptor(selectedExecution,p.deepSeekExecution):'Orchestrator';const simpleOutputLabel=`${executionDescriptor(selectedExecution,p.deepSeekExecution)} · self-verified`;const timeline=[...visibleMessages.map((message,index)=>({kind:'message' as const,at:Date.parse(message.createdAt)||0,index,message})),...turns.map((turn,index)=>{const roleTurns=turns.filter(item=>item.role===turn.role);const roleMessages=visibleMessages.filter(message=>message.role===turn.role);const roleIndex=roleTurns.findIndex(item=>item.threadId===turn.threadId&&item.turnId===turn.turnId);const matchingMessage=roleMessages[roleIndex];const latestUser=visibleMessages.filter(message=>message.role==='user').at(-1);const fallbackAt=matchingMessage?(Date.parse(matchingMessage.createdAt)||0)-1:(Date.parse(latestUser?.createdAt||p.createdAt)||0)+1;return {kind:'reasoning' as const,at:Date.parse(turn.startedAt||'')||fallbackAt,index,turn};})].sort((a,b)=>a.at-b.at||(a.kind!==b.kind?(a.kind==='reasoning'?-1:1):a.index-b.index));
+  const turns=p.reasoningTurns||[];const directTurn=turns.filter(turn=>turn.role==='direct'&&turn.threadId===p.directThreadId).at(-1);const directOutputLabel=directTurn?`${directTurn.provider?`DeepSeek Harness (${p.deepSeekExecution?.provider||'OpenCode Go'}) · `:''}${directTurn.requestedModel==='gpt-6-luna'?'GPT-6 Luna':directTurn.requestedModel}${directTurn.provider?` · requested native effort ${directTurn.requestedEffort} · effective effort unknown`:directTurn.requestedEffort?` · ${directTurn.requestedEffort}`:''}`:p.directThreadId?'Orchestrator · model unavailable':'Orchestrator';const simpleOutputLabel=`${executionDescriptor(selectedExecution,p.deepSeekExecution)} · self-verified`;const timeline=[...visibleMessages.map((message,index)=>({kind:'message' as const,at:Date.parse(message.createdAt)||0,index,message})),...turns.map((turn,index)=>{const roleTurns=turns.filter(item=>item.role===turn.role);const roleMessages=visibleMessages.filter(message=>message.role===turn.role);const roleIndex=roleTurns.findIndex(item=>item.threadId===turn.threadId&&item.turnId===turn.turnId);const matchingMessage=roleMessages[roleIndex];const latestUser=visibleMessages.filter(message=>message.role==='user').at(-1);const fallbackAt=matchingMessage?(Date.parse(matchingMessage.createdAt)||0)-1:(Date.parse(latestUser?.createdAt||p.createdAt)||0)+1;return {kind:'reasoning' as const,at:Date.parse(turn.startedAt||'')||fallbackAt,index,turn};})].sort((a,b)=>a.at-b.at||(a.kind!==b.kind?(a.kind==='reasoning'?-1:1):a.index-b.index));
   const workerRows=timeline.filter(row=>row.kind==='reasoning'?row.turn.role==='worker':row.message.role==='worker'||row.message.role==='system'&&row.message.text.startsWith('Worker activity:'));
   const workerActivityCount=workerRows.reduce((count,row)=>count+(row.kind==='reasoning'?Math.max(1,(p.reasoningSummaries||[]).filter(item=>item.role===row.turn.role&&item.threadId===row.turn.threadId&&item.turnId===row.turn.turnId).length+(p.liveActivity||[]).filter(item=>item.role===row.turn.role&&item.threadId===row.turn.threadId&&item.turnId===row.turn.turnId).length):1),0);
   const visibleTimeline=timeline.filter(row=>row.kind==='reasoning'?row.turn.role!=='worker':row.message.role!=='worker'&&!(row.message.role==='system'&&row.message.text.startsWith('Worker activity:')));
@@ -1061,7 +1060,7 @@ function PassUsagePanel({pass}:{pass:TaskPass}){
   const usageModel=(role:keyof PassUsage)=>{const models=[...new Set((usage[role]?.groups||[]).map(group=>group.model).filter((model):model is string=>!!model))];return models.length===1?compactModelName(models[0]):models.length>1?`${models.length} models recorded`:undefined;};
   const workerModel=usageModel('worker');
   const workerLabel=profile?`${profile.provider==='deepseek'?'DeepSeek Harness':compactModelName(profile.model)} worker · ${descriptor}`:workerModel?`${workerModel} worker`:'Worker · model unavailable';
-  const roleLabel=(role:'direct'|'simple')=>{if(profile)return `${role==='direct'?'Direct':'Simple'} · ${descriptor}`;const model=usageModel(role);return model?`${role==='direct'?'Direct':'Simple'} · ${model}`:`${role==='direct'?'Direct':'Simple'} · model unavailable`;};
+  const roleLabel=(role:'direct'|'simple')=>{const model=usageModel(role);if(role==='direct')return model?`Direct · ${model}`:'Direct · orchestrator model unavailable';if(profile)return `Simple · ${descriptor}`;return model?`Simple · ${model}`:'Simple · model unavailable';};
   const allRoles:[keyof typeof usage,string][]=[['router','Router · Luna low · Fast'],['direct',roleLabel('direct')],['simple',roleLabel('simple')],['orchestrator','Orchestrator'],['worker',workerLabel]];
   const expected=allRoles.filter(([role])=>role==='router'?!!pass.routerThreadId:role==='direct'?!!pass.directThreadId:role==='simple'?!!pass.simpleThreadId:role==='orchestrator'?!!pass.orchestratorThreadId:!!pass.workerThreadId||pass.resolution==='delegated');
   const roles=allRoles.filter(([role])=>expected.some(([candidate])=>candidate===role)||!!usage[role]);
