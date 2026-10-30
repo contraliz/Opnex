@@ -55,9 +55,9 @@ describe('Settings audit regressions',()=>{
 
   it('gives the nested directory picker focus and Escape priority, then returns to Browse',async()=>{
     const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
-    const opener=screen.getByRole('button',{name:'Configure Demo project'});await user.click(opener);
-    const settings=await screen.findByRole('dialog',{name:'Configure Demo project'});
-    const browse=within(settings).getByRole('button',{name:'Browse working directory folders'});
+    const opener=screen.getByRole('button',{name:'Configure workspace demo'});await user.click(opener);
+    const settings=await screen.findByRole('dialog',{name:'Configure demo'});
+    const browse=within(settings).getByRole('button',{name:'Browse workspace folders'});
     const windowEscape=vi.fn();observedWindowKeydown=windowEscape;window.addEventListener('keydown',windowEscape);
     await user.click(browse);
     const picker=await screen.findByRole('dialog',{name:'Choose a folder'});
@@ -76,10 +76,10 @@ describe('Settings audit regressions',()=>{
     await user.keyboard('{Escape}');
     await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());
     expect(windowEscape).not.toHaveBeenCalled();
-    expect(screen.getByRole('dialog',{name:'Configure Demo project'})).toBeTruthy();
+    expect(screen.getByRole('dialog',{name:'Configure demo'})).toBeTruthy();
     await waitFor(()=>expect(document.activeElement).toBe(browse));
     await user.keyboard('{Escape}');
-    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Configure Demo project'})).toBeNull());
+    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Configure demo'})).toBeNull());
     expect(windowEscape).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(opener);
   });

@@ -4,11 +4,13 @@ import { createPortal } from 'react-dom';
 import { ChevronDown, Copy, ExternalLink, Settings2, X } from 'lucide-react';
 import type { Project, ReasoningTurn, Runtime, Settings, Task, TaskPass, WorkflowRole } from '../types';
 import { getCurrentTaskPass, summarizeSessionUsage, type SessionUsageBucket } from './sessionUsage';
+import { workspaceOptionLabel } from './workspace-label';
 import './HeadsUpPanel.css';
 
 export type HeadsUpPanelProps = {
   task: Task | null;
   project:Project|null;
+  projects?:Project[];
   settings: Settings;
   runtime: Runtime | null;
   open: boolean;
@@ -184,7 +186,7 @@ function SettingRow({ label, value }: { label: string; value: string }) {
   return <div className="heads-up-setting-row"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-export function HeadsUpPanel({ task, project, settings, runtime, open, onClose, onOpenSettings, triggerRef }: HeadsUpPanelProps) {
+export function HeadsUpPanel({ task, project, projects=[], settings, runtime, open, onClose, onOpenSettings, triggerRef }: HeadsUpPanelProps) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
@@ -436,7 +438,7 @@ export function HeadsUpPanel({ task, project, settings, runtime, open, onClose, 
 
         <div className="heads-up-details-block">
           <h4>For new tasks</h4>
-          <SettingRow label="Project" value={project?.name || 'Choose a project'}/>
+          <SettingRow label="Workspace" value={project?workspaceOptionLabel(project,projects):'Choose a workspace'}/>
           <SettingRow label="Working directory" value={project?.projectRoot || 'Not selected'}/>
           <SettingRow label="Approval" value={policyLabel[settings.approvalPolicy] || settings.approvalPolicy}/>
           <SettingRow label="Orchestrator" value={`${settings.orchestratorModel} · ${settings.orchestratorEffort}`}/>

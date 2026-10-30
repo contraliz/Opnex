@@ -20,16 +20,16 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 afterEach(()=>{cleanup();sessionStorage.clear();vi.resetAllMocks();});
 
 describe('native local Git workspace paging and routes',()=>{
-  it('explains that the selected project root must contain the repository root',async()=>{
+  it('explains that the selected workspace root must contain the repository root',async()=>{
     vi.mocked(api).mockImplementation(async url=>{
       if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
       if(url.endsWith('/github')||url.includes('/github?'))return github as any;
-      return unavailable('The Git repository is outside the selected project folder.','C:/repo') as any;
+      return unavailable('The Git repository is outside the selected workspace folder.','C:/repo') as any;
     });
     render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/repo/project"/>);
-    expect(await screen.findByText('The Git repository is outside the selected project folder.',{selector:'.git-empty strong'})).toBeTruthy();
-    expect(screen.getByText(/select the repository root itself or a project folder that contains it/i)).toBeTruthy();
-    expect(screen.queryByText(/choose a project folder inside a local Git repository/i)).toBeNull();
+    expect(await screen.findByText('The Git repository is outside the selected workspace folder.',{selector:'.git-empty strong'})).toBeTruthy();
+    expect(screen.getByText(/select the repository root itself or a workspace folder that contains it/i)).toBeTruthy();
+    expect(screen.queryByText(/choose a workspace folder inside a local Git repository/i)).toBeNull();
   });
 
   it('keeps the inside-a-repository guidance when the selected folder has no repository',async()=>{
@@ -40,7 +40,7 @@ describe('native local Git workspace paging and routes',()=>{
     });
     render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/repo/project"/>);
     expect(await screen.findByText('Choose a folder inside a Git repository to see local branches and history.',{selector:'.git-empty strong'})).toBeTruthy();
-    expect(screen.getByText(/choose a project folder inside a local Git repository/i)).toBeTruthy();
+    expect(screen.getByText(/choose a workspace folder inside a local Git repository/i)).toBeTruthy();
   });
 
   it('connects the actual lane node toward commit text and omits the duplicate glyph',async()=>{
@@ -110,7 +110,7 @@ describe('native local Git workspace paging and routes',()=>{
     expect(oldCall?.[2]?.aborted).toBe(true);
   });
 
-  it('uses the selected project identity only when there is no task route',async()=>{
+  it('uses the selected workspace identity only when there is no task route',async()=>{
     vi.mocked(api).mockImplementation(async url=>{
       if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
       if(url.endsWith('/github'))return github as any;

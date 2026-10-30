@@ -124,7 +124,7 @@ function createSystemTray(){
 }
 
 async function createAppWindow(){
-  mainWindow=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:620,frame:process.platform!=='win32',title:'Opnex',backgroundColor:'#141414',show:appEnv('SMOKE_TEST')!=='1',webPreferences:{preload:path.join(projectRoot,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
+  mainWindow=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:620,frame:process.platform!=='win32',title:'Opnex',backgroundColor:'#141414',...(process.platform==='win32'?{icon:path.join(projectRoot,'desktop','opnex.ico')}:{ }),show:appEnv('SMOKE_TEST')!=='1',webPreferences:{preload:path.join(projectRoot,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
   if(process.platform!=='darwin')mainWindow.setMenuBarVisibility(false);
   mainWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   for(const [id,tab] of tabs){if(tab.view.webContents.isDestroyed()){tabs.delete(id);if(tab.workspaceId)workspaceTabs.delete(tab.workspaceId);}else mainWindow.contentView.addChildView(tab.view);}

@@ -43,9 +43,9 @@ describe('local Git and GitHub workspace',()=>{
     const graph=layoutCommitGraph(result.commits);const row=result.commits.findIndex(commit=>commit.hash===merge?.hash);const mergeEdges=graph.edges.filter(edge=>edge.row===row);expect(mergeEdges).toHaveLength(2);expect(new Set(mergeEdges.map(edge=>edge.parentHash))).toEqual(new Set(merge?.parents));expect(new Set(mergeEdges.map(edge=>edge.toLane)).size).toBe(2);
   });
 
-  it('bounds pagination and refuses to expose repository roots above the selected folder',async()=>{
+  it('bounds pagination and shows an existing parent repository for the selected folder',async()=>{
     const root=await repository();const nested=path.join(root,'nested');await mkdir(nested);
-    const outside=await readGitWorkspace(nested);expect(outside).toMatchObject({available:false,detail:'The Git repository is outside the selected project folder.',branches:[],commits:[]});
+    const parentRepository=await readGitWorkspace(nested);expect(parentRepository).toMatchObject({available:true,authorizedRoot:nested,repositoryRoot:root});
     await expect(readGitWorkspace(root,-1)).rejects.toThrow(/between 0 and 9999/);
     await expect(readGitWorkspace(root,10000)).rejects.toThrow(/between 0 and 9999/);
   });

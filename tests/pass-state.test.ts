@@ -8,6 +8,21 @@ const receipt={status:'complete' as const,result:'First result',changes:[],accep
 function taskFixture():Task{return {id:'task',title:'First prompt',phase:'accepted',createdAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:00:00Z',userRoot:'D:/workspace',userMessages:['First prompt'],messages:[],passes:[{id:'pass-1',index:1,createdAt:'2026-10-19T00:00:00Z',userInput:'First prompt',userInputs:['First prompt'],userMessageIds:[],phase:'accepted',assignment,receipt,reviewNote:'Reviewed first pass',resolution:'delegated',workerThreadId:'worker-one',orchestratorThreadId:'orch-one',correctionCount:1,processedTurns:['turn-one']}],currentPassId:'pass-1',assignment,receipt,reviewNote:'Reviewed first pass',resolution:'delegated',workerThreadId:'worker-one',orchestratorThreadId:'orch-one',correctionCount:1,processedTurns:['turn-one']};}
 
 describe('per-pass task state',()=>{
+  it('keeps legacy execution routing on the pass that created its thread while new settings default to Luna',()=>{
+    const task=taskFixture();const pass=task.passes![0];
+    task.reasoningTurns=[{role:'simple',threadId:'simple-one',turnId:'turn-one',provider:'codex',requestedModel:'gpt-6-astra',requestedEffort:'high',status:'interrupted'}];
+    pass.reasoningTurns=structuredClone(task.reasoningTurns);
+    const migrated=upgradeStoredState(JSON.parse(JSON.stringify({version:5,settings:{orchestratorModel:'gpt-6-astra',orchestratorEffort:'high',approvalPolicy:'on-request',deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'},tasks:[task],activeTaskId:task.id})));
+    expect(migrated.settings.executionProfile).toEqual({provider:'codex',model:'gpt-6-luna',effort:'max'});
+    expect(migrated.tasks[0].passes?.[0].executionProfile).toEqual({provider:'codex',model:'gpt-6-astra',effort:'high'});
+    expect(migrated.tasks[0].passes?.[0].reasoningTurns?.[0]).toMatchObject({requestedModel:'gpt-6-astra',requestedEffort:'high'});
+  });
+  it('migrates an existing DeepSeek team pass to its saved provider/model/effort',()=>{
+    const task=taskFixture(),pass=task.passes![0];const deepSeek={kind:'deepseek-harness-sdk' as const,provider:'opencode-go',model:'deepseek-v4.1-flash',nativeReasoningEffort:'max'};
+    pass.deepSeekExecution=deepSeek;pass.recruitmentTeam={teamId:'team-legacy',passId:pass.id,createdAt:'2026-10-19T00:00:00Z',canonicalProjectRoot:'D:/workspace',workspaceParent:'D:/workspace/.opnex',baseRef:'HEAD',baseCommit:'abc123',status:'paused_after_restart',sealed:true,workers:[{workerId:'worker-1',name:'Legacy worker',assignment,effort:'high',skills:[],branch:'recruitment/legacy/worker-1',worktreeRoot:'D:/workspace/.opnex/worker-1',status:'paused_after_restart',deepSeekExecution:deepSeek}],integration:{status:'paused_after_restart',branch:'recruitment/legacy/integration',worktreeRoot:'D:/workspace/.opnex/integration',assignment,effort:'high',skills:[]},toolCallIds:[],completionWakeSent:false};
+    const migrated=upgradeStoredState(JSON.parse(JSON.stringify({version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'},tasks:[task],activeTaskId:task.id}))).tasks[0];
+    expect(migrated.passes?.[0].executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
+  });
   it.each(['reviewing','paused_after_restart'] as const)('restores correction resume from saved findings after restart migration (%s state)',phase=>{
     const task=taskFixture(),pass=task.passes![0],at='2026-10-27T12:45:00.000Z';task.phase=phase;pass.phase=phase;
     const findings=[{findingId:'finding-1',fingerprint:'sha256-finding-1',title:'The correction was not planned',severity:'medium' as const,issue:'Saved actionable evidence needs a correction pass.',requiredFix:'Resume planning from this exact finding.',evidence:['The auditor saved the finding before shutdown.']}];
