@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport as StdioServer } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, InitializedNotificationSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { AGENTMEM_MODEL_TOOLS, scopeAgentMemToolArgs, scopeAgentMemToolSchema } from './agentmem-mcp-scope.js';
+import { AGENTMEM_MODEL_TOOLS, AGENTMEM_REPOSITORY_TOOLS, scopeAgentMemToolArgs, scopeAgentMemToolSchema } from './agentmem-mcp-scope.js';
 import { sameProjectRoot } from './project-identity.js';
 import { AgentMemTimeoutError, withAgentMemTimeout } from './agentmem-adapter-timeout.js';
 
@@ -15,7 +15,6 @@ const readOnlyAccess=appEnv('ACCESS')==='read-only';
 const command=appEnv('COMMAND')||'';
 const args=JSON.parse(appEnv('ARGS')||'[]') as string[];
 const configuredEnvValue=JSON.parse(appEnv('CONFIG_ENV')||'{}') as unknown;
-const repositoryTools=new Set(['repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync']);
 const statusSchema={type:'object',properties:{},additionalProperties:false};
 const upstreamTimeoutMs=2500;
 const cleanupTimeoutMs=500;
@@ -88,7 +87,7 @@ async function main(){
     const activeClient=client,activeTransport=transport;
     try{
       const response=await withAgentMemTimeout(activeClient.listTools(request.params?.cursor?{cursor:request.params.cursor}:{}),upstreamTimeoutMs,'AgentMem tool catalog');
-      const tools=response.tools.filter(tool=>AGENTMEM_MODEL_TOOLS.has(tool.name)&&tool.name!=='projects'&&tool.name!=='repository_register'&&(!repositoryTools.has(tool.name)||!!repositoryId));
+      const tools=response.tools.filter(tool=>AGENTMEM_MODEL_TOOLS.has(tool.name)&&tool.name!=='projects'&&tool.name!=='repository_register'&&(!AGENTMEM_REPOSITORY_TOOLS.has(tool.name)||!!repositoryId));
       return {...response,tools:tools.map(tool=>({...tool,inputSchema:scopeAgentMemToolSchema(tool.inputSchema,tool.name,readOnlyAccess)}))};
     }catch{
       status='The optional AgentMem tool catalog is unavailable.';

@@ -1,4 +1,6 @@
-export const AGENTMEM_MODEL_READ_TOOLS=new Set(['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge','repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','check_project_changes']);
+const repositoryReadTools=['repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary'];
+export const AGENTMEM_REPOSITORY_TOOLS=new Set([...repositoryReadTools,'repository_resync']);
+export const AGENTMEM_MODEL_READ_TOOLS=new Set(['attach_project','retrieve_evidence','decisions','requirements','lessons','knowledge',...repositoryReadTools,'check_project_changes']);
 export const AGENTMEM_MODEL_WRITE_TOOLS=new Set(['knowledge','decisions','requirements','lessons','update_project_brief','index_project','repository_resync']);
 export const AGENTMEM_MODEL_TOOLS=new Set([...AGENTMEM_MODEL_READ_TOOLS,...AGENTMEM_MODEL_WRITE_TOOLS]);
 
@@ -33,6 +35,6 @@ export function scopeAgentMemToolArgs(name:string,value:unknown,projectId:string
   if(allowed&&(!allowed.includes(String(args.action))))throw new Error(`The AgentMem ${name} action must be one of: ${allowed.join(', ')}.`);
   if(args.force===true)throw new Error('AgentMem writes cannot bypass revision or conflict checks.');
   const scoped:Record<string,unknown>={...args,project_id:projectId};
-  if(['repository_search','repository_retrieve','repository_status','repository_graph_status','repository_graph_query','repository_graph_path','repository_graph_impact','repository_graph_summary','repository_resync'].includes(name))scoped.repository_id=repositoryId;
+  if(AGENTMEM_REPOSITORY_TOOLS.has(name))scoped.repository_id=repositoryId;
   return scoped;
 }
