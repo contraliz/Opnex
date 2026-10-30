@@ -19,7 +19,7 @@ export type DeepSeekHarnessPermissionRequest = {
   approvalPolicy: ApprovalPolicy;
   /** True only when this exact pass has persisted the selected policy. */
   selectedForTask: boolean;
-  /** The task-owned worker/integrator worktree, distinct from the canonical AgentMem root. */
+  /** The task-owned worker/integrator worktree, distinct from the canonical project root. */
   workspaceRoot: string;
   /** The validated assignment write scope after rebasing into the task worktree. */
   writeScope: readonly string[];

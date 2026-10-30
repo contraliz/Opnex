@@ -18,12 +18,11 @@ export function sameProjectRoot(left:string,right:string,platform:NodeJS.Platfor
   return !!a&&!!b&&a===b;
 }
 
-export function taskAgentMemIdentity(task:Pick<Task,'agentmemProjectId'>){return task.agentmemProjectId||'';}
-export function projectAgentMemIdentity(project:Pick<Project,'agentmemEnabled'|'agentmemProjectId'>){return project.agentmemEnabled?project.agentmemProjectId:'';}
-
 export function assertTaskCanResumeInProject(task:Task,project:Project){
-  if(!task.userRoot||!sameProjectRoot(task.userRoot,project.projectRoot)||taskAgentMemIdentity(task)!==projectAgentMemIdentity(project))
-    throw new Error('This session was created for a different project directory or AgentMem knowledge base. Start a new session in the selected project; its saved history and original project identity are preserved.');
+  if(task.requiresFreshSession)
+    throw new Error('This historical session used an older project integration. Its history remains available; start a new session to continue work.');
+  if(!task.userRoot||!sameProjectRoot(task.userRoot,project.projectRoot))
+    throw new Error('This session was created for a different project directory. Start a new session in the selected project; its saved history and original project identity are preserved.');
 }
 
 const resumablePhases=new Set<Task['phase']>(['intake','routing','direct_running','simple_running','planning','worker_running','escalated','reviewing','needs_attention','paused_after_restart']);
@@ -32,7 +31,7 @@ export function projectHasActiveOrResumableTask(projectId:string,tasks:readonly 
 }
 
 export function assertProjectIdentityChangeAllowed(current:Project,next:Project,tasks:readonly Task[]){
-  const identityChanged=!sameProjectRoot(current.projectRoot,next.projectRoot)||projectAgentMemIdentity(current)!==projectAgentMemIdentity(next);
+  const identityChanged=!sameProjectRoot(current.projectRoot,next.projectRoot);
   if(identityChanged&&projectHasActiveOrResumableTask(current.id,tasks))
-    throw new Error('Finish or stop active and resumable sessions before changing this project directory or AgentMem binding.');
+    throw new Error('Finish or stop active and resumable sessions before changing this project directory.');
 }

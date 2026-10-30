@@ -19,25 +19,11 @@ Routes and rule IDs:
 - hard_task / hard_unknown_cause_diagnosis: substantial diagnosis where the cause is unknown, including failures or performance regressions.
 - hard_task / hard_mixed_scope: any request mixing a substantive hard part with a simpler task.
 - hard_task / hard_significant_uncertainty: important requirements or facts remain uncertain for reasons other than an unknown failure cause. When the operation is diagnosis of an unknown cause, use hard_unknown_cause_diagnosis.
-- hard_task / hard_explicit_project_knowledge: the user explicitly asks to attach, consult, retrieve, search, or use the selected project's AgentMem/knowledge base as part of the answer. This requires app-mediated project-context retrieval before answering.
+- hard_task / hard_explicit_project_knowledge: the user explicitly asks for substantive project-knowledge research as part of the answer. Use the generic project skills and configured tools when available; the application does not retrieve or attach knowledge itself.
 
 When a mixed request has any substantive hard part, route the whole operation as hard. Return only route, matching rule_id, and a brief justification.`;
 
 export function buildRouterPrompt(currentOperation:string){return `${ROUTING_RULE_PROMPT}\n\n${currentOperation}`;}
-
-const knowledgeAction=/\b(?:attach|consult|retrieve|search|look\s+up|query|read|check)\b/i;
-const knowledgeTarget=/\b(?:agent\s*mem|knowledge\s*base|project\s+knowledge|project\s+memory)\b/i;
-/** Explicit project-context requests require the app-mediated AgentMem workflow. */
-export function explicitlyRequestsProjectKnowledge(inputs:readonly string[]){
-  return inputs.some(input=>{
-    const normalized=input.replace(/\s+/g,' ');
-    if(!knowledgeTarget.test(normalized))return false;
-    if(/\b(?:do\s+not|don't|never|without|skip|avoid|disable|no\s+need\s+to|not)\b.{0,60}\b(?:agent\s*mem|knowledge\s*base|project\s+knowledge|project\s+memory)\b/i.test(normalized))return false;
-    const useAsContext=/\b(?:use|using|from|based\s+on)\b.{0,60}\b(?:agent\s*mem|knowledge\s*base|project\s+knowledge|project\s+memory)\b.{0,60}\b(?:answer(?:ing)?|respond|reanswer|context|this\s+task|this\s+request)\b/i.test(normalized)||
-      /\b(?:answer|respond|reanswer|contextualize)\b.{0,60}\b(?:using|from|based\s+on)\b.{0,40}\b(?:agent\s*mem|knowledge\s*base|project\s+knowledge|project\s+memory)\b/i.test(normalized);
-    return knowledgeAction.test(normalized)||useAsContext;
-  });
-}
 
 export type RouteOutputResult=
   | {valid:true;decision:ReturnType<typeof routeDecisionSchema.parse>}

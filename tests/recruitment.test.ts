@@ -45,7 +45,6 @@ function teamFixture(workerStatuses: Array<'queued'|'running'|'complete'|'failed
     passId: 'pass',
     createdAt: '2026-10-26T00:00:00.000Z',
     canonicalProjectRoot: 'D:/project',
-    agentmemProjectId: 'pseudoharness',
     workspaceParent: 'D:/state/worktrees/task/pass',
     baseRef: 'HEAD',
     baseCommit: 'a'.repeat(40),
@@ -130,7 +129,7 @@ describe('recruited worker team contracts and recovery', () => {
     expect(team.integration.status).toBe('paused_after_restart');
     expect(team.workers[0].headCommit).toBe('b'.repeat(40));
     expect(team.canonicalProjectRoot).toBe('D:/project');
-    expect(team.agentmemProjectId).toBe('pseudoharness');
+    expect(team.canonicalProjectRoot).toBe('D:/project');
     expect(pauseRecruitmentTeamAfterRestart(team)).toBeUndefined();
   });
 

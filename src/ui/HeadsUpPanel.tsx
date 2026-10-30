@@ -426,13 +426,11 @@ export function HeadsUpPanel({ task, project, settings, runtime, open, onClose, 
           <h4>This session</h4>
           {task ? <>
             <SettingRow label="Root" value={task.userRoot || 'Not recorded'}/>
-            <SettingRow label="AgentMem" value={task.agentmemProjectId || 'Disabled'}/>
             <SettingRow label="Approval" value={pass?.approvalPolicy ? policyLabel[pass.approvalPolicy] || pass.approvalPolicy : 'Not recorded'}/>
             <SettingRow label="Orchestrator" value={actualOrchestrator ? `${actualOrchestrator.effectiveModel && actualOrchestrator.effectiveModel !== actualOrchestrator.requestedModel ? `${actualOrchestrator.effectiveModel} (requested ${actualOrchestrator.requestedModel})` : actualOrchestrator.requestedModel} · ${actualOrchestrator.requestedEffort}` : 'Not recorded'}/>
             <SettingRow label="Worker" value={actualWorker ? reasoningTurnLabel(actualWorker) : pass?.workerThreadId || task.workerThreadId ? 'Not recorded' : 'Not used'}/>
             {decision?.justification && <SettingRow label="Route reason" value={decision.justification}/>}
             {escalation && <SettingRow label="Escalation" value={`${routeName(escalation.from)} → ${routeName(escalation.to)} · ${escalation.reason}`}/>}
-            {(pass?.agentmemRecordStatus || task.agentmemRecordStatus) && <SettingRow label="AgentMem record" value={pass?.agentmemRecordStatus || task.agentmemRecordStatus || 'Not recorded'}/>}
           </> : <p className="heads-up-muted-copy">No session-specific settings are available.</p>}
         </div>
 
@@ -440,7 +438,6 @@ export function HeadsUpPanel({ task, project, settings, runtime, open, onClose, 
           <h4>For new tasks</h4>
           <SettingRow label="Project" value={project?.name || 'Choose a project'}/>
           <SettingRow label="Working directory" value={project?.projectRoot || 'Not selected'}/>
-          <SettingRow label="AgentMem" value={project?.agentmemEnabled ? project.agentmemProjectId : 'Disabled'}/>
           <SettingRow label="Approval" value={policyLabel[settings.approvalPolicy] || settings.approvalPolicy}/>
           <SettingRow label="Orchestrator" value={`${settings.orchestratorModel} · ${settings.orchestratorEffort}`}/>
           <SettingRow label="Worker" value="gpt-6-luna · high (app policy)"/>

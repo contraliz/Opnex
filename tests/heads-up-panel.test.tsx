@@ -14,7 +14,7 @@ const settings: Settings = {
 const runtime: Runtime = {
   codex: { state: 'connected', error: '', models: [], workerAvailable: true },
 };
-const project:Project={id:'project-1',name:'New project',projectRoot:'D:/new-project',agentmemProjectId:'new-project-kb',agentmemEnabled:true,needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
+const project:Project={id:'project-1',name:'New project',projectRoot:'D:/new-project',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
 
 function pass(id: string, index: number, overrides: Partial<TaskPass> = {}): TaskPass {
   return {
@@ -101,12 +101,10 @@ function taskFixture(id = 'task-1'): Task {
     createdAt: '2026-10-01T00:00:00.000Z',
     updatedAt: '2026-10-02T00:00:00.000Z',
     userRoot: 'D:/session-project',
-    agentmemProjectId: 'session-kb',
     messages: [],
     passes: [prior, current],
     currentPassId: current.id,
     resolution: 'delegated',
-    agentmemRecordStatus: 'done',
     correctionCount: 0,
   };
 }
@@ -216,7 +214,9 @@ describe('Heads-up panel', () => {
     fireEvent.click(details);
     expect(details.getAttribute('aria-expanded')).toBe('true');
     expect(within(panel).getByText('D:/session-project')).toBeTruthy();
-    expect(within(panel).getByText('session-kb')).toBeTruthy();
+    expect(within(panel).queryByText('session-kb')).toBeNull();
+    expect(within(panel).getByText('D:/new-project')).toBeTruthy();
+    expect(within(panel).queryByText(/AgentMem|knowledge base/i)).toBeNull();
     expect(within(panel).getByText('The bounded change exposed an architectural issue.')).toBeTruthy();
     expect(within(panel).getByText(/The correction needs a multi-component change/)).toBeTruthy();
     expect(within(panel).getAllByText('gpt-6.1-sol · low')).toHaveLength(3);

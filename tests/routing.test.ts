@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ROUTE_RULES, routeDecisionSchema } from '../server/contracts.js';
-import { explicitlyRequestsProjectKnowledge, ROUTING_RULE_PROMPT } from '../server/routing.js';
+import { ROUTING_RULE_PROMPT } from '../server/routing.js';
 import { approvedRoutingExamples } from './routing-fixtures.js';
 
 
@@ -24,14 +24,10 @@ describe('request routing contract',()=>{
   it('accepts a captured compatible patch-upgrade classification with concise nonempty evidence',()=>{
     expect(routeDecisionSchema.parse({route:'simple_implementation',rule_id:'simple_mechanical_dependency_upgrade',justification:'Known-compatible bounded patch release with no API changes; update the lockfile and run the specified test.'})).toMatchObject({route:'simple_implementation',rule_id:'simple_mechanical_dependency_upgrade'});
   });
-  it('recognizes explicit project-knowledge requests without overriding an opt-out',()=>{
-    expect(explicitlyRequestsProjectKnowledge(['Attach to the AgentMem knowledge base and reanswer the earlier question.'])).toBe(true);
-    expect(explicitlyRequestsProjectKnowledge(['Use the project knowledge before answering.'])).toBe(true);
-    expect(explicitlyRequestsProjectKnowledge(['How do I use AgentMem?'])).toBe(false);
-    expect(explicitlyRequestsProjectKnowledge(['There is no need to use the AgentMem knowledge base.'])).toBe(false);
-    expect(explicitlyRequestsProjectKnowledge(["Don't use AgentMem for this one."])).toBe(false);
-    expect(explicitlyRequestsProjectKnowledge(['Tell me what AgentMem does.'])).toBe(false);
+  it('routes explicit project knowledge through selected project skills without application prefetch',()=>{
     expect(ROUTE_RULES.hard_explicit_project_knowledge).toBe('hard_task');
     expect(ROUTING_RULE_PROMPT).toContain('hard_explicit_project_knowledge');
+    expect(ROUTING_RULE_PROMPT).toContain('Use the generic project skills and configured tools when available');
+    expect(ROUTING_RULE_PROMPT).toContain('the application does not retrieve or attach knowledge itself');
   });
 });
