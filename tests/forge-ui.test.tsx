@@ -291,6 +291,34 @@ describe('Forge board',()=>{
     expect(mockApi.api.mock.calls.some(([path])=>String(path).includes('/approvals/'))).toBe(false);
   });
 
+  it('keeps cancelled, uncertain and stale-run approvals non-actionable',async()=>{
+    const activeTicket=()=>{
+      let ticket=createDraft('inactive-approval-ticket');
+      ticket=applyForgeCommand(ticket,{type:'submit_manual_plan',actor:{role:'user',id:'user-1'},planId:'plan-a',tasks:[planTask('task-a')]},at);
+      ticket=applyForgeCommand(ticket,{type:'accept_plan',actor:{role:'orchestrator',id:'orch-1'},revision:1},at);
+      ticket=applyForgeCommand(ticket,{type:'start',actor:{role:'user',id:'user-1'}},at);
+      return claim(ticket,'task-a','worker-7','attempt-7');
+    };
+    const makeRequest=(ticket:ForgeTicket,turnId='turn-attempt-7')=>({requestId:'request-inactive',method:'item/commandExecution/requestApproval' as const,itemId:'item-inactive',threadId:'thread-attempt-7',turnId,reason:'Run the accepted test command.',command:'npm test',cwd:project.projectRoot,forgeContext:{ticketId:ticket.id,targetType:'worker_attempt' as const,targetId:'attempt-7',ownerId:'worker-7',claimToken:'token-attempt-7'}});
+    const cancelled=applyForgeCommand(activeTicket(),{type:'cancel',actor:{role:'user',id:'user-1'}},at);
+    const uncertain=applyForgeCommand(activeTicket(),{type:'mark_attempt_effect_uncertain',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-7',attemptId:'attempt-7',claimToken:'token-attempt-7',evidence:'The provider request timed out before its outcome was observed.'},at);
+    const stale=activeTicket();
+    const cases=[
+      {ticket:cancelled,request:makeRequest(cancelled),reason:/cancelled or complete/},
+      {ticket:uncertain,request:makeRequest(uncertain),reason:/needs reconciliation before this request can be answered/i},
+      {ticket:stale,request:makeRequest(stale,'a-different-turn'),reason:/no longer matches an active worker attempt/i},
+    ];
+    for(const {ticket,request,reason} of cases){
+      serverState={...baseState(),revision:2,tasks:[{...forgeTask(ticket),approvalRequests:[request]}],activeTaskId:ticket.id};
+      mockWorkspaceApi();
+      const {unmount}=render(<App/>);
+      expect(await screen.findByText(reason)).toBeTruthy();
+      for(const name of ['Approve once','Decline','Cancel turn'])expect((screen.getByRole('button',{name}) as HTMLButtonElement).disabled).toBe(true);
+      expect(mockApi.api.mock.calls.some(([path])=>String(path).includes('/approvals/'))).toBe(false);
+      unmount();
+    }
+  });
+
   it('updates an open Forge board from the existing state snapshot stream',async()=>{
     const ticket=createDraft('live-board-ticket');
     const task=forgeTask(ticket);serverState={...baseState(),revision:1,tasks:[task],activeTaskId:ticket.id};
