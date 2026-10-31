@@ -1,3 +1,5 @@
+import type { ForgeTicket, ForgeTicketCreateRequest } from '../types.js';
+
 export class ApiError extends Error {
   constructor(message:string,readonly status?:number,readonly code?:string,options?:ErrorOptions){super(message,options);this.name='ApiError';}
   override toString(){return this.message;}
@@ -75,3 +77,8 @@ async function request(url:string,body:unknown,signal?:AbortSignal,method?:'POST
 async function apiRequest<T>(url:string,body:unknown,signal:AbortSignal|undefined,method?:'POST'|'PUT'):Promise<T>{try{return await readJson(await request(url,body,signal,method));}catch(error){if(signal?.aborted)throw error;if(error instanceof ApiError&&error.status===403&&/session token/i.test(error.message)){await bootstrap();return await readJson(await request(url,body,signal,method));}throw error;}}
 export function api<T=any>(url:string,body?:unknown,signal?:AbortSignal):Promise<T>{return apiRequest<T>(url,body,signal);}
 export function apiPut<T=any>(url:string,body:unknown,signal?:AbortSignal):Promise<T>{return apiRequest<T>(url,body,signal,'PUT');}
+
+export function createForgeTicket(input:ForgeTicketCreateRequest){return api<ForgeTicket>('/api/forge/tickets',input);}
+export function getForgeTicket(id:string){return api<ForgeTicket>(`/api/forge/tickets/${encodeURIComponent(id)}`);}
+export function forgeTicketAction(id:string,action:'start'|'pause'|'resume'|'cancel',body:Record<string,unknown>={}){return api<ForgeTicket>(`/api/forge/tickets/${encodeURIComponent(id)}/${action}`,body);}
+export function respondForgeApproval(id:string,requestId:string|number,body:{decision:'accept'|'decline'|'cancel';content?:Record<string,unknown>}){return api<ForgeTicket>(`/api/forge/tickets/${encodeURIComponent(id)}/approvals/${encodeURIComponent(String(requestId))}`,body);}
