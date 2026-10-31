@@ -96,7 +96,9 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     });
     const ticket = await coordinator.create({ projectId, title: 'Lifecycle fixture', description: 'Write one feature file.', acceptanceCriteria: ['Feature file is merged.'], scope: { read: ['src'], write: ['src'], knowledge: ['knowledge/opnex'] }, orchestrator: { model: 'gpt-6.1-terra', effort: 'low' }, workerProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' } });
     expect(ticket.phase).toBe('draft');
+    expect(requests).toHaveLength(0);
     await coordinator.start(ticket.id);
+    expect(requests.map((row) => row.request.role)).toEqual(['orchestrator']);
     const planning = requests.at(-1)!;
     const savedApproval = state.tasks.find((task) => task.id === ticket.id)!.approvalRequests![0];
     expect(savedApproval).toMatchObject({ requestId: 700, threadId: planning.handle.threadId, turnId: planning.handle.turnId, forgeContext: { ticketId: ticket.id, targetId: planning.request.taskId } });
@@ -109,7 +111,8 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     ] };
     planning.resolve({ status: 'completed', text: JSON.stringify(plan), turn: { id: planning.handle.turnId, status: 'completed' } });
     await waitFor(() => !!coordinator.getTicket(ticket.id)?.proposedPlan, 5_000, () => JSON.stringify(coordinator.getTicket(ticket.id)));
-    const accepted = await coordinator.start(ticket.id, 1);
+    await waitFor(() => requests.filter((row) => row.request.role === 'worker').length === 1);
+    const accepted = coordinator.getTicket(ticket.id)!;
     expect(accepted.workitems[0]).toMatchObject({ id: 'feature-a', state: 'claimed' });
     const worker = requests.at(-1)!;
     expect(worker.request.role).toBe('worker');
@@ -276,6 +279,52 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
       expect([...exhausted.orchestratorRuns, ...exhausted.attempts, ...exhausted.integration.runs].reduce((sum, run) => sum + (run.knowledgeAllocation?.operations || 0), 0)).toBe(6);
     } finally { await fixture.cleanup(); }
   });
+
+  it('keeps pause and cancel authoritative when planning completes before dispatch', async () => {
+    for (const action of ['pause', 'cancel'] as const) {
+      const fixture = await createActivePlanningFixture(action === 'pause' ? 'stopped' : 'uncertain');
+      try {
+        expect(fixture.requests.map((row) => row.request.role)).toEqual(['orchestrator']);
+        await fixture.coordinator[action](fixture.ticket.id);
+        fixture.planning.resolve({ status: 'completed', text: JSON.stringify(fixture.plan), turn: { id: fixture.planning.handle.turnId, status: 'completed' } });
+        await waitFor(() => ['failed', 'interrupted', 'unknown_after_restart'].includes(fixture.coordinator.getTicket(fixture.ticket.id)!.orchestratorRuns[0].status));
+        expect(fixture.coordinator.getTicket(fixture.ticket.id)?.phase).toBe(action === 'pause' ? 'paused' : 'cancelled');
+        expect(fixture.requests.filter((row) => row.request.role === 'worker')).toHaveLength(0);
+      } finally { await fixture.cleanup(); }
+    }
+  });
+
+  it('rejects an out-of-scope plan before worker dispatch', async () => {
+    const fixture = await createActivePlanningFixture('uncertain');
+    try {
+      const invalid = structuredClone(fixture.plan);
+      invalid.tasks[0].assignment.write_scope = ['D:/outside'];
+      fixture.planning.resolve({ status: 'completed', text: JSON.stringify(invalid), turn: { id: fixture.planning.handle.turnId, status: 'completed' } });
+      await waitFor(() => fixture.coordinator.getTicket(fixture.ticket.id)?.orchestratorRuns[0].status === 'failed');
+      expect(fixture.coordinator.getTicket(fixture.ticket.id)?.orchestratorRuns[0].failureReason).toMatch(/scope|assignment/i);
+      expect(fixture.requests.filter((row) => row.request.role === 'worker')).toHaveLength(0);
+    } finally { await fixture.cleanup(); }
+  });
+
+  it('ignores a late plan from a superseded planning run', async () => {
+    const fixture = await createActivePlanningFixture('stopped', 2);
+    try {
+      const stale = fixture.planning;
+      await fixture.coordinator.pause(fixture.ticket.id);
+      await fixture.coordinator.resume(fixture.ticket.id);
+      await waitFor(() => fixture.requests.filter((row) => row.request.role === 'orchestrator').length === 2, 5_000, () => JSON.stringify({ phase: fixture.coordinator.getTicket(fixture.ticket.id)?.phase, runs: fixture.coordinator.getTicket(fixture.ticket.id)?.orchestratorRuns.map(({ status, purpose }) => ({ status, purpose })) }));
+      const current = fixture.requests.filter((row) => row.request.role === 'orchestrator').at(-1)!;
+      expect(current.handle.threadId).not.toBe(stale.handle.threadId);
+      stale.resolve({ status: 'completed', text: JSON.stringify(fixture.plan), turn: { id: stale.handle.turnId, status: 'completed' } });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(fixture.coordinator.getTicket(fixture.ticket.id)?.proposedPlan).toBeUndefined();
+      expect(fixture.requests.filter((row) => row.request.role === 'worker')).toHaveLength(0);
+      current.resolve({ status: 'completed', text: JSON.stringify(fixture.plan), turn: { id: current.handle.turnId, status: 'completed' } });
+      await waitFor(() => fixture.requests.some((row) => row.request.role === 'worker'));
+      expect(fixture.coordinator.getTicket(fixture.ticket.id)?.acceptedPlan?.revision).toBe(1);
+      expect(fixture.requests.filter((row) => row.request.role === 'worker')).toHaveLength(1);
+    } finally { await fixture.cleanup(); }
+  });
 });
 
 async function waitFor(check: () => boolean | undefined | Promise<unknown>, timeoutMs = 5_000, details: () => string = () => '') {
@@ -285,6 +334,13 @@ async function waitFor(check: () => boolean | undefined | Promise<unknown>, time
 }
 
 async function createActiveWorkerFixture(stopStatus: 'stopped' | 'uncertain', maxExecutionAttempts = 1) {
+  const fixture = await createActivePlanningFixture(stopStatus, maxExecutionAttempts);
+  fixture.planning.resolve({ status: 'completed', text: JSON.stringify(fixture.plan), turn: { id: fixture.planning.handle.turnId, status: 'completed' } });
+  await waitFor(() => fixture.requests.some((row) => row.request.role === 'worker'));
+  return fixture;
+}
+
+async function createActivePlanningFixture(stopStatus: 'stopped' | 'uncertain', maxExecutionAttempts = 1) {
   const fixture = await mkdtemp(path.join(os.tmpdir(), 'forge-runtime-lifecycle-'));
   const repo = path.join(fixture, 'r'); const worktrees = path.join(fixture, 'w');
   await mkdir(path.join(repo, 'src'), { recursive: true }); await mkdir(worktrees);
@@ -309,9 +365,6 @@ async function createActiveWorkerFixture(stopStatus: 'stopped' | 'uncertain', ma
   await coordinator.start(ticket.id);
   const planning = requests.at(-1)!;
   const skill = coordinator.getTicket(ticket.id)!.orchestratorSkills.find((row) => row.name === 'agentmem-project')!;
-  planning.resolve({ status: 'completed', text: JSON.stringify({ type: 'plan', knowledgeOperations: 0, tasks: [{ id: 'one', title: 'One', description: 'Create src/one.ts.', dependencyIds: [], assignment, knowledgeScope: ['knowledge/opnex'], executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, skillIds: [skill.id] }] }), turn: { id: planning.handle.turnId, status: 'completed' } });
-  await waitFor(() => !!coordinator.getTicket(ticket.id)?.proposedPlan);
-  await coordinator.start(ticket.id, 1);
-  await waitFor(() => requests.some((row) => row.request.role === 'worker'));
-  return { fixture, repo, worktrees, state, coordinator, ticket, requests, cleanup: async () => rm(fixture, { recursive: true, force: true }) };
+  const plan = { type: 'plan', knowledgeOperations: 0, tasks: [{ id: 'one', title: 'One', description: 'Create src/one.ts.', dependencyIds: [], assignment, knowledgeScope: ['knowledge/opnex'], executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, skillIds: [skill.id] }] };
+  return { fixture, repo, worktrees, state, coordinator, ticket, requests, planning, plan, cleanup: async () => rm(fixture, { recursive: true, force: true }) };
 }

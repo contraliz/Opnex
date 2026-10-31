@@ -15,7 +15,7 @@ import { loadForgeKnowledgeSkill } from './forge-knowledge-skill.js';
 import { createForgeIntegrationCandidate, finalizeForgeMerge, prepareForgeWorktrees, prepareForgeWorkerDependencies, validateForgeWorkerCommit, type ForgeCandidateEvidence, type ForgeWorkerCommitInput, type PreparedForgeWorktrees } from './forge-git.js';
 import { forgeAttemptRoot, forgeAttemptWorkerId, forgeBranchName, restoreForgeIntegrationWorktrees, restoreForgeWorkerWorktrees, resolveLocalForgeTargetBranch } from './forge-git-context.js';
 import { mergeForgeSkillSnapshots, type ForgeActor, type ForgeApprovalPolicy, type ForgeAttempt, type ForgeSkillSnapshot, type ForgeTicket, type ForgeWorkitem } from './forge-contracts.js';
-import { forgeKnowledgeBudgetBalance } from './forge-state.js';
+import { applyForgeCommand, forgeKnowledgeBudgetBalance } from './forge-state.js';
 import { forgeIntegratorOutputJsonSchema, forgePlanOutputJsonSchema, forgeReviewOutputJsonSchema, forgeWorkerOutcomeJsonSchema, forgeReviewOutputSchema, normalizeForgeAssignmentPaths, parseForgeIntegratorOutput, parseForgePlanResult, parseForgeReviewOutput, parseForgeWorkerOutcome, forgeIntegratorPrompt, forgePlanPrompt, forgeReviewPrompt, forgeWorkerPrompt } from './forge-prompts.js';
 import { ForgeProviderStartError, type ForgeProviderApprovalDecision, type ForgeProviderApprovalRequest, type ForgeProviderCancelResult, type ForgeProviderEvent, type ForgeProviderHandle, type ForgeProviderOutcome, type ForgeProviderRequest, type ForgeProviderRole, type ForgeProviderStartEvidence } from './forge-provider.js';
 import { cancelForgeRole, respondForgeRoleApproval, startForgeRole } from './orchestrator.js';
@@ -556,7 +556,7 @@ export class ForgeCoordinator {
   private async finishPlanning(binding: ForgeActorBinding, outcome: ForgeProviderOutcome) {
     const ticket = this.requireTicket(binding.ticketId);
     const run = ticket.orchestratorRuns.find((row) => row.id === binding.targetId);
-    if (!run?.threadId || !run.turnId) return;
+    if (!run?.threadId || !run.turnId || run.status !== 'running' || ticket.activeOrchestratorRunId !== run.id || ticket.phase !== 'planning') return;
     if (outcome.status !== 'completed') {
       await this.command(ticket.id, { type: 'fail_orchestrator_run', actor: HOST, runId: run.id, failureReason: `The planning turn ${outcome.status}: ${providerFailure(outcome)}` });
       return;
@@ -564,10 +564,29 @@ export class ForgeCoordinator {
     try {
       const result = parseForgePlanResult(outcome.text, ticket, await this.loadKnowledgeSkill(ticket));
       await this.recordKnowledge(ticket.id, 'planning', run.id, run.ownerId, run.threadId, run.turnId, result.knowledgeOperations, 'agent_reported', `Planning model reported ${result.knowledgeOperations} knowledge operations.`);
-      await this.command(ticket.id, { type: 'complete_planning', actor: HOST, runId: run.id, expectedPlanRevision: run.expectedPlanRevision, threadId: run.threadId, turnId: run.turnId, planId: randomUUID(), tasks: result.tasks });
+      await this.completeStartedPlan(ticket.id, { type: 'complete_planning', actor: HOST, runId: run.id, expectedPlanRevision: run.expectedPlanRevision, threadId: run.threadId, turnId: run.turnId, planId: randomUUID(), tasks: result.tasks });
     } catch (error) {
-      await this.command(ticket.id, { type: 'fail_orchestrator_run', actor: HOST, runId: run.id, failureReason: `Planning output was rejected: ${error instanceof Error ? error.message : String(error)}` });
+      const latest = this.requireTicket(ticket.id);
+      const activeRun = latest.orchestratorRuns.find((row) => row.id === run.id);
+      if (latest.phase === 'planning' && latest.activeOrchestratorRunId === run.id && activeRun?.status === 'running') {
+        await this.command(ticket.id, { type: 'fail_orchestrator_run', actor: HOST, runId: run.id, failureReason: `Planning output was rejected: ${error instanceof Error ? error.message : String(error)}` });
+      }
     }
+  }
+
+  /** Saves, accepts, and starts the validated plan atomically under the user's Start Forge intent. */
+  private async completeStartedPlan(ticketId: string, completion: Extract<ForgeCommand, { type: 'complete_planning' }>) {
+    const now = this.now();
+    await this.options.mutate((state) => {
+      const task = state.tasks.find((row) => row.id === ticketId && row.sessionType === 'forge' && row.forge);
+      if (!task?.forge) throw new Error('Forge session not found.');
+      const user = { role: 'user' as const, id: 'forge-user' };
+      let ticket = applyForgeCommand(task.forge, completion, now);
+      ticket = applyForgeCommand(ticket, { type: 'accept_plan', actor: user, revision: completion.expectedPlanRevision }, now);
+      ticket = applyForgeCommand(ticket, { type: 'start', actor: user }, now);
+      task.forge = ticket;
+      task.updatedAt = now;
+    });
   }
 
   private async finishWorker(binding: ForgeActorBinding, outcome: ForgeProviderOutcome) {
