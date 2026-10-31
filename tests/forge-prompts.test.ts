@@ -3,6 +3,7 @@ import { createForgeTicket, applyForgeCommand } from '../server/forge-state.js';
 import type { ForgePlanTaskInput, ForgeSkillSnapshot, ForgeTicket } from '../server/forge-contracts.js';
 import {
   forgePlanOutputSchema,
+  forgePlanPrompt,
   parseForgeIntegratorOutput,
   parseForgePlanOutput,
   parseForgeReviewOutput,
@@ -43,6 +44,15 @@ describe('Forge role prompt contracts', () => {
     };
     expect(forgePlanOutputSchema.parse(plan).tasks).toHaveLength(1);
     expect(parseForgePlanOutput(JSON.stringify(plan), ticket())[0].skillSnapshots).toEqual([skill]);
+  });
+
+  it('shows the exact immutable skill ID the planner must return', () => {
+    const immutable = { ...skill, id: 'codex:agentmem-project:c7b7936ce376', revision: '7d6da756a1', name: 'agentmem-project' };
+    const saved = ticket([immutable]);
+    const prompt = forgePlanPrompt(saved, 'repo', undefined, {});
+    expect(prompt).toContain(`Immutable skill ID: ${immutable.id}`);
+    const plan = { type: 'plan', knowledgeOperations: 0, tasks: [{ id: 'task-a', title: 'Implement', description: 'Implement the behavior.', dependencyIds: [], assignment, knowledgeScope: ['D:/projects/repo'], executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'max' }, skillIds: [immutable.id] }] };
+    expect(parseForgePlanOutput(JSON.stringify(plan), saved)[0].skillSnapshots).toEqual([immutable]);
   });
 
   it('rejects invented skill revisions and a silent worker-profile substitution', () => {

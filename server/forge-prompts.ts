@@ -335,7 +335,7 @@ export function forgeReviewPrompt(options: {
 }
 
 export function skillSnapshotsText(skills: ForgeSkillSnapshot[]) {
-  return skills.map((skill) => `### ${skill.name}\nSource: ${skill.source}\nRevision: ${skill.revision}\nDescription: ${skill.description || '(none)'}\n\n${skill.instructions}`).join('\n\n');
+  return skills.map((skill) => `### ${skill.name}\nImmutable skill ID: ${skill.id}\nSource: ${skill.source}\nRevision: ${skill.revision}\nDescription: ${skill.description || '(none)'}\n\n${skill.instructions}`).join('\n\n');
 }
 
 function withKnowledgeSkill(skills: ForgeSkillSnapshot[], knowledgeSkill?: ForgeSkillSnapshot) {
