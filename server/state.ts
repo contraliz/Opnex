@@ -8,7 +8,7 @@ import type { DeepSeekHarnessMcpToolCatalog, DeepSeekHarnessRuntimeInfo } from '
 import { stateDirectory } from './paths.js';
 import { assignmentSchema, receiptSchema } from './contracts.js';
 import { normalizeAgentWorkspaceUrl } from './workspace-tools.js';
-import { createToolCallLog, interruptRunningToolCalls, type ToolCallLog } from './tool-call-log.js';
+import { createToolCallLog, interruptRunningToolCalls, recordToolCall, type ToolCallEvent, type ToolCallLog } from './tool-call-log.js';
 import { qualityCorrectionPlannerMayHaveBeenSent, qualityLoopResumeAction, type QACorrectionPlannerDispatch } from './quality-loop-resume.js';
 import { assertProjectIdentityChangeAllowed, projectPathKey, sameProjectRoot } from './project-identity.js';
 import { forgeTicketSchema } from './forge-contracts.js';
@@ -58,20 +58,23 @@ export function cancelRecruitmentTeamState(team:RecruitmentTeam){team.status='ca
 export function pauseRecruitmentTeamAfterRestart(team:RecruitmentTeam){if(!team.sealed||['complete','failed','cancelled','needs_attention','paused_after_restart'].includes(team.status))return;team.status='paused_after_restart';for(const worker of team.workers)if(['queued','running'].includes(worker.status)){worker.status='paused_after_restart';worker.activeTurnId=undefined;}if(!['complete','failed','cancelled','paused_after_restart'].includes(team.integration.status)){team.integration.status='paused_after_restart';team.integration.activeTurnId=undefined;}markRecruitmentDeepSeekRunsInterrupted([...team.workers,team.integration],'The kernel restarted; the execution phase was not replayed automatically.');}
 export type PassGitDiffTurn={threadId:string;turnId:string;role:'simple'|'orchestrator'|'worker';diff:string;capturedAt:string;truncated?:boolean};
 export type PassGitDiff={status:'recorded'|'partial';source:'codex-turn-diff';updatedAt:string;turns:PassGitDiffTurn[]};
-export type ApprovalRequest = { requestId: string|number; method: 'item/commandExecution/requestApproval'|'item/fileChange/requestApproval'|'item/permissions/requestApproval'|'mcpServer/elicitation/request'; itemId:string; threadId:string; turnId:string; reason?:string; command?:string; cwd?:string; grantRoot?:string; availableDecisions?:string[]; kind?:string; networkHost?:string; networkProtocol?:string; serverName?:string; mode?:string; message?:string; requestedSchema?:Record<string,unknown>; url?:string };
+export type ForgeApprovalContext={ticketId:string;targetType:'planning'|'final_review'|'worker_attempt'|'integration';targetId:string;ownerId:string;claimToken?:string};
+export type ForgeApprovalIdentity=ForgeApprovalContext&{threadId:string;turnId:string};
+export type ApprovalRequest = { requestId: string|number; method: 'item/commandExecution/requestApproval'|'item/fileChange/requestApproval'|'item/permissions/requestApproval'|'mcpServer/elicitation/request'; itemId:string; threadId:string; turnId:string; reason?:string; command?:string; cwd?:string; grantRoot?:string; availableDecisions?:string[]; kind?:string; networkHost?:string; networkProtocol?:string; serverName?:string; mode?:string; message?:string; requestedSchema?:Record<string,unknown>; url?:string;forgeContext?:ForgeApprovalContext };
+export type ForgeApprovalRequest=ApprovalRequest&{forgeContext:ForgeApprovalContext};
 export type RouteDecision={route:'direct_answer'|'simple_implementation'|'hard_task';effectiveRoute?:'direct_answer'|'simple_implementation'|'hard_task';rule_id:string;justification:string;model:string;effort:string;speed:string;decidedAt:string;fallback?:boolean};
 export type ExecutionEscalation={from:'direct_answer'|'simple_implementation';to:'simple_implementation'|'hard_task';reason:string;completedActions:string[];evidence:string[]};
 export type SavedSkillSnapshot={id:string;revision:string;name:string;description:string;source:string;instructions:string;files:{path:string;size:number}[];role?:WorkflowRole;loadedAt?:string};
 export type SkillSaveRecord={id:string;revision:string;name:string;description:string;source:string;role:string;action:'create'|'update';savedAt:string};
 export type TaskPass = { id:string; index:number; createdAt:string; userInput:string; userInputs:string[]; userMessageIds:string[]; attachments?:TaskAttachment[]; selectedSkills?:SavedSkillSnapshot[]; loadedSkills?:SavedSkillSnapshot[]; savedSkills?:SkillSaveRecord[]; interruptedApprovals?:ApprovalRequest[]; phase:TaskPhase; agentmemAudit?:AgentMemAudit; legacyAgentMem?:Record<string,unknown>; receiptProvenance?:ReceiptProvenance; agentReceipts?:AgentReceiptRecord[]; turnSourceChanges?:TurnSourceChangeRecord[]; recruitmentTeam?:RecruitmentTeam; recruitmentHistory?:RecruitmentTeam[]; qualityLoop?:QualityLoop; approvalPolicy?:ApprovalPolicy; executionProfile?:ExecutionProfile; deepSeekExecution?:DeepSeekExecutionProfile; toolCalls?:ToolCallLog; toolCallTrackingIssueCount?:number; agentContextVersion?:number; legacyUnassociated?:boolean; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; publicAnswer?:string; assignment?:Assignment; receipt?:Receipt; reviewNote?:string; resolution?:'direct'|'simple'|'delegated'; routingNote?:string; error?:string; escalation?:unknown; reasoningSummaries?:ReasoningSummary[]; reasoningTurns?:ReasoningTurn[]; liveActivity?:LiveActivity[]; usage?:PassUsage; gitDiff?:PassGitDiff; correctionCount:number; workerStage?:'execute'; routerThreadId?:string; directThreadId?:string; simpleThreadId?:string; orchestratorThreadId?:string; workerThreadId?:string; activeTurnId?:string; activeRole?:WorkflowRole; processedTurns:string[] }
 export type GitHubTaskLink={repository:string;branch:string;baseBranch?:string;pullRequestUrl?:string;updatedAt:string};
-export type Task = { sessionType:'conversation'|'forge';forge?:ForgeTicket; projectId?:string; lastInteractedAt?:string; requiresFreshSession?:boolean; legacyAgentMem?:Record<string,unknown>; githubLink?:GitHubTaskLink; workspaceCommand?:{id:string;mode:'browser'|'github';placement:'side'|'full';url?:string;createdAt:string}; id: string; title: string; phase: TaskPhase; createdAt: string; updatedAt: string; userRoot: string; userMessages: string[]; messages: Message[]; passes?:TaskPass[]; currentPassId?:string; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; assignment?: Assignment; receipt?: Receipt; reviewNote?: string; resolution?:'direct'|'simple'|'delegated'; allowDirectResponse?:boolean;routingNote?:string;reasoningSummaries?:ReasoningSummary[];reasoningTurns?:ReasoningTurn[];liveActivity?:LiveActivity[];gitDiff?:PassGitDiff;activeModelId?:string;activeEffort?:string;correctionCount:number;workerStage?:'execute';routerThreadId?:string;directThreadId?:string;simpleThreadId?:string;orchestratorThreadId?:string;workerThreadId?:string;activeTurnId?:string;activeRole?:WorkflowRole;processedTurns:string[];error?:string;escalation?:unknown;approvalRequests?:ApprovalRequest[];pendingRevision?:boolean };
+export type Task = { sessionType:'conversation'|'forge';forge?:ForgeTicket;toolCalls?:ToolCallLog; projectId?:string; lastInteractedAt?:string; requiresFreshSession?:boolean; legacyAgentMem?:Record<string,unknown>; githubLink?:GitHubTaskLink; workspaceCommand?:{id:string;mode:'browser'|'github';placement:'side'|'full';url?:string;createdAt:string}; id: string; title: string; phase: TaskPhase; createdAt: string; updatedAt: string; userRoot: string; userMessages: string[]; messages: Message[]; passes?:TaskPass[]; currentPassId?:string; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; assignment?: Assignment; receipt?: Receipt; reviewNote?: string; resolution?:'direct'|'simple'|'delegated'; allowDirectResponse?:boolean;routingNote?:string;reasoningSummaries?:ReasoningSummary[];reasoningTurns?:ReasoningTurn[];liveActivity?:LiveActivity[];gitDiff?:PassGitDiff;activeModelId?:string;activeEffort?:string;correctionCount:number;workerStage?:'execute';routerThreadId?:string;directThreadId?:string;simpleThreadId?:string;orchestratorThreadId?:string;workerThreadId?:string;activeTurnId?:string;activeRole?:WorkflowRole;processedTurns:string[];error?:string;escalation?:unknown;approvalRequests?:ApprovalRequest[];pendingRevision?:boolean };
 export type Project = { id:string; name:string; projectRoot:string; needsLocation:boolean; pinned:boolean; createdAt:string; updatedAt:string; legacyAgentMem?:Record<string,unknown> };
 export type Settings = { orchestratorModel: string; orchestratorEffort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'; approvalPolicy: ApprovalPolicy; executionProfile?:ExecutionProfile; deepseekProvider?:string; deepseekModel?:string; deepseekReasoningEffort?:string };
-export type State = { version: 6; revision:number; settings: Settings; tasks: Task[]; activeTaskId: string|null; projects:Project[]; selectedProjectId:string|null; expandedProjectIds:string[] };
+export type State = { version: 7; revision:number; settings: Settings; tasks: Task[]; activeTaskId: string|null; projects:Project[]; selectedProjectId:string|null; expandedProjectIds:string[] };
 const dataDir = stateDirectory();
 const statePath = path.join(dataDir, 'state.json');
-const defaults: State = { version: 6, revision:0, settings: { orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request', executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'}, deepseekProvider:'opencode-go', deepseekModel:'deepseek-v4.1-flash', deepseekReasoningEffort:'max' }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:['unclassified'] };
+const defaults: State = { version: 7, revision:0, settings: { orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request', executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'}, deepseekProvider:'opencode-go', deepseekModel:'deepseek-v4.1-flash', deepseekReasoningEffort:'max' }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:['unclassified'] };
 export function deepSeekExecutionProfileForSettings(settings:Partial<Settings>):DeepSeekExecutionProfile{return {kind:'deepseek-harness-sdk',provider:settings.deepseekProvider||'opencode-go',model:settings.deepseekModel||'deepseek-v4.1-flash',nativeReasoningEffort:settings.deepseekReasoningEffort||'max'};}
 export function executionProfileForSettings(settings:Partial<Settings>):ExecutionProfile{return settings.executionProfile?structuredClone(settings.executionProfile):{provider:'codex',model:'gpt-6-luna',effort:'max'};}
 let current = structuredClone(defaults);
@@ -164,7 +167,30 @@ function isPassUsage(value:unknown){
     (row.groups===undefined||Array.isArray(row.groups)&&row.groups.every((group:any)=>isStoredRecord(group)&&['estimatedCreditsMicros'].every(k=>isString(group[k]))&&['model','reasoningEffort','speed','netNewInputTokens','cachedInputTokens','inputTokens','outputTokens','totalTokens'].every(k=>group[k]===null||isString(group[k]))))&&
     (row.allowance===undefined||isStoredRecord(row.allowance)&&['fiveHourPercent','weeklyPercent'].every(k=>nullableNumber(row.allowance[k]))&&['fiveHourWindow','weeklyWindow'].every(k=>row.allowance[k]===undefined||isStoredRecord(row.allowance[k])&&Number.isInteger(row.allowance[k].sampleCount)&&isDate(row.allowance[k].firstSampledAt)&&isDate(row.allowance[k].lastSampledAt)&&Number.isFinite(row.allowance[k].windowDurationMins)&&Number.isFinite(row.allowance[k].resetsAt)&&typeof row.allowance[k].boundariesChanged==='boolean')));
 }
-function isApprovalRequest(value:unknown){return isStoredRecord(value)&&(typeof value.requestId==='string'||typeof value.requestId==='number')&&['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','mcpServer/elicitation/request'].includes(value.method)&&['itemId','threadId','turnId'].every(k=>isString(value[k]))&&['reason','command','cwd','grantRoot','kind','networkHost','networkProtocol','serverName','mode','message','url'].every(k=>isOptionalString(value,k))&&(value.availableDecisions===undefined||strings(value.availableDecisions))&&(value.requestedSchema===undefined||isStoredRecord(value.requestedSchema));}
+function isApprovalRequest(value:unknown){
+  if(!isStoredRecord(value)||(typeof value.requestId!=='string'&&typeof value.requestId!=='number')||!['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','mcpServer/elicitation/request'].includes(value.method)||!['itemId','threadId','turnId'].every(k=>isString(value[k]))||!['reason','command','cwd','grantRoot','kind','networkHost','networkProtocol','serverName','mode','message','url'].every(k=>isOptionalString(value,k))||(value.availableDecisions!==undefined&&!strings(value.availableDecisions))||(value.requestedSchema!==undefined&&!isStoredRecord(value.requestedSchema)))return false;
+  if(value.forgeContext===undefined)return true;
+  const context=value.forgeContext;
+  return isStoredRecord(context)&&isString(context.ticketId)&&['planning','final_review','worker_attempt','integration'].includes(context.targetType)&&isString(context.targetId)&&isString(context.ownerId)&&isOptionalString(context,'claimToken')&&Object.keys(context).every(key=>['ticketId','targetType','targetId','ownerId','claimToken'].includes(key));
+}
+function isForgeApprovalRequest(value:unknown,ticket:ForgeTicket):value is ForgeApprovalRequest{
+  if(!isApprovalRequest(value))return false;
+  const request=value as Record<string,any>;
+  if(!request.forgeContext)return false;
+  const context=request.forgeContext;
+  if(context.ticketId!==ticket.id)return false;
+  if(context.targetType==='planning'||context.targetType==='final_review'){
+    const run=ticket.orchestratorRuns.find(row=>row.id===context.targetId&&row.purpose===context.targetType);
+    return !!run&&run.ownerId===context.ownerId&&run.threadId===request.threadId&&run.turnId===request.turnId&&!context.claimToken;
+  }
+  if(context.targetType==='worker_attempt'){
+    const attempt=ticket.attempts.find(row=>row.id===context.targetId);
+    if(!attempt)return false;
+    return attempt.claim.ownerId===context.ownerId&&attempt.claim.token===context.claimToken&&attempt.threadId===request.threadId&&attempt.turnId===request.turnId;
+  }
+  const run=ticket.integration.runs.find(row=>row.id===context.targetId);
+  return !!run&&run.ownerId===context.ownerId&&run.threadId===request.threadId&&run.turnId===request.turnId&&!context.claimToken;
+}
 function isReceiptProvenance(value:unknown){return isStoredRecord(value)&&['simple','worker','integrator'].includes(value.producerRole)&&['threadId','turnId'].every(k=>isString(value[k]))&&isDate(value.recordedAt)&&Array.isArray(value.artifactRefs)&&value.artifactRefs.every(isString)&&(value.origin===undefined||['model_turn','application_failure','application_status'].includes(value.origin))&&['workerId','teamId','passId'].every(k=>isOptionalString(value,k));}
 function isGitDiff(value:unknown){return isStoredRecord(value)&&['recorded','partial'].includes(value.status)&&value.source==='codex-turn-diff'&&isDate(value.updatedAt)&&Array.isArray(value.turns)&&value.turns.every((row:any)=>isStoredRecord(row)&&['threadId','turnId','diff'].every(k=>isString(row[k]))&&['simple','orchestrator','worker'].includes(row.role)&&isDate(row.capturedAt)&&(row.truncated===undefined||typeof row.truncated==='boolean'));}
 const recruitmentStatuses=['recruiting','running','integrating','complete','failed','cancelled','needs_attention','paused_after_restart'];
@@ -211,7 +237,7 @@ function hasSupportedPassShape(pass:unknown,legacyAgentMem:boolean){
   if(pass.resolution!==undefined&&!['direct','simple','delegated'].includes(pass.resolution)||pass.legacyUnassociated!==undefined&&typeof pass.legacyUnassociated!=='boolean')return false;
   return ['routerThreadId','directThreadId','simpleThreadId','orchestratorThreadId','workerThreadId','activeTurnId','agentmemTaskId','agentmemLease','agentmemRecordStatus','agentmemRecordError','agentmemReceiptId','agentmemSetupTurnId','publicAnswer','reviewNote','routingNote','error','workerContextSummary'].every(field=>isOptionalString(pass,field));
 }
-function hasSupportedTaskShape(task:unknown,legacy:boolean,legacyAgentMem:boolean,forgeState:boolean){
+function hasSupportedTaskShape(task:unknown,legacy:boolean,legacyAgentMem:boolean,forgeState:boolean,forgeToolLog:boolean){
   if(!isStoredRecord(task)||!isString(task.id)||!isString(task.title)||!taskPhases.includes(task.phase)||!isDate(task.createdAt)||!(isDate(task.updatedAt)||legacy&&task.updatedAt===undefined)||!(isString(task.userRoot)||legacy&&task.userRoot===undefined)||legacyAgentMem&&!isString(task.agentmemProjectId??'')||!legacyAgentMem&&task.agentmemProjectId!==undefined||task.legacyAgentMem!==undefined&&!isStoredRecord(task.legacyAgentMem)||task.requiresFreshSession!==undefined&&typeof task.requiresFreshSession!=='boolean'||!(strings(task.userMessages)||legacy&&task.userMessages===undefined)||!(Array.isArray(task.messages)&&task.messages.every(row=>isMessage(row,legacy))||legacy&&task.messages===undefined)||!(Number.isInteger(task.correctionCount)&&task.correctionCount>=0||legacy&&task.correctionCount===undefined)||!(strings(task.processedTurns)||legacy&&task.processedTurns===undefined))return false;
   if(!hasValidStoredArrayFields(task,['userMessages','messages','passes','processedTurns','reasoningSummaries','reasoningTurns','liveActivity','approvalRequests']))return false;
   if(task.passes!==undefined&&!task.passes.every((pass:unknown)=>hasSupportedPassShape(pass,legacyAgentMem))||!hasValidNestedArrays(task))return false;
@@ -222,7 +248,10 @@ function hasSupportedTaskShape(task:unknown,legacy:boolean,legacyAgentMem:boolea
   if((task.workerContextStatus!==undefined||task.workerContextSummary!==undefined)&&!legacyAgentMem)return false;
   if(task.workerStage!==undefined&&!(task.workerStage==='execute'||legacyAgentMem&&['context_plan','context_compose'].includes(task.workerStage))||task.workerContextStatus!==undefined&&(!isStoredRecord(task.workerContextStatus)||!['retrieved','disabled','unavailable'].includes(task.workerContextStatus.status)||!isString(task.workerContextStatus.detail))||task.workerContextSummary!==undefined&&!isString(task.workerContextSummary)||task.resolution!==undefined&&!['direct','simple','delegated'].includes(task.resolution)||task.allowDirectResponse!==undefined&&typeof task.allowDirectResponse!=='boolean'||task.pendingRevision!==undefined&&typeof task.pendingRevision!=='boolean')return false;
   if(task.passes?.length&&task.currentPassId!==undefined&&!task.passes.some((pass:any)=>pass.id===task.currentPassId))return false;
-  if(forgeState&&(!['conversation','forge'].includes(task.sessionType)||task.sessionType==='conversation'&&task.forge!==undefined||task.sessionType==='forge'&&(!forgeTicketSchema.safeParse(task.forge).success||task.forge.id!==task.id||task.forge.projectId!==task.projectId||task.forge.title!==task.title||!sameProjectRoot(task.forge.workspaceRoot,task.userRoot)||!!task.currentPassId||!!task.passes?.length||!!task.activeRole||!!task.activeTurnId||!!task.approvalRequests?.length)))return false;
+  if(task.toolCalls!==undefined&&(task.sessionType!=='forge'||!isToolCallLog(task.toolCalls))||forgeToolLog&&task.sessionType==='forge'&&!isToolCallLog(task.toolCalls))return false;
+  const parsedForge=forgeState&&task.sessionType==='forge'?forgeTicketSchema.safeParse(task.forge):undefined;
+  if(forgeState&&(!['conversation','forge'].includes(task.sessionType)||task.sessionType==='conversation'&&task.forge!==undefined||task.sessionType==='forge'&&(!parsedForge?.success||task.forge.id!==task.id||task.forge.projectId!==task.projectId||task.forge.title!==task.title||!sameProjectRoot(task.forge.workspaceRoot,task.userRoot)||!!task.currentPassId||!!task.passes?.length||!!task.activeRole||!!task.activeTurnId)))return false;
+  if(task.sessionType==='forge'&&task.approvalRequests!==undefined&&(!parsedForge?.success||!task.approvalRequests.every((request:unknown)=>isForgeApprovalRequest(request,parsedForge.data))))return false;
   if(task.projectId!==undefined&&!isUuid(task.projectId))return false;
   if(task.lastInteractedAt!==undefined&&!isDate(task.lastInteractedAt))return false;
   return ['currentPassId','activeTurnId','routerThreadId','directThreadId','simpleThreadId','orchestratorThreadId','workerThreadId','agentmemTaskId','agentmemLease','agentmemRecordStatus','agentmemRecordError','agentmemReceiptId','activeModelId','activeEffort','error','workerContextSummary','routingNote','reviewNote'].every(field=>isOptionalString(task,field));
@@ -233,12 +262,12 @@ function isV4Project(value:unknown){return isStoredRecord(value)&&isUuid(value.i
 function isLegacyProject(value:unknown){return isStoredRecord(value)&&isUuid(value.id)&&isString(value.name)&&value.name.trim().length>0&&value.name.length<=80&&isString(value.projectRoot)&&value.projectRoot.length<=1024&&isString(value.agentmemProjectId)&&/^(?:|[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(value.agentmemProjectId)&&typeof value.agentmemEnabled==='boolean'&&typeof value.agentmemAutoSetup==='boolean'&&(!value.agentmemEnabled&&!value.agentmemProjectId||value.agentmemEnabled&&(!!value.agentmemProjectId||value.agentmemAutoSetup))&&typeof value.pinned==='boolean'&&isDate(value.createdAt)&&isDate(value.updatedAt);}
 function safeWorkspaceUrl(value:unknown){try{return normalizeAgentWorkspaceUrl(value)===value;}catch{return false;}}
 function hasSupportedStoredShape(value:any){
-  if(!isStoredRecord(value)||![1,2,3,4,5,6].includes(value.version)||!Array.isArray(value.tasks))return false;
+  if(!isStoredRecord(value)||![1,2,3,4,5,6,7].includes(value.version)||!Array.isArray(value.tasks))return false;
   if(value.revision!==undefined&&(!Number.isSafeInteger(value.revision)||value.revision<0))return false;
   if(!hasSupportedSettingsShape(value.settings,value.version))return false;
   if(value.activeTaskId!==undefined&&value.activeTaskId!==null&&typeof value.activeTaskId!=='string')return false;
   if(value.version>=3&&(!Array.isArray(value.projects)||!value.projects.every(value.version>=5?isProject:value.version===4?isV4Project:isLegacyProject)||new Set(value.projects.map((project:any)=>project.id)).size!==value.projects.length||value.selectedProjectId!==null&&!isUuid(value.selectedProjectId)||!Array.isArray(value.expandedProjectIds)||!value.expandedProjectIds.every((id:any)=>id==='unclassified'||isUuid(id))||value.selectedProjectId&&!value.projects.some((project:any)=>project.id===value.selectedProjectId)||value.tasks.some((task:any)=>task.projectId&&!value.projects.some((project:any)=>project.id===task.projectId))))return false;
-  return value.tasks.every((task:any)=>hasSupportedTaskShape(task,value.version===1,value.version<5,value.version>=6)&&(value.version<6||task.sessionType!=='forge'||['complete','cancelled'].includes(task.forge.phase)||sameProjectRoot(value.projects.find((project:any)=>project.id===task.projectId)?.projectRoot||'',task.forge.workspaceRoot)));
+  return value.tasks.every((task:any)=>hasSupportedTaskShape(task,value.version===1,value.version<5,value.version>=6,value.version>=7)&&(value.version<6||task.sessionType!=='forge'||['complete','cancelled'].includes(task.forge.phase)||sameProjectRoot(value.projects.find((project:any)=>project.id===task.projectId)?.projectRoot||'',task.forge.workspaceRoot)));
 }
 
 export function loadState(): Promise<State> {
@@ -376,6 +405,10 @@ export function upgradeStoredState(value:any):State{
     const userRoot=typeof t.userRoot==='string'?t.userRoot:'';
     const oldTaskBinding=typeof t.agentmemProjectId==='string'?t.agentmemProjectId:(typeof t.projectId==='string'?legacyProjectBindings.get(t.projectId)||'':sameProjectRoot(userRoot,globalRoot)?globalAgentMemId:'');
     const task={...t,userRoot,sessionType:value.version<6?'conversation':t.sessionType==='forge'?'forge':'conversation'} as Task;
+    if(task.sessionType==='forge'){
+      task.forge=forgeTicketSchema.parse(task.forge);
+      task.toolCalls??=createToolCallLog();
+    }
     const taskLegacy=moveLegacyAgentMemFields(task as any,{agentmemProjectId:'projectId',agentmemTaskId:'taskId',agentmemLease:'lease',agentmemRecordStatus:'recordStatus',agentmemRecordError:'recordError',agentmemReceiptId:'receiptId'});
     if(oldTaskBinding&&typeof t.agentmemProjectId!=='string'&&taskLegacy.projectId===undefined){taskLegacy.projectId=oldTaskBinding;task.legacyAgentMem=taskLegacy;}
     const taskContextLegacy=migrateLegacyExecutionRecord(task);
@@ -436,7 +469,7 @@ export function upgradeStoredState(value:any):State{
   const {projectRoot:_oldRoot,agentmemProjectId:_oldAgentMemId,agentmemAutoSetup:_oldAutoSetup,...savedSettings}=legacySettings;
   const settings={...defaults.settings,...savedSettings,approvalPolicy:savedApprovalPolicy(legacySettings.approvalPolicy)};
   if(!isExecutionProfile(savedSettings.executionProfile))settings.executionProfile=structuredClone(defaults.settings.executionProfile!);
-  return {...defaults,...value,version:6,revision:Number.isSafeInteger(value.revision)&&value.revision>=0?value.revision:0,settings,tasks,projects:migratedProjects,selectedProjectId,expandedProjectIds:Array.isArray(value.expandedProjectIds)?[...new Set(value.expandedProjectIds.filter((id:string)=>id==='unclassified'||migratedProjects.some(row=>row.id===id)))]:[...migratedProjects.map(row=>row.id),'unclassified']};
+  return {...defaults,...value,version:7,revision:Number.isSafeInteger(value.revision)&&value.revision>=0?value.revision:0,settings,tasks,projects:migratedProjects,selectedProjectId,expandedProjectIds:Array.isArray(value.expandedProjectIds)?[...new Set(value.expandedProjectIds.filter((id:string)=>id==='unclassified'||migratedProjects.some(row=>row.id===id)))]:[...migratedProjects.map(row=>row.id),'unclassified']};
 }
 function isAbsoluteProjectPath(root:string){return path.isAbsolute(root)||path.win32.isAbsolute(root);}
 function projectDirectoryExists(root:string){try{return isAbsoluteProjectPath(root)&&existsSync(root)&&statSync(root).isDirectory();}catch{return false;}}
@@ -455,7 +488,7 @@ export function createForgeSessionInState(state:State,input:ForgeSessionCreateIn
   const createdAt=input.createdAt||new Date().toISOString();
   const forge=createForgeTicket({...input,id,workspaceRoot:project.projectRoot,createdAt});
   const message:Message={id:randomUUID(),role:'user',text:forge.description,createdAt};
-  const task:Task={id,title:forge.title,phase:'accepted',createdAt,updatedAt:createdAt,lastInteractedAt:createdAt,projectId:project.id,sessionType:'forge',forge,userRoot:project.projectRoot,userMessages:[forge.description],messages:[message],correctionCount:0,processedTurns:[]};
+  const task:Task={id,title:forge.title,phase:'accepted',createdAt,updatedAt:createdAt,lastInteractedAt:createdAt,projectId:project.id,sessionType:'forge',forge,toolCalls:createToolCallLog(),userRoot:project.projectRoot,userMessages:[forge.description],messages:[message],correctionCount:0,processedTurns:[]};
   state.tasks.unshift(task);state.activeTaskId=id;
   return task;
 }
@@ -470,16 +503,67 @@ export function applyForgeCommandInState(state:State,taskId:string,command:Forge
   task.forge=applyForgeCommand(task.forge,command,now);task.updatedAt=now;
   return structuredClone(task.forge);
 }
+export function recordForgeToolCallInState(state:State,taskId:string,event:ToolCallEvent,updatedAt=new Date().toISOString()){
+  const task=state.tasks.find(row=>row.id===taskId);
+  if(!task)throw new Error('Forge session not found.');
+  if(task.sessionType!=='forge'||!task.forge)throw new Error('This session is not a Forge ticket.');
+  if(!isDate(updatedAt))throw new Error('Forge tool-call updates require a valid timestamp.');
+  task.toolCalls=recordToolCall(task.toolCalls||createToolCallLog(),event);task.updatedAt=updatedAt;
+  return structuredClone(task.toolCalls);
+}
+function forgeApprovalTargetIsActive(ticket:ForgeTicket,request:ForgeApprovalRequest){
+  const context=request.forgeContext;
+  if(context.targetType==='planning'||context.targetType==='final_review'){
+    const run=ticket.orchestratorRuns.find(row=>row.id===context.targetId&&row.purpose===context.targetType);
+    return !!run&&ticket.activeOrchestratorRunId===run.id&&['running','unknown_after_restart'].includes(run.status);
+  }
+  if(context.targetType==='worker_attempt'){
+    const attempt=ticket.attempts.find(row=>row.id===context.targetId);
+    return !!attempt&&ticket.workitems.some(row=>row.id===attempt.taskId&&row.activeAttemptId===attempt.id)&&['claimed','unknown_after_restart'].includes(attempt.status);
+  }
+  const run=ticket.integration.runs.find(row=>row.id===context.targetId);
+  return !!run&&ticket.integration.activeRunId===run.id&&['running','unknown_after_restart'].includes(run.status);
+}
+export function recordForgeApprovalRequestInState(state:State,taskId:string,request:ForgeApprovalRequest,now=new Date().toISOString()){
+  const task=state.tasks.find(row=>row.id===taskId);
+  if(!task)throw new Error('Forge session not found.');
+  if(task.sessionType!=='forge'||!task.forge)throw new Error('This session is not a Forge ticket.');
+  if(!isDate(now)||!isForgeApprovalRequest(request,task.forge)||!forgeApprovalTargetIsActive(task.forge,request))throw new Error('The Forge approval request must match an active or recoverable run/attempt owner, claim, thread, and turn.');
+  const existing=task.approvalRequests?.find(row=>row.requestId===request.requestId&&row.itemId===request.itemId);
+  if(existing){
+    if(JSON.stringify(existing)===JSON.stringify(request))return structuredClone(request);
+    throw new Error('A Forge approval request ID cannot be reused for different runtime content.');
+  }
+  task.approvalRequests=[...(task.approvalRequests||[]),structuredClone(request)];task.updatedAt=now;
+  return structuredClone(request);
+}
+export function resolveForgeApprovalRequestInState(state:State,taskId:string,requestId:string|number,context:ForgeApprovalIdentity,now=new Date().toISOString()){
+  const task=state.tasks.find(row=>row.id===taskId);
+  if(!task)throw new Error('Forge session not found.');
+  if(task.sessionType!=='forge'||!task.forge)throw new Error('This session is not a Forge ticket.');
+  if(!isDate(now))throw new Error('Forge approval updates require a valid timestamp.');
+  const index=(task.approvalRequests||[]).findIndex(request=>request.requestId===requestId&&request.forgeContext?.ticketId===context.ticketId&&request.forgeContext.targetType===context.targetType&&request.forgeContext.targetId===context.targetId&&request.forgeContext.ownerId===context.ownerId&&request.forgeContext.claimToken===context.claimToken&&request.threadId===context.threadId&&request.turnId===context.turnId);
+  if(index<0)throw new Error('The Forge approval response is stale or belongs to a different run, owner, or claim.');
+  const request=task.approvalRequests![index] as ForgeApprovalRequest;
+  if(!isForgeApprovalRequest(request,task.forge)||!forgeApprovalTargetIsActive(task.forge,request)||!['planning','review','running','integrating'].includes(task.forge.phase))throw new Error('The Forge approval request is stale or its run is not active.');
+  task.approvalRequests=task.approvalRequests!.filter((_row,rowIndex)=>rowIndex!==index);task.updatedAt=now;
+  return structuredClone(request);
+}
 export function recoverForgeSessionsAfterRestartInState(state:State,now=new Date().toISOString()){
   const recovered:string[]=[];
   for(const task of state.tasks){
     if(task.sessionType!=='forge'||!task.forge)continue;
     const hasUnreconciledAttempt=task.forge.attempts.some(attempt=>attempt.status==='claimed');
+    const activeOrchestratorRun=task.forge.orchestratorRuns.find(run=>run.id===task.forge!.activeOrchestratorRunId);
+    const hasUnreconciledOrchestrator=!!activeOrchestratorRun&&(activeOrchestratorRun.status==='prepared'||activeOrchestratorRun.status==='running');
     const hasUnreconciledMerge=!!task.forge.integration.mergeIntent&&!task.forge.attentionReason?.startsWith('The final merge status is unknown after restart.');
     const activeRun=task.forge.integration.runs.find(run=>run.id===task.forge!.integration.activeRunId);
     const hasUnreconciledIntegration=!!activeRun&&(activeRun.status==='prepared'||activeRun.status==='running');
-    if(!hasUnreconciledAttempt&&!hasUnreconciledMerge&&!hasUnreconciledIntegration)continue;
-    applyForgeCommandInState(state,task.id,{type:'recover_after_restart',actor:{role:'host',id:'state-recovery'}},now);recovered.push(task.id);
+    const hasRunningToolCall=(task.toolCalls?.statusCounts.started||0)>0;
+    if(!hasUnreconciledAttempt&&!hasUnreconciledMerge&&!hasUnreconciledIntegration&&!hasUnreconciledOrchestrator&&!hasRunningToolCall)continue;
+    applyForgeCommandInState(state,task.id,{type:'recover_after_restart',actor:{role:'host',id:'state-recovery'}},now);
+    if(hasRunningToolCall){task.toolCalls=interruptRunningToolCalls(task.toolCalls!,now);task.updatedAt=now;}
+    recovered.push(task.id);
   }
   return recovered;
 }
@@ -493,14 +577,30 @@ export async function mutateForgeSession(taskId:string,command:ForgeCommand,now=
   await mutate(state=>{ticket=applyForgeCommandInState(state,taskId,command,now);});
   return structuredClone(ticket!);
 }
+export async function recordForgeToolCall(taskId:string,event:ToolCallEvent,updatedAt=new Date().toISOString()){
+  let toolCalls:ToolCallLog|undefined;
+  await mutate(state=>{toolCalls=recordForgeToolCallInState(state,taskId,event,updatedAt);});
+  return structuredClone(toolCalls!);
+}
+export async function recordForgeApprovalRequest(taskId:string,request:ForgeApprovalRequest,now=new Date().toISOString()){
+  let saved:ForgeApprovalRequest|undefined;
+  await mutate(state=>{saved=recordForgeApprovalRequestInState(state,taskId,request,now);});
+  return structuredClone(saved!);
+}
+export async function resolveForgeApprovalRequest(taskId:string,requestId:string|number,context:ForgeApprovalIdentity,now=new Date().toISOString()){
+  let resolved:ForgeApprovalRequest|undefined;
+  await mutate(state=>{resolved=resolveForgeApprovalRequestInState(state,taskId,requestId,context,now);});
+  return structuredClone(resolved!);
+}
 export async function recoverForgeSessionsAfterRestart(now=new Date().toISOString()){
   let recovered:string[]=[];
   await mutate(state=>{recovered=recoverForgeSessionsAfterRestartInState(state,now);});
   return recovered;
 }
 export function pauseActiveTasksForKernelShutdown(state:State,at=new Date().toISOString()){
-  let paused=0;
+  let paused=recoverForgeSessionsAfterRestartInState(state,at).length;
   for(const task of state.tasks){
+    if(task.sessionType==='forge')continue;
     const active=['intake','routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(task.phase)||!!task.activeRole||!!task.activeTurnId||!!task.approvalRequests?.length;
     if(!active){if(task.phase==='paused_after_restart'){const pass=currentPass(task);if(pass)recoverQualityLoopAfterRestart(pass,at);syncCurrentPass(task);}continue;}
     const pass=currentPass(task),possiblyActiveCorrectionPlanner=task.activeRole==='orchestrator'&&pass?.qualityLoop?.status==='awaiting_corrections'?{threadId:task.orchestratorThreadId,turnId:task.activeTurnId}:undefined;
@@ -565,7 +665,7 @@ export async function mutate(fn: (state: State) => void) {
   const operation=writeQueue.then(async()=>{
     const rollback=structuredClone(current);
     try {
-      fn(current); current.version=6; current.revision+=1; current.tasks.forEach(syncCurrentPass); current.tasks.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
+      fn(current); current.version=7; current.revision+=1; current.tasks.forEach(syncCurrentPass); current.tasks.sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
       await mkdir(dataDir,{recursive:true});
       const tmp=`${statePath}.${randomUUID()}.tmp`;
       try { await writeFile(tmp,JSON.stringify(current,null,2),{mode:0o600}); await rename(tmp,statePath); }
