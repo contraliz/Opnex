@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { applyCodexReasoningNotification, beginReasoningTurn } from '../server/reasoning.js';
 import type { Task } from '../server/state.js';
 
-function task():Task{return {id:'task',title:'Work',phase:'worker_running',createdAt:'',updatedAt:'',userRoot:'D:/repo',userMessages:[],messages:[],currentPassId:'pass-1',workerThreadId:'worker-thread',orchestratorThreadId:'orchestrator-thread',activeRole:'worker',activeTurnId:'worker-turn',activeModelId:'gpt-6-luna',activeEffort:'high',processedTurns:[],correctionCount:0,passes:[{id:'pass-1',index:1,createdAt:'',userInput:'work',userInputs:['work'],userMessageIds:[],phase:'worker_running',correctionCount:0,processedTurns:[]}]};}
+function task():Task{return {id:'task',sessionType:'conversation',title:'Work',phase:'worker_running',createdAt:'',updatedAt:'',userRoot:'D:/repo',userMessages:[],messages:[],currentPassId:'pass-1',workerThreadId:'worker-thread',orchestratorThreadId:'orchestrator-thread',activeRole:'worker',activeTurnId:'worker-turn',activeModelId:'gpt-6-luna',activeEffort:'high',processedTurns:[],correctionCount:0,passes:[{id:'pass-1',index:1,createdAt:'',userInput:'work',userInputs:['work'],userMessageIds:[],phase:'worker_running',correctionCount:0,processedTurns:[]}]};}
 const event=(threadId:string,turnId:string,extra:Record<string,unknown>={})=>({threadId,turnId,...extra});
 
 describe('Codex activity channels',()=>{
