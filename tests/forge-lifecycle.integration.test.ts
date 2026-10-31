@@ -280,6 +280,22 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     } finally { await fixture.cleanup(); }
   });
 
+  it('records a failed provider startup command without accepting a worker receipt', async () => {
+    const fixture = await createActiveWorkerFixture('uncertain');
+    try {
+      const ticket = fixture.coordinator.getTicket(fixture.ticket.id)!;
+      const attempt = ticket.attempts[0];
+      const toolLog = fixture.state.tasks.find((row) => row.id === fixture.ticket.id)!.toolCalls!;
+      expect(toolLog.total).toBe(1);
+      expect(toolLog.calls[0]).toMatchObject({
+        identity: { provider: 'codex', threadId: attempt.threadId, turnId: attempt.turnId, callId: 'startup-command-2' },
+        type: 'commandExecution', status: 'completed',
+      });
+      expect(attempt.status).toBe('claimed');
+      expect(ticket.receipts).toHaveLength(0);
+    } finally { await fixture.cleanup(); }
+  });
+
   it('keeps pause and cancel authoritative when planning completes before dispatch', async () => {
     for (const action of ['pause', 'cancel'] as const) {
       const fixture = await createActivePlanningFixture(action === 'pause' ? 'stopped' : 'uncertain');
@@ -349,7 +365,7 @@ async function createActivePlanningFixture(stopStatus: 'stopped' | 'uncertain', 
   const state = upgradeStoredState({ version: 7, revision: 0, settings: { approvalPolicy: 'on-request', executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' } }, tasks: [], projects: [], selectedProjectId: null, expandedProjectIds: ['unclassified'] });
   saveProjectInState(state, { id: projectId, projectRoot: repo, needsLocation: false, pinned: false });
   const requests: Array<{ request: ForgeProviderRequest; handle: ForgeProviderHandle; resolve: (outcome: ForgeProviderOutcome) => void }> = [];
-  const startRole = async (request: ForgeProviderRequest, onStarted?: (evidence: ForgeProviderStartEvidence) => void | Promise<void>, _onEvent?: (event: ForgeProviderEvent) => void | Promise<void>, onApproval?: (approval: ForgeProviderApprovalRequest) => void | Promise<void>) => {
+  const startRole = async (request: ForgeProviderRequest, onStarted?: (evidence: ForgeProviderStartEvidence) => void | Promise<void>, onEvent?: (event: ForgeProviderEvent) => void | Promise<void>, onApproval?: (approval: ForgeProviderApprovalRequest) => void | Promise<void>) => {
     const id = requests.length + 1; const threadId = `fixture-thread-${id}`; const turnId = `fixture-turn-${id}`;
     const evidence: ForgeProviderStartEvidence = { provider: 'codex', role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, model: request.model, effort: request.effort, observedAt: new Date().toISOString() };
     await onStarted?.(evidence);
@@ -357,7 +373,12 @@ async function createActivePlanningFixture(stopStatus: 'stopped' | 'uncertain', 
     const completion = new Promise<ForgeProviderOutcome>((done) => { resolve = done; });
     const handle: ForgeProviderHandle = { ...evidence, completion };
     requests.push({ request, handle, resolve });
-    if (request.role === 'worker') await onApproval?.({ requestId: id, method: 'item/commandExecution/requestApproval', itemId: `approval-${id}`, role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, request: { command: 'git status', availableDecisions: ['accept', 'decline'] } });
+    if (request.role === 'worker') {
+      const command = { type: 'commandExecution', id: `startup-command-${id}`, pluginId: null, scriptPath: null, command: 'pwsh -NoProfile', cwd: request.executionRoot, processId: null, source: 'unifiedExecStartup', commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };
+      await onEvent?.({ method: 'item/started', role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, params: { item: { ...command, status: 'inProgress' } } });
+      await onEvent?.({ method: 'item/completed', role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, params: { item: { ...command, status: 'failed', aggregatedOutput: 'orchestrator_helper_launch_canceled: ShellExecuteExW failed to launch setup helper: 1223', exitCode: -1, durationMs: 0 } } });
+      await onApproval?.({ requestId: id, method: 'item/commandExecution/requestApproval', itemId: `approval-${id}`, role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, request: { command: 'git status', availableDecisions: ['accept', 'decline'] } });
+    }
     return handle;
   };
   const coordinator = new ForgeCoordinator({ getState: () => state, mutate: async (fn) => { fn(state); state.revision++; }, startRole, cancelRole: async () => ({ status: stopStatus }), stateRoot: worktrees });
