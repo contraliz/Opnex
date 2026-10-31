@@ -10,12 +10,17 @@ import { SessionDialog, SessionRow } from './SessionControls';
 import { HeadsUpPanel } from './HeadsUpPanel';
 import { PassGitDiff } from './PassGitDiff';
 import { RecruitmentTeamPanel } from './RecruitmentTeamPanel';
+import { ToolCallLogView, toolCallLogTitle } from './ToolCallLogView';
+import { ForgeBoard } from './ForgeBoard';
+import ForgeSessionCreate from './ForgeSessionCreate';
+import { respondForgeApproval } from './api';
+import './Forge.css';
 import { EmbeddedWorkspace } from './EmbeddedWorkspace';
 import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitPane, type SessionPane } from './paneGroups';
 import { formatBrowserAnnotation } from './browser-annotation';
 import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
 import { workspaceOptionLabel } from './workspace-label';
-import type { AppState, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, ExecutionProfile, LiveActivity, PassUsage, Project, Runtime, Settings, Task, TaskPass, Message, ReasoningTurn, TaskAttachment } from '../types';
+import type { AppState, ApprovalRequest, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, ExecutionProfile, ForgeTicket, LiveActivity, PassUsage, Project, Runtime, Settings, Task, TaskPass, Message, ReasoningTurn, TaskAttachment } from '../types';
 import { qualityCorrectionPlannerInFlight, qualityLoopCanAcceptFindings, qualityLoopResumeAction } from '../../server/quality-loop-resume.js';
 const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
 
@@ -43,6 +48,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [newSessionTypes, setNewSessionTypes] = useState<Record<string, 'conversation' | 'forge'>>({});
   const [qualityModes,setQualityModes]=useState<Record<string,boolean>>({});
   const [pendingAttachments, setPendingAttachments] = useState<Record<string, TaskAttachment[]>>({});
   const [recruitmentSteerTargets, setRecruitmentSteerTargets] = useState<Record<string,string>>({});
@@ -124,12 +130,14 @@ export default function App() {
   const headsUpTriggerRef = (id: string) => headsUpTriggerRefs.current[id] ??= createRef<HTMLButtonElement>();
   const setPaneTabs = (paneId: string, value: string[] | ((current: string[]) => string[])) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, tabs: typeof value === 'function' ? value(pane.tabs) : value } : pane));
   const setPaneActive = (paneId: string, tab: string) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, activeTab: tab } : pane));
-  const refresh = async () => {
+  const refresh = async (): Promise<AppState | null> => {
     try {
       const value = await api('/api/v1/snapshot');
       applyKernelSnapshot(value);
+      return value.state || null;
     } catch (cause) {
       setError(String(cause));
+      return null;
     }
   };
   const queueContextSelection=(url:string,body:unknown)=>{const operation=contextSelectionQueue.current.then(()=>api(url,body));contextSelectionQueue.current=operation.then(()=>undefined,()=>undefined);return operation;};
@@ -457,8 +465,14 @@ export default function App() {
   };
   const approveTask = async (taskId: string, requestId: string | number, decision: 'accept' | 'decline' | 'cancel', content?:Record<string,unknown>) => {
     try {
-      await api('/api/tasks/' + taskId + '/approval', { requestId, decision, ...(content?{content}:{}) });
-      await refresh();
+      const task=state?.tasks.find(row=>row.id===taskId);
+      if(task?.sessionType==='forge'&&task.forge){
+        const ticket=await respondForgeApproval(taskId,requestId,{decision,...(content?{content}:{})});
+        setState(current=>current?{...current,tasks:current.tasks.map(row=>row.id===taskId?{...row,forge:ticket}:row)}:current);
+      }else{
+        await api('/api/tasks/' + taskId + '/approval', { requestId, decision, ...(content?{content}:{}) });
+        await refresh();
+      }
     } catch (cause) {
       setTabError(taskId, String(cause));
     }
@@ -618,7 +632,7 @@ export default function App() {
 
   if (loading) return <div className="boot"><img className="boot-brand" src="/opnex-icon-grid-1_5-margin.svg" alt="Opnex"/><span>Starting Opnex</span></div>;
   const matchingTasks=(state?.tasks||[]).filter(task=>!query.trim()||task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0));
-  const renderSessionRows=(tasks:Task[])=>tasks.map(task=><SessionRow key={task.id} task={task} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onMoveStart={dragSession} projects={state?.projects||[]} onMove={moveSessionToProject}/>);
+  const renderSessionRows=(tasks:Task[])=>tasks.map(task=><SessionRow key={task.id} task={task} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onMoveStart={task.sessionType==='forge'?undefined:dragSession} projects={state?.projects||[]} onMove={task.sessionType==='forge'?undefined:moveSessionToProject}/>);
   const orderedProjects=[...(state?.projects||[])].sort((a,b)=>Number(b.pinned)-Number(a.pinned)||a.name.localeCompare(b.name));
   const unclassifiedTasks=matchingTasks.filter(task=>!task.projectId||!(state?.projects||[]).some(project=>project.id===task.projectId));
   const projectSessionSection=(project:Project)=>{const tasks=matchingTasks.filter(task=>task.projectId===project.id);const expanded=(state?.expandedProjectIds||[]).includes(project.id);const shown=showAllProjects[project.id]?tasks:tasks.slice(0,5);const label=workspaceOptionLabel(project,state?.projects||[]);return <section className={`project-session-group ${expanded?'expanded':''} ${projectDropTarget===project.id?'is-drop-target':''}`} key={project.id} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget(project.id);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,project.id)}><div className="project-group-heading"><button className="project-expand" aria-label={`${expanded?'Collapse':'Expand'} workspace ${label}`} title={project.projectRoot} aria-expanded={expanded} onClick={()=>toggleProjectExpanded(project.id)}>{expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>{label}</span><small>{tasks.length}</small></button><button className="project-group-pin" aria-label={`${project.pinned?'Unpin':'Pin'} workspace ${label}`} title={project.pinned?'Unpin workspace':'Pin workspace'} onClick={()=>void api(`/api/projects/${project.id}/pin`,{pinned:!project.pinned}).then(refresh).catch(cause=>setError(String(cause)))}><Pin size={12}/></button><button className="project-group-edit" aria-label={`Configure workspace ${label}`} title={project.projectRoot} onClick={()=>openProjectEditor(project)}><Settings2 size={13}/></button></div><ExpandableSessionRows expanded={expanded}>{renderSessionRows(shown)}{tasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,[project.id]:!current[project.id]}))}>{showAllProjects[project.id]?'Show recent five':`Show all ${tasks.length} sessions`}</button>}{!tasks.length&&<span className="project-empty">Drop a session here</span>}</ExpandableSessionRows></section>;};
@@ -654,6 +668,13 @@ export default function App() {
       onOpenSkills={()=>openSkillsTab(paneId)}
     />;
   };
+  const renderNewSessionType = (tab:string) => {
+    const selectedType=newSessionTypes[tab]||'conversation';
+    return <div className="new-session-type" role="group" aria-label="New session type">
+      <button type="button" aria-pressed={selectedType==='conversation'} onClick={()=>setNewSessionTypes(current=>({...current,[tab]:'conversation'}))}>Conversation</button>
+      <button type="button" aria-pressed={selectedType==='forge'} onClick={()=>setNewSessionTypes(current=>({...current,[tab]:'forge'}))}>Forge</button>
+    </div>;
+  };
   const renderNewTabActions = (pane: SessionPane, tab: string) => (
     <div className="new-tab-actions">
       <button onClick={() => openNewTabInPane(pane.id)}><MessageSquarePlus size={14} />SESSION</button>
@@ -665,7 +686,7 @@ export default function App() {
   const renderSessionPaneActions = (tab: string, task: Task | null) => {
     const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
     return <div className="session-pane-actions" data-session-actions-for={tab} role="group" aria-label={(task?.title || 'New session') + ' controls'}>
-      {busy && <button className="session-pane-action session-pane-stop" aria-label="Stop" title="Stop this session" onClick={() => void stopTask(tab)}><Square size={13} fill="currentColor" /></button>}
+      {busy && task?.sessionType!=='forge' && <button className="session-pane-action session-pane-stop" aria-label="Stop" title="Stop this session" onClick={() => void stopTask(tab)}><Square size={13} fill="currentColor" /></button>}
       <button ref={headsUpTriggerRef(tab)} className="session-pane-action details-toggle heads-up-toggle" aria-label="Heads-up" title="Heads-up"
         aria-expanded={!!headsUpOpen[tab]} onClick={() => setHeadsUpOpen(current => ({ ...current, [tab]: !current[tab] }))}><PanelRight size={16} /></button>
     </div>;
@@ -755,7 +776,15 @@ export default function App() {
           onAnnotation={(annotation, comment) => record && addBrowserAnnotation(record, annotation, comment)} />
       </div>;
     }
-    const taskView = task ? <div className="conversation" ref={element => { sessionScrollRefs.current[tab] = element; }}
+    const taskView = task?.sessionType==='forge' ? <div className="conversation forge-session-view" aria-label="Forge session" ref={element => { sessionScrollRefs.current[tab] = element; }}
+      onScroll={event => {
+        const element = event.currentTarget;
+        nearBottom.current[tab] = element.scrollHeight - element.scrollTop - element.clientHeight < 180;
+      }}>
+      {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
+      {task.approvalRequests?.map(request => <ForgeApprovalCard key={String(request.requestId)} ticket={task.forge} request={request} onDecision={(decision,content) => void approveTask(task.id, request.requestId, decision,content)} />)}
+      {task.forge?<ForgeBoard ticket={task.forge} task={task} onTicketChange={ticket=>setState(current=>current?{...current,tasks:current.tasks.map(row=>row.id===task.id?{...row,forge:ticket}:row)}:current)}/>:<div role="status" className="forge-empty-state">Forge ticket details are not present in this saved session snapshot. Refresh the session or restart the local service before continuing.</div>}
+    </div> : task ? <div className="conversation" ref={element => { sessionScrollRefs.current[tab] = element; }}
       onScroll={event => {
         const element = event.currentTarget;
         nearBottom.current[tab] = element.scrollHeight - element.scrollTop - element.clientHeight < 180;
@@ -774,9 +803,18 @@ export default function App() {
         toggleToolCalls={() => setExpanded(current => ({ ...current, ['toolCalls:' + pass.id]: !current['toolCalls:' + pass.id] }))}
         toggleAgentMemAudit={() => setExpanded(current => ({ ...current, ['agentmemAudit:' + pass.id]: !current['agentmemAudit:' + pass.id] }))} />)}
       {task.approvalRequests?.map(request => <ApprovalCard key={String(request.requestId)} request={request} onDecision={(decision,content) => void approveTask(task.id, request.requestId, decision,content)} />)}
-    </div> : <div className="new-tab-center">
+    </div> : <div className={`new-tab-center ${newSessionTypes[tab]==='forge'?'forge-new-tab-center':''}`}>
       {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
-      <div className="composer-dock">{paneComposer(tab, null, pane.id)}</div>
+      {renderNewSessionType(tab)}
+      {newSessionTypes[tab]==='forge'?<ForgeSessionCreate project={selectedProject} settings={state?.settings||fallbackSettings} models={models} onOpenSettings={openSettings} onOpenSkills={()=>openSkillsTab(pane.id)} onOpenWorkspace={()=>openProjectEditor(selectedProject||'new')} onCreated={async ticket=>{
+        const snapshot=await refresh();
+        const created=snapshot?.tasks.find(row=>row.id===ticket.id);
+        if(!created){setTabError(tab,'The Forge draft was saved, but the session snapshot does not include it yet. Refresh the session to open its board.');return;}
+        setPanes(current=>current.map(group=>group.tabs.includes(tab)?{...group,tabs:group.tabs.map(item=>item===tab?created.id:item),activeTab:group.activeTab===tab?created.id:group.activeTab}:group));
+        updateWorkspaceOrigins(tab,created.id);makeTabArrival(created.id);
+        setNewSessionTypes(current=>({...current,[created.id]:'forge'}));
+        try{await queueContextSelection('/api/tasks/'+created.id+'/select',{});}catch(cause){setTabError(created.id,String(cause));}
+      }}/>:<div className="composer-dock">{paneComposer(tab, null, pane.id)}</div>}
       {renderNewTabActions(pane, tab)}
     </div>;
     return <div key={tab} data-workspace-tab={tab} data-tab-kind="session" className={baseClass} style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
@@ -784,7 +822,7 @@ export default function App() {
       onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
       onDrop={event => dropPane(event, pane.id)}>
       {renderSessionPaneActions(tab, task)}
-      {task && <>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task, pane.id)}</div></>}
+      {task?.sessionType==='forge'?taskView:task?<>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task, pane.id)}</div></>:null}
       {!task && taskView}
       <HeadsUpPanel task={task} project={task?state?.projects.find(project=>project.id===task.projectId)||null:selectedProject} projects={state?.projects||[]} settings={state?.settings||fallbackSettings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
         onClose={() => setHeadsUpOpen(current => ({ ...current, [tab]: false }))}
@@ -920,7 +958,7 @@ export default function App() {
     {error && <div className="toast-error" role="alert"><AlertCircle size={15} />{error}<button className="icon-btn" aria-label="Dismiss app error" onClick={() => setError('')}><X size={14} /></button></div>}
     {projectEditor&&<ProjectEditorDialog project={projectEditor} initialRoot={selectedProject?.projectRoot||''} close={()=>setProjectEditor(null)} saved={(project,duplicate)=>void projectSaved(project,duplicate)}/>}
     {shortcutsOpen&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setShortcutsOpen(false)}><section className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"><header><div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p>Use Ctrl on Windows/Linux or Command on macOS.</p></div><button type="button" className="icon-btn" aria-label="Close shortcuts" onClick={()=>setShortcutsOpen(false)}><X size={16}/></button></header><dl><dt>New session</dt><dd>Ctrl/⌘ + N</dd><dt>Previous / next session</dt><dd>Ctrl/⌘ + Shift + ↑ / ↓</dd><dt>Choose workspace</dt><dd>Ctrl/⌘ + Alt + P</dd><dt>Settings</dt><dd>Ctrl/⌘ + ,</dd><dt>Git</dt><dd>Ctrl/⌘ + Shift + G</dd><dt>Skills</dt><dd>Ctrl/⌘ + Shift + L</dd><dt>Toggle sidebar</dt><dd>Ctrl/⌘ + B</dd><dt>Dismiss dialog</dt><dd>Escape</dd></dl></section></div>}
-    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={refresh} saved={async settings => {
+    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={async()=>{await refresh();}} saved={async settings => {
       try {
         await api('/api/settings',settings);
         await refresh();
@@ -1007,7 +1045,7 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
     {p.qualityLoop&&<QualityLoopPanel state={p.qualityLoop} onAction={active?onQualityAction:undefined}/>}
     {p.recruitmentTeam&&<RecruitmentTeamPanel team={{teamId:p.recruitmentTeam.teamId,status:p.recruitmentTeam.status,workers:p.recruitmentTeam.workers.map(worker=>({workerId:worker.workerId,name:worker.name,step:worker.step,dependsOn:worker.dependsOn,status:worker.status,canSteer:!!worker.activeTurnId&&!worker.deepSeekExecution,effort:worker.effort,branch:worker.branch,worktreePath:worker.worktreeRoot,assignment:worker.assignment,receipt:worker.receipt,error:worker.error,deepSeekExecution:worker.deepSeekExecution,deepSeekRuntime:worker.deepSeekRuntime,deepSeekPhaseRuns:worker.deepSeekPhaseRuns})),integration:{status:p.recruitmentTeam.integration.status,canSteer:!!p.recruitmentTeam.integration.activeTurnId&&!p.recruitmentTeam.integration.deepSeekExecution,branch:p.recruitmentTeam.integration.branch,worktreePath:p.recruitmentTeam.integration.worktreeRoot,receipt:p.recruitmentTeam.integration.receipt,error:p.recruitmentTeam.integration.error,deepSeekExecution:p.recruitmentTeam.integration.deepSeekExecution,deepSeekRuntime:p.recruitmentTeam.integration.deepSeekRuntime,deepSeekPhaseRuns:p.recruitmentTeam.integration.deepSeekPhaseRuns}}} selectedWorkerId={selectedSteerWorkerId} onSelectSteerWorker={active?onSelectSteerWorker:undefined}/>}
     {p.assignment&&<Disclosure title="Assignment" icon={<FileText size={15}/>} open={assignmentExpanded} onToggle={toggleAssignment}><AssignmentView assignment={p.assignment}/></Disclosure>}
-    <Disclosure title={toolCallsTitle(p)} icon={<Terminal size={15}/>} open={toolCallsExpanded} onToggle={toggleToolCalls}><ToolCallLogView pass={p}/></Disclosure>
+    <Disclosure title={toolCallsTitle(p)} icon={<Terminal size={15}/>} open={toolCallsExpanded} onToggle={toggleToolCalls}><ToolCallLogView log={p.toolCalls} issueCount={p.toolCallTrackingIssueCount} missingMessage="This historical pass predates universal tool-call tracking. Complete invocation coverage is unavailable."/></Disclosure>
     {p.agentmemAudit&&<Disclosure title={agentMemAuditTitle(p)} icon={<Database size={15}/>} open={agentmemAuditExpanded} onToggle={toggleAgentMemAudit}><AgentMemAuditView pass={p}/></Disclosure>}
     {p.escalation&&<div className="escalation-card"><div className="escalation-head"><AlertCircle size={16}/><strong>Worker needs a decision</strong></div><p>{p.escalation.decision_needed}</p>{p.escalation.evidence?.map((x:string,i:number)=><div className="escalation-detail" key={i}>{x}</div>)}<div className="escalation-options">{p.escalation.options?.map((x:string,i:number)=><span key={i}>{x}</span>)}</div>{p.escalation.recommendation&&<p className="rec-line"><b>Recommendation:</b> {p.escalation.recommendation}</p>}</div>}
     {p.reviewNote&&<div className={`review-outcome ${p.phase}`}><span>{p.phase==='accepted'?<Check size={15}/>:<AlertCircle size={15}/>}</span><div><strong>{p.phase==='accepted'?(p.resolution==='direct'?'Direct answer':p.resolution==='simple'?'Simple implementation complete':'Receipt accepted'):phaseText[p.phase]}</strong><div className="markdown-body"><Markdown>{p.reviewNote}</Markdown></div>{p.resolution==='direct'&&p.routingNote&&<small className="routing-note">Routing basis: {p.routingNote}</small>}</div></div>}
@@ -1018,18 +1056,7 @@ function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpand
   </section>;
 }
 
-function toolCallsTitle(pass:TaskPass){return pass.toolCalls?`Tool calls · ${pass.toolCalls.total}`:'Tool calls · coverage unavailable';}
-function toolCallStamp(value:string){const date=new Date(value);return Number.isNaN(date.valueOf())?'':new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(date);}
-function ToolCallLogView({pass}:{pass:TaskPass}){
-  const log=pass.toolCalls;if(!log)return <div className="tool-call-coverage-unknown" role="status">This historical pass predates universal tool-call tracking. Complete invocation coverage is unavailable.</div>;
-  const rows=[...log.calls].sort((a,b)=>Date.parse(b.lastSeenAt)-Date.parse(a.lastSeenAt));
-  return <div className="tool-call-log" aria-label="Observed tool calls">
-    <div className="tool-call-summary" aria-label={`${log.total} tool calls observed`}><span>{log.statusCounts.started} running</span><span>{log.statusCounts.completed} completed</span><span>{log.statusCounts.failed} failed</span><span>{log.statusCounts.interrupted} interrupted</span></div>
-    {(pass.toolCallTrackingIssueCount||0)>0&&<p className="tool-call-coverage-warning" role="status">{pass.toolCallTrackingIssueCount} tool events could not be counted because the provider omitted or returned an unsupported invocation ID.</p>}
-    {log.omittedCount>0&&<p className="tool-call-omitted-note">Showing the latest {rows.length.toLocaleString()} tool-call details. {log.omittedCount.toLocaleString()} older detail rows are omitted; the total still includes them.</p>}
-    {!rows.length?<p className="tool-call-empty">No tool calls were observed during this pass.</p>:<ol className="tool-call-rows">{rows.map(call=><li key={call.key} className={`tool-call-row ${call.status}`}><span className="tool-call-state" aria-label={call.status}>{call.status==='started'?<span className="activity-spinner"/>:call.status==='failed'?<AlertCircle size={13}/>:call.status==='completed'?<Check size={13}/>:<Square size={11}/>}</span><div className="tool-call-copy"><strong>{call.name}</strong><span>{call.identity.provider} · {call.agentRole||'agent'} · {call.sources.map(source=>source==='model'?'agent':'app').join(' + ')} · {toolCallStamp(call.firstSeenAt)}</span>{call.summary&&<small>{call.summary}</small>}</div></li>)}</ol>}
-  </div>;
-}
+function toolCallsTitle(pass:TaskPass){return toolCallLogTitle(pass.toolCalls);}
 function agentMemAuditTitle(pass:TaskPass){const audit=pass.agentmemAudit;if(!audit?.recorded)return 'Historical AgentMem audit · record unavailable';const app=audit.calls.filter(call=>call.source==='application').length;const model=audit.calls.filter(call=>call.source==='model').length;return `Historical AgentMem audit · ${model} model calls · ${app} app calls`;}
 function AgentMemAuditView({pass}:{pass:TaskPass}){
   const audit=pass.agentmemAudit;
@@ -1101,7 +1128,35 @@ function PassUsagePanel({pass}:{pass:TaskPass}){
     </div>
   </section>;
 }
-function ApprovalCard({request,onDecision}:{request:any;onDecision:(decision:'accept'|'decline'|'cancel',content?:Record<string,unknown>)=>void}){const [contentText,setContentText]=useState('{}');const [contentError,setContentError]=useState('');const permission=request.method==='item/permissions/requestApproval';const elicitation=request.method==='mcpServer/elicitation/request';const accept=()=>{if(!elicitation||request.mode==='url'||!request.requestedSchema){onDecision('accept');return;}try{const value=JSON.parse(contentText||'{}');if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Response must be a JSON object.');onDecision('accept',value as Record<string,unknown>);setContentError('');}catch(error){setContentError(error instanceof Error?error.message:'Enter a valid JSON object.');}};return <section className="approval-card" aria-label={elicitation?'MCP server input request':'Codex approval needed'}><div className="approval-heading"><ShieldCheck size={15}/><strong>{elicitation?'MCP server needs your input':'Approval needed'}</strong><span>{elicitation?`${request.serverName||'MCP server'} · ${request.mode||'form'}`:permission?'Permission request':request.method.includes('fileChange')?'File change':'Command execution'}</span></div>{(elicitation?request.message:request.reason)&&<p>{elicitation?request.message:request.reason}</p>}{request.url&&elicitation&&<div className="approval-meta">Requested URL: {request.url}</div>}{elicitation&&request.requestedSchema&&<><div className="approval-meta">Requested fields</div><pre className="permission-preview">{JSON.stringify(request.requestedSchema,null,2)}</pre><label className="approval-form-label">Response JSON<textarea value={contentText} onChange={event=>{setContentText(event.target.value);setContentError('');}} spellCheck={false} aria-label="MCP response JSON" /></label>{contentError&&<div role="alert" className="approval-error">{contentError}</div>}</>}{request.command&&<pre>{request.command}</pre>}{request.networkHost&&<div className="approval-meta">Network destination: {request.networkHost} ({request.networkProtocol})</div>}{request.cwd&&<div className="approval-meta">Working directory: {request.cwd}</div>}{request.grantRoot&&<div className="approval-meta">Requested write root: {request.grantRoot}</div>}{permission&&<pre className="permission-preview">{JSON.stringify(request.permissionRequest,null,2)}</pre>}<div className="approval-actions"><button onClick={()=>onDecision('decline')}>Decline</button><button onClick={()=>onDecision('cancel')}>Cancel turn</button><button className="approval-accept" onClick={accept}>{elicitation?'Send response':permission?'Grant requested permissions':'Approve once'}</button></div></section>}
+function ForgeApprovalCard({ticket,request,onDecision}:{ticket?:ForgeTicket;request:ApprovalRequest;onDecision:(decision:'accept'|'decline'|'cancel',content?:Record<string,unknown>)=>void}){
+  return <ApprovalCard request={request} onDecision={onDecision} disabledReason={ticket?forgeApprovalResponseReason(ticket,request):'The saved Forge ticket is unavailable. Refresh the session before responding.'}/>;
+}
+function forgeApprovalResponseReason(ticket:ForgeTicket,request:ApprovalRequest){
+  if(ticket.phase==='paused')return 'Forge is paused. Review the saved run and resume the ticket before answering; this request remains pending.';
+  if(ticket.phase==='cancelled'||ticket.phase==='complete')return 'This Forge ticket is cancelled or complete. The saved request cannot receive a response.';
+  if(ticket.phase==='blocked')return `Forge needs reconciliation before this request can be answered${ticket.attentionReason?`: ${ticket.attentionReason}`:''}. Refresh the board and reconcile the saved run.`;
+  if(!['planning','review','running','integrating'].includes(ticket.phase))return 'This request is not attached to a currently actionable Forge run.';
+  const context=request.forgeContext;
+  if(!context||context.ticketId!==ticket.id)return 'This saved request is missing its Forge run identity and cannot be answered.';
+  if(context.targetType==='planning'||context.targetType==='final_review'){
+    const run=ticket.orchestratorRuns.find(row=>row.id===context.targetId&&row.purpose===context.targetType);
+    if(run?.status==='unknown_after_restart')return 'The orchestrator run status is uncertain after restart. Refresh and reconcile the saved run before answering; the request remains pending.';
+    if(!run||ticket.activeOrchestratorRunId!==run.id||run.status!=='running'||run.ownerId!==context.ownerId||run.threadId!==request.threadId||run.turnId!==request.turnId||context.claimToken)return 'This request no longer matches the active orchestrator run and cannot be answered.';
+    return undefined;
+  }
+  if(context.targetType==='worker_attempt'){
+    const attempt=ticket.attempts.find(row=>row.id===context.targetId);
+    if(attempt?.status==='unknown_after_restart'||attempt?.status==='unknown_effect')return 'The worker attempt is uncertain or unreconciled. Refresh and reconcile the saved attempt before answering; the request remains pending.';
+    const active=ticket.workitems.some(row=>row.id===attempt?.taskId&&row.activeAttemptId===attempt.id);
+    if(!attempt||!active||attempt.status!=='claimed'||attempt.claim.ownerId!==context.ownerId||attempt.claim.token!==context.claimToken||attempt.threadId!==request.threadId||attempt.turnId!==request.turnId)return 'This request no longer matches an active worker attempt and cannot be answered.';
+    return undefined;
+  }
+  const run=ticket.integration.runs.find(row=>row.id===context.targetId);
+  if(run?.status==='unknown_after_restart')return 'The integration run status is uncertain after restart. Refresh and reconcile the saved run before answering; the request remains pending.';
+  if(!run||ticket.integration.activeRunId!==run.id||run.status!=='running'||run.ownerId!==context.ownerId||run.threadId!==request.threadId||run.turnId!==request.turnId||context.claimToken)return 'This request no longer matches the active integration run and cannot be answered.';
+  return undefined;
+}
+function ApprovalCard({request,onDecision,disabledReason}:{request:any;onDecision:(decision:'accept'|'decline'|'cancel',content?:Record<string,unknown>)=>void;disabledReason?:string}){const [contentText,setContentText]=useState('{}');const [contentError,setContentError]=useState('');const permission=request.method==='item/permissions/requestApproval';const elicitation=request.method==='mcpServer/elicitation/request';const forgeContext=request.forgeContext;const accept=()=>{if(disabledReason)return;if(!elicitation||request.mode==='url'||!request.requestedSchema){onDecision('accept');return;}try{const value=JSON.parse(contentText||'{}');if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Response must be a JSON object.');onDecision('accept',value as Record<string,unknown>);setContentError('');}catch(error){setContentError(error instanceof Error?error.message:'Enter a valid JSON object.');}};return <section className="approval-card" aria-label={elicitation?'MCP server input request':'Codex approval needed'}><div className="approval-heading"><ShieldCheck size={15}/><strong>{elicitation?'MCP server needs your input':'Approval needed'}</strong><span>{forgeContext?`Forge · ${forgeContext.targetType.replaceAll('_',' ')}`:elicitation?`${request.serverName||'MCP server'} · ${request.mode||'form'}`:permission?'Permission request':request.method.includes('fileChange')?'File change':'Command execution'}</span></div>{(elicitation?request.message:request.reason)&&<p>{elicitation?request.message:request.reason}</p>}{forgeContext&&<div className="approval-meta">Bound to {forgeContext.targetType.replaceAll('_',' ')} run {forgeContext.targetId} · {forgeContext.ownerId}</div>}{disabledReason&&<div className="forge-approval-inactive" role="status">{disabledReason}</div>}{request.url&&elicitation&&<div className="approval-meta">Requested URL: {request.url}</div>}{elicitation&&request.requestedSchema&&<><div className="approval-meta">Requested fields</div><pre className="permission-preview">{JSON.stringify(request.requestedSchema,null,2)}</pre><label className="approval-form-label">Response JSON<textarea disabled={!!disabledReason} value={contentText} onChange={event=>{setContentText(event.target.value);setContentError('');}} spellCheck={false} aria-label="MCP response JSON" /></label>{contentError&&<div role="alert" className="approval-error">{contentError}</div>}</>}{request.command&&<pre>{request.command}</pre>}{request.networkHost&&<div className="approval-meta">Network destination: {request.networkHost} ({request.networkProtocol})</div>}{request.cwd&&<div className="approval-meta">Working directory: {request.cwd}</div>}{request.grantRoot&&<div className="approval-meta">Requested write root: {request.grantRoot}</div>}{permission&&<pre className="permission-preview">{JSON.stringify(request.permissionRequest,null,2)}</pre>}<div className="approval-actions"><button disabled={!!disabledReason} onClick={()=>onDecision('decline')}>Decline</button><button disabled={!!disabledReason} onClick={()=>onDecision('cancel')}>Cancel turn</button><button className="approval-accept" disabled={!!disabledReason} onClick={accept}>{elicitation?'Send response':permission?'Grant requested permissions':'Approve once'}</button></div></section>}
 function Disclosure({title,icon,open,onToggle,children}:{title:string;icon:React.ReactNode;open:boolean;onToggle:()=>void;children:React.ReactNode}){return <div className={`disclosure ${open?'open':''}`}><button className="disclosure-head" onClick={onToggle} aria-expanded={open}><span className="disclosure-icon">{icon}</span><strong>{title}</strong><ChevronDown size={14} className="disclosure-chevron"/><span className="disclosure-spacer"/></button><div className="disclosure-panel" aria-hidden={!open} inert={!open}><div className="disclosure-panel-inner"><div className="disclosure-content">{children}</div></div></div></div>}
 function AssignmentView({assignment:a}:{assignment:Assignment}){const data:[string,string[]][]=[['Outcome',[a.outcome,a.deliverable]],['Authorized read scope',a.read_scope],['Authorized write scope',a.write_scope],['Constraints',a.constraints],['Acceptance',a.acceptance],['Verification',a.verification],['Escalate when',a.escalation_conditions],['Exclusions',a.exclusions]];return <div className="assignment-grid">{data.map(([label,items])=><div key={label} className="assignment-block"><span>{label}</span><ul>{items.map((x,i)=><li key={i}>{x}</li>)}</ul></div>)}</div>;}
 function RunReceipt({pass:p,taskId}:{pass:TaskPass;taskId:string}){
