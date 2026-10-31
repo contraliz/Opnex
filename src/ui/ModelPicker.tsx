@@ -2,6 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
 
 export type ModelChoice={providerKey:string;provider:string;id:string;name:string;efforts:string[];available:boolean;availabilityNote?:string};
+export function codexModelChoices(models:{id:string;displayName?:string;efforts:string[]}[]):ModelChoice[]{
+  const supportedEfforts=new Set(['low','medium','high','xhigh','max','ultra']);
+  return models.map(model=>{const efforts=model.efforts.filter(effort=>supportedEfforts.has(effort));return {providerKey:'codex',provider:'Codex · OpenAI',id:model.id,name:modelChoiceName(model.id,model.displayName),efforts,available:efforts.length>0,availabilityNote:efforts.length?undefined:'No supported reasoning effort is advertised by the runtime.'};});
+}
 type Props={label:string;providerKey:string;model:string;effort:string;choices:ModelChoice[];disabled:boolean;onChange:(choice:ModelChoice,effort:string)=>void};
 
 export function modelChoiceName(id:string,displayName?:string){return id==='gpt-6-luna'?'GPT-6 Luna':displayName||id;}
