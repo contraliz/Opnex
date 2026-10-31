@@ -10,18 +10,16 @@ When a task needs project context, the agent gathers it as prompt-guided work wi
 
 ## Identity handoff
 
-An assignment should distinguish these values; field names below are illustrative, not an API schema:
+The Forge assignment supplies enough initial identity context to resolve an existing registration; it does not need to carry registration fields copied in advance. Field names below are illustrative, not an API schema:
 
 - Workspace display name and canonical source root.
-- Registered AgentMem project ID, project name, and registered canonical source root.
-- Optional AgentMem memory root, which is separate from the source root.
+- Role, ticket/task/attempt, selected skill, and allowed knowledge scope.
+- The shared ticket call total and balance, plus this attempt's allocation/current use.
 - Execution worktree root and an explicit association to the canonical workspace.
-- Role, task, attempt, and read/write knowledge scope.
-- Shared ticket call total, current used/remaining count, and this attempt's allocation/current use.
 
-The registered project name must match the workspace display folder name. The registered canonical source root must match the assigned canonical workspace root as a full normalized path. A matching name, ID, or final directory component alone does not establish identity. If the assignment includes an AgentMem memory root (for example, `D:\projects\Opnex`), check that field separately; do not compare it to or substitute it for the workspace source root (for example, `D:\programming\opnex`).
+Resolve the existing registration by the exact canonical source root, then verify its returned project ID, project name, and registered canonical source root. The registered name must match the workspace directory name, and the normalized full source paths must match exactly. An explicit project ID supplied as an expectation may be checked, but is not required before resolution. A matching name, ID, or final directory component alone does not establish identity. If a separate AgentMem memory root is supplied (for example, `D:\projects\Opnex`), check that value independently; do not compare it to or substitute it for the workspace source root (for example, `D:\programming\opnex`).
 
-Workers use their worktree as an execution directory only. It may be on another drive or have a duplicated folder name. Use the assigned canonical root and registered AgentMem project identity for knowledge access; do not resolve, create, or rebind a project from the worktree path. Reuse an identity already verified and handed off; do not repeat resolve/attach for every role. If the identity is missing, ambiguous, or mismatched, stop the knowledge sequence and report the field that failed.
+Workers use their worktree as an execution directory only. It may be on another drive or have a duplicated folder name. Use the verified exact-root registration for knowledge access and reuse that binding during the attempt; do not resolve from the worktree path or repeat resolution just because a role or worktree changed. Do not guess by name, reuse an unverified legacy binding, create a project, or rebind one. If exact-root resolution is missing or ambiguous, or the returned ID/name/root checks fail, stop the knowledge sequence and report the specific gap.
 
 ## Call accounting
 
@@ -33,13 +31,12 @@ Count every request, even when the service is unavailable, returns no results, o
 
 ### Finite call and worktree example
 
-Suppose a Forge ticket has a shared total of 32 operations, 4 already used, and 28 remaining. A worker receives an allocation of 2. Its verified handoff identifies workspace `opnex` at `D:\programming\opnex`, registered AgentMem project `opnex` with that canonical source root, memory root `D:\projects\Opnex`, and worktree `C:\Users\ethna\.codex\worktrees\forge-worker\opnex` explicitly linked to the workspace.
+Suppose a Forge ticket has a shared total of 32 operations, 4 already used, and 28 remaining. A worker receives an allocation of 2. Its assignment identifies workspace `opnex` at `D:\programming\opnex` and worktree `C:\Users\ethna\.codex\worktrees\forge-worker\opnex` explicitly linked to the workspace. The AgentMem service resolves the existing registration from the exact canonical source root and returns project ID, name, and registered source root; the worker verifies those values and confirms the name is `opnex`.
 
-1. Reuse the verified registration; do not resolve or attach again from the worktree.
-2. Make one targeted search with a small result/character limit. If its cited evidence answers the task, stop: the attempt used 1 operation and the ticket has 27 remaining.
-3. If one cited source needs clarification, make one bounded read within the remaining allocation, then stop: the attempt used 2 and the ticket has 26 remaining.
+1. Resolve by the assigned canonical root and verify the returned binding (1 operation); do not resolve from the worktree.
+2. Make one targeted search with a small result/character limit. If its cited evidence answers the task, stop: the attempt used 2 operations and the ticket has 26 remaining.
 
-If the assignment's registration was not verified, one exact registration check may use the first operation; retrieval then uses the second. If a search fails transiently on the first operation, one retry can use the second, after which the sequence ends even if the evidence is still missing. A later attempt needs a new explicit allocation from the ticket's remaining 26; it does not get a reset.
+If exact-root resolution fails transiently, its one permitted retry consumes the second operation and ends the attempt without a search. If the search fails transiently after successful resolution, no allocation remains for a retry. A later attempt needs a new explicit allocation from the ticket's remaining balance; it does not get a reset.
 
 ### Tool absence
 
