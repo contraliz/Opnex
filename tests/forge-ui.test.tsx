@@ -342,4 +342,3 @@ describe('Forge board',()=>{
     expect(mockApi.api).toHaveBeenCalledWith(`/api/forge/tickets/${ticket.id}/start`,{});
   });
 });
-

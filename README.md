@@ -2,6 +2,8 @@
 
 Opnex is a local Codex request-routing and delegation app with workspace-rooted sessions. Requests are classified by GPT-6 Luna at low effort with the Fast tier. The composer selects an execution model and effort for direct, simple, and delegated execution: GPT-6 Luna through Codex or DeepSeek V4.1 Flash through OpenCode Go. Hard-task planning and final review continue to use the separately configured Sol/Astra Codex orchestrator, and independent QA keeps its own model policy. Optional workspace knowledge is available only through the user-invoked `agentmem-project` skill and a host-configured MCP service. Opnex does not own, configure, or require that service. The app-owned policy is in [policy/CODEX_DELEGATION_POLICY.md](policy/CODEX_DELEGATION_POLICY.md). This independent project is not affiliated with OpenAI.
 
+Forge sessions add a bounded, workspace-owned ticket workflow with isolated Git worktrees, saved receipts, and guarded local integration. See [Forge sessions](docs/forge-sessions.md) for setup, recovery, and runtime limits.
+
 ## Requirements
 
 - Node.js 22.12 or newer and npm to run from source or use the portable npm package. The packaged Electron app includes its runtime. Use Node.js 22.22.2 for source checks; it satisfies the locked jsdom test environment's runtime requirements and is the version used in CI.

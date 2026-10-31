@@ -411,4 +411,3 @@ export type ForgeCommand=
   | {type:'request_corrections';actor:ForgeActor;correctionId:string;items:{taskId:string;findingIds:string[];assignment:ForgeAssignmentSnapshotInput}[]}
   | {type:'begin_merge';actor:ForgeActor;candidateSha:string;targetMainSha:string;targetBranch:string;observedMainSha:string}
   | {type:'record_merge_readback';actor:ForgeActor;result:'merged'|'stale'|'failed';candidateSha:string;targetMainSha:string;targetBranch:string;preMergeMainSha?:string;observedMainSha:string;mergeCommitSha?:string;commitReadbackSha?:string;detail?:string};
-
