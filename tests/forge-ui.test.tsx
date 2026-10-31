@@ -175,7 +175,7 @@ describe('Forge session creation',()=>{
     expect(mockApi.api.mock.calls.some(([path])=>String(path).endsWith('/start'))).toBe(false);
     expect(serverState.tasks[0]?.sessionType).toBe('forge');
     expect(serverState.tasks[0]?.forge?.workspaceRoot).toBe(project.projectRoot);
-    expect(screen.getByRole('button',{name:'Start planning'})).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Start Forge'})).toBeTruthy();
   });
 
   it('keeps the draft open with a clear workspace or required-skill action when creation is unavailable',async()=>{
@@ -251,14 +251,17 @@ describe('Forge board',()=>{
     expect(mockApi.api).toHaveBeenCalledWith(`/api/forge/tickets/${ticket.id}/cancel`,{});
   });
 
-  it('sends the exact plan revision when the user accepts a proposal',async()=>{
-    const user=userEvent.setup();
-    let ticket=createDraft('planned-ticket');
+  it('starts a saved ticket once and does not request a second plan-acceptance action',async()=>{
+    const user=userEvent.setup();let ticket=createDraft('planned-ticket');
     ticket=applyForgeCommand(ticket,{type:'submit_manual_plan',actor:{role:'user',id:'user-1'},planId:'plan-a',tasks:[planTask('task-a')]},at);
     mockApi.api.mockResolvedValue(ticket);
-    render(<ForgeBoard ticket={ticket} task={forgeTask(ticket)} onTicketChange={next=>{ticket=next;}}/>);
-    await user.click(screen.getByRole('button',{name:'Accept plan and start workers'}));
-    expect(mockApi.api).toHaveBeenCalledWith(`/api/forge/tickets/${ticket.id}/start`,{planRevision:ticket.proposedPlan!.revision});
+    const {rerender}=render(<ForgeBoard ticket={createDraft('planned-ticket')} task={forgeTask(createDraft('planned-ticket'))} onTicketChange={next=>{ticket=next;}}/>);
+    expect(screen.queryByRole('button',{name:/Accept plan/})).toBeNull();
+    await user.click(screen.getByRole('button',{name:'Start Forge'}));
+    expect(mockApi.api).toHaveBeenCalledWith(`/api/forge/tickets/${ticket.id}/start`,{});
+    rerender(<ForgeBoard ticket={ticket} task={forgeTask(ticket)} onTicketChange={next=>{ticket=next;}}/>);
+    expect(screen.queryByRole('button',{name:/Accept plan/})).toBeNull();
+    expect(screen.getByText(/valid plan continues into worker dispatch automatically/i)).toBeTruthy();
   });
 
   it('routes Forge-owned approval responses with their persisted request id',async()=>{
@@ -327,7 +330,7 @@ describe('Forge board',()=>{
     const updatedTask={...task,forge:planning};
     act(()=>eventSource.onmessage({data:JSON.stringify({type:'snapshot',cursor:2,state:{...serverState,revision:2,tasks:[updatedTask]},runtime})}));
     await waitFor(()=>expect(document.querySelector('.forge-board')?.getAttribute('data-ticket-phase')).toBe('planning'));
-    expect(screen.getByRole('heading',{name:'Review the proposed plan'})).toBeTruthy();
+    expect(screen.getByRole('heading',{name:'Validating the proposed plan'})).toBeTruthy();
     expect(screen.getByRole('button',{name:'Pause Forge ticket'})).toBeTruthy();
   });
 
@@ -337,7 +340,7 @@ describe('Forge board',()=>{
     expect(screen.getByText('Tool calls · 1')).toBeTruthy();
     fireEvent.click(screen.getByText('Tool calls · 1'));expect(screen.getByText('read_file')).toBeTruthy();
     mockApi.api.mockRejectedValueOnce(new Error('The selected workspace is not a usable Git repository.'));
-    fireEvent.click(screen.getByRole('button',{name:'Start planning'}));
+    fireEvent.click(screen.getByRole('button',{name:'Start Forge'}));
     expect((await screen.findByRole('alert')).textContent).toMatch(/not a usable Git repository/);
     expect(mockApi.api).toHaveBeenCalledWith(`/api/forge/tickets/${ticket.id}/start`,{});
   });
