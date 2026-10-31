@@ -23,12 +23,19 @@ export const forgeLimitsSchema=z.object({
   maxCorrectionRounds:z.number().int().min(0).max(3),
 }).strict();
 export const DEFAULT_FORGE_LIMITS={maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3} as const;
+export const forgeKnowledgeBudgetSchema=z.object({
+  totalOperations:z.number().int().min(0).max(100000),
+  defaultAllocationOperations:z.number().int().min(0).max(8),
+  maxAllocationOperations:z.number().int().min(0).max(8),
+}).strict();
+export const DEFAULT_FORGE_KNOWLEDGE_BUDGET={totalOperations:64,defaultAllocationOperations:2,maxAllocationOperations:8} as const;
+export const MAX_FORGE_SKILL_SNAPSHOTS=13 as const;
 export const MAX_FORGE_WORKITEMS=16 as const;
 export const forgeCapabilityLevelSchema=z.enum(['enforced','monitored','instruction-only','unavailable']);
 export const forgeCapabilitiesSchema=z.object({
   filesystemWriteScope:forgeCapabilityLevelSchema,
   knowledgeScope:forgeCapabilityLevelSchema,
-  operationBudget:forgeCapabilityLevelSchema,
+  operationBudget:forgeCapabilityLevelSchema.default('instruction-only'),
   toolAuthorization:forgeCapabilityLevelSchema,
   cancellation:forgeCapabilityLevelSchema,
   commitScopeValidation:forgeCapabilityLevelSchema,
@@ -42,10 +49,14 @@ const forgeTicketInputBaseSchema=z.object({
   scope:forgeScopeSchema,
   orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict(),
   workerProfile:forgeExecutionProfileSchema,
+  targetBranch:z.string().trim().min(1).max(240).default('main'),
   skillIds:z.array(z.string().uuid()).max(12).default([]).superRefine((ids,ctx)=>{if(new Set(ids).size!==ids.length)ctx.addIssue({code:'custom',message:'Select each Forge skill only once.'});}),
   limits:forgeLimitsSchema.partial().default({}),
+  knowledgeBudget:forgeKnowledgeBudgetSchema.partial().default({}),
 }).strict();
-export const forgeTicketInputSchema=forgeTicketInputBaseSchema.transform(input=>({...input,limits:{...DEFAULT_FORGE_LIMITS,...input.limits}}));
+export const forgeTicketInputSchema=forgeTicketInputBaseSchema.transform(input=>({...input,limits:{...DEFAULT_FORGE_LIMITS,...input.limits},knowledgeBudget:{...DEFAULT_FORGE_KNOWLEDGE_BUDGET,...input.knowledgeBudget}})).superRefine((input,ctx)=>{
+  if(input.knowledgeBudget.defaultAllocationOperations>input.knowledgeBudget.maxAllocationOperations)ctx.addIssue({code:'custom',path:['knowledgeBudget','defaultAllocationOperations'],message:'The default knowledge allocation cannot exceed the per-run maximum.'});
+});
 export type ForgeTicketInput=z.infer<typeof forgeTicketInputSchema>;
 
 export const directAnswerSchema = z.object({
