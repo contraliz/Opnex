@@ -9,7 +9,7 @@ import { saveProjectInState, upgradeStoredState, type Project, type State, type 
 const stamp='2026-10-29T00:00:00.000Z';
 const project=(patch:any={}):Project=>({id:'11111111-1111-4111-8111-111111111111',name:'Alpha',projectRoot:'D:/work/alpha',needsLocation:false,pinned:false,createdAt:stamp,updatedAt:stamp,...patch});
 const task=(patch:any={}):Task=>({id:'session-alpha',sessionType:'conversation',title:'Keep its history',phase:'accepted',createdAt:stamp,updatedAt:stamp,userRoot:'D:/work/alpha',userMessages:['hello'],messages:[{id:'message-1',role:'user',text:'hello',createdAt:stamp}],correctionCount:0,processedTurns:[],...patch});
-const state=(projects:Project[]=[],tasks:Task[]=[]):State=>({version:6,revision:0,settings:{orchestratorModel:'gpt-6-sol',orchestratorEffort:'high',approvalPolicy:'on-request'},tasks,activeTaskId:null,projects,selectedProjectId:null,expandedProjectIds:projects.map(row=>row.id)});
+const state=(projects:Project[]=[],tasks:Task[]=[]):State=>({version:7,revision:0,settings:{orchestratorModel:'gpt-6-sol',orchestratorEffort:'high',approvalPolicy:'on-request'},tasks,activeTaskId:null,projects,selectedProjectId:null,expandedProjectIds:projects.map(row=>row.id)});
 
 describe('project-owned workspaces',()=>{
   it('compares full canonical paths with Windows case and separator rules',()=>{
@@ -39,7 +39,7 @@ describe('project-owned workspaces',()=>{
       const alphaProject=migrated.projects.find(row=>sameProjectRoot(row.projectRoot,alphaRoot))!;
       const betaProject=migrated.projects.find(row=>sameProjectRoot(row.projectRoot,betaRoot))!;
       const missingProject=migrated.projects.find(row=>sameProjectRoot(row.projectRoot,'D:/legacy/missing'))!;
-      expect(migrated.version).toBe(6);
+      expect(migrated.version).toBe(7);
       expect(migrated.settings).not.toHaveProperty('projectRoot');
       expect(migrated.settings).not.toHaveProperty('agentmemProjectId');
       expect(migrated.tasks.map(row=>row.id)).toEqual(expected.tasks.map((row:any)=>row.id));
