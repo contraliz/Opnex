@@ -98,6 +98,30 @@ describe('Forge Codex provider contract', () => {
     await expect(completion).resolves.toEqual({ status: 'completed', turn, text: '{"ok":true}' });
   });
 
+  it('routes generated item lifecycle notifications by their top-level thread and turn IDs', async () => {
+    const client = fakeCodex();
+    const provider = new ForgeCodexProvider({ client: client as never, validateProfile: vi.fn(), ensureReady: vi.fn() });
+    const onEvent = vi.fn();
+    await provider.start(request, undefined, onEvent);
+
+    const started = {
+      item: { type: 'commandExecution', id: 'command-1', pluginId: null, scriptPath: null, command: 'pwsh -NoProfile', cwd: 'D:/work/project', processId: null, source: 'unifiedExecStartup', status: 'inProgress', commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null },
+      threadId: 'thread-forge-1', turnId: 'turn-forge-1', startedAtMs: 1_798_000_000_000,
+    };
+    const completed = {
+      item: { ...started.item, status: 'failed', aggregatedOutput: 'setup helper launch canceled', exitCode: -1, durationMs: 0 },
+      threadId: 'thread-forge-1', turnId: 'turn-forge-1', completedAtMs: 1_798_000_000_000,
+    };
+    client.emit('notification', 'item/started', started);
+    client.emit('notification', 'item/completed', { ...completed, threadId: 'other-thread' });
+    client.emit('notification', 'item/completed', { ...completed, turnId: 'stale-turn' });
+    client.emit('notification', 'item/completed', completed);
+
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(onEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({ method: 'item/started', threadId: 'thread-forge-1', turnId: 'turn-forge-1', params: started }));
+    expect(onEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({ method: 'item/completed', threadId: 'thread-forge-1', turnId: 'turn-forge-1', params: completed }));
+  });
+
   it('reports uncertain cancellation when the runtime gives no stopped-turn evidence', async () => {
     const client = fakeCodex();
     const provider = new ForgeCodexProvider({ client: client as never, validateProfile: vi.fn(), ensureReady: vi.fn(), cancelWaitMs: 1 });
