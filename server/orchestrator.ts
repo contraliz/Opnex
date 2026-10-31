@@ -35,6 +35,7 @@ import { parseExplicitSkillCommands } from './skill-commands.js';
 import { cleanupPreparedRecruitmentWorktrees, mergeRecruitmentCommits, mergeRecruitmentWorkerDependencies, prepareRecruitmentWorktrees, readRecruitmentBranchHead, recruitmentWorkspaceRoot, validateRecruitmentRoot, verifyRecruitmentIntegration } from './recruitment-git.js';
 import { integrationReadScope, rebaseRecruitmentAssignment } from './recruitment-scope.js';
 import { DeepSeekHarnessError, DeepSeekHarnessSdkRuntime, discoverWindowsDeepSeekHarnessSdkLaunch, resolveDeepSeekHarnessPermission, type DeepSeekHarnessNotification, type DeepSeekHarnessPermissionGrant, type DeepSeekHarnessSdkLaunch } from './deepseek-harness.js';
+import { ForgeCodexProvider, type ForgeProviderApprovalDecision, type ForgeProviderApprovalRequest, type ForgeProviderCancelResult, type ForgeProviderEvent, type ForgeProviderHandle, type ForgeProviderRequest, type ForgeProviderStartEvidence } from './forge-provider.js';
 
 async function snapshotSelectedSkills(ids:string[],projectRoot?:string):Promise<SavedSkillSnapshot[]>{
   const unique=[...new Set(ids)];if(unique.length>12)throw new Error('Choose up to 12 saved skills for one pass.');
@@ -49,6 +50,11 @@ const codex=new AppServer({metadataOnly:true,cwd:brokerCwd});
 const agentHome=path.join(stateDirectory(),'agent-codex-home-v2');
 const agentCwd=path.join(agentHome,'workspace');
 const agentCodex=new AppServer({codexHome:agentHome,sqliteHome:normalCodexSqliteHome(),cwd:agentCwd});
+const forgeCodexProvider=new ForgeCodexProvider({
+  client:agentCodex,
+  ensureReady:ensureAgentAuth,
+  validateProfile:(model,effort)=>requireModel(model,effort),
+});
 let catalog:Model[]=[]; let codexState='connecting'; let codexError='';
 let agentRuntimeError:string|undefined;
 let agentAuthReady=false;
@@ -238,12 +244,19 @@ export async function initialize(){
   const bindAgents=()=>{
     agentCodex.on('connected',()=>{agentAuthReady=false;agentAuthFingerprint=undefined;});
     agentCodex.on('disconnected',(e:string)=>handleAgentRuntimeDisconnected(e));
-    agentCodex.on('serverRequest',(id:string|number,method:string,params:any)=>{void onServerRequest(id,method,params,agentCodex);});
+    agentCodex.on('serverRequest',(id:string|number,method:string,params:any)=>{void (async()=>{if(!await forgeCodexProvider.handleServerRequest(id,method,params))await onServerRequest(id,method,params,agentCodex);})();});
     agentCodex.on('notification',(method:string,params:any)=>{if(method==='turn/completed') void onTurnCompleted(params); else if(method==='turn/started') void onTurnStarted(params); else if(method==='turn/diff/updated') void onTurnDiffUpdated(params); else if(method==='thread/tokenUsage/updated') void onThreadTokenUsageUpdated(params); if(['item/started','item/completed','item/agentMessage/delta','item/commandExecution/outputDelta','item/reasoning/summaryTextDelta','item/reasoning/summaryPartAdded','model/rerouted'].includes(method))void onReasoningSummary(method,params);if(method==='item/started'||method==='item/completed')noteRouterToolInvocation(params);});
   };
   bindBroker();bindAgents();
   void codex.connect().catch(e=>{codexState='disconnected';codexError=safeError(e);});
 }
+export function startForgeRole(request:ForgeProviderRequest,onStarted?:(evidence:ForgeProviderStartEvidence)=>void|Promise<void>,onEvent?:(event:ForgeProviderEvent)=>void|Promise<void>,onApproval?:(request:ForgeProviderApprovalRequest)=>void|Promise<void>):Promise<ForgeProviderHandle>{
+  if(request.role!=='orchestrator'&&request.role!=='worker'&&request.role!=='integrator')throw new Error('Unknown Forge provider role.');
+  return forgeCodexProvider.start(request,onStarted,onEvent,onApproval);
+}
+export function cancelForgeRole(handle:ForgeProviderHandle):Promise<ForgeProviderCancelResult>{return forgeCodexProvider.cancel(handle);}
+export function respondForgeRoleApproval(decision:ForgeProviderApprovalDecision){return forgeCodexProvider.respondApproval(decision);}
+export function handleForgeRoleServerRequest(id:string|number,method:string,params:unknown){return forgeCodexProvider.handleServerRequest(id,method,params);}
 async function ensureAgentHome(){
   const normalHome=process.env.CODEX_HOME||path.join(os.homedir(),'.codex');
   await verifyIsolationDirectory(agentHome,['AGENTS.override.md','AGENTS.md','AGENTS.local.md','managed_config.toml','requirements.toml']);

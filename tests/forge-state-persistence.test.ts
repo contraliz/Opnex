@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-const testRoot=path.resolve('D:/programming/opnex-forge-private/forge-domain/tests');
+const testRoot=path.resolve('D:/programming/opnex-forge-private/forge-runtime/state-persistence-tests');
 let currentDirectory:string|undefined;
 const stamp='2026-10-31T00:00:00.000Z';
 const projectId='11111111-1111-4111-8111-111111111111';
@@ -161,6 +161,30 @@ describe('Forge state persistence',()=>{
     await reloaded.mutateForgeSession('forge-approval-session',{type:'reconcile_orchestrator_run',actor:{role:'host',id:'planner-runtime'},runId:'planning-run-a',status:'still_running',threadId:'approval-thread',turnId:'approval-turn',evidence:'The same planning turn remains active.'},stamp);
     expect(await reloaded.resolveForgeApprovalRequest('forge-approval-session','approval-a',{...request.forgeContext,threadId:request.threadId,turnId:request.turnId},stamp)).toEqual(request);
     expect(reloaded.getTask('forge-approval-session')?.approvalRequests).toEqual([]);
+  });
+
+  it('clears only the exact Forge approval after its provider owner is confirmed stopped',async()=>{
+    const directory=await makeDirectory();const {state,workspaceRoot}=await createForgeState(directory,'forge-approval-cancel-session');
+    await state.mutateForgeSession('forge-approval-cancel-session',{type:'begin_orchestrator_run',actor:{role:'host',id:'planner-runtime'},run:{
+      id:'planning-run-cancel',ownerId:'planner-runtime',purpose:'planning',projectId,workspaceRoot,requestedProfile:{provider:'codex',model:'gpt-6.1-terra',effort:'low'},
+      scopes:{read:['src'],write:[],knowledge:['knowledge/opnex']},skillSnapshots:[],expectedPlanRevision:1,sourceBaselineSha:'c'.repeat(40),
+    }},stamp);
+    await state.mutateForgeSession('forge-approval-cancel-session',{type:'record_orchestrator_runtime',actor:{role:'host',id:'planner-runtime'},runId:'planning-run-cancel',threadId:'approval-thread-cancel',turnId:'approval-turn-cancel'},stamp);
+    const request={requestId:'approval-cancel',method:'item/commandExecution/requestApproval' as const,itemId:'approval-item-cancel',threadId:'approval-thread-cancel',turnId:'approval-turn-cancel',reason:'The provider is waiting for user approval.',command:'scoped command',forgeContext:{ticketId:'forge-approval-cancel-session',targetType:'planning' as const,targetId:'planning-run-cancel',ownerId:'planner-runtime'}};
+    const context={...request.forgeContext,threadId:request.threadId,turnId:request.turnId};
+    await state.recordForgeApprovalRequest('forge-approval-cancel-session',request,stamp);
+    await expect(state.mutate(current=>state.clearForgeApprovalAfterProviderCancellationInState(current,'forge-approval-cancel-session','approval-cancel',request.itemId,context,{status:'uncertain' as never,evidence:'The provider did not confirm its stop.'},stamp))).rejects.toThrow(/uncertain|confirmed stopped/i);
+    await expect(state.mutate(current=>state.clearForgeApprovalAfterProviderCancellationInState(current,'forge-approval-cancel-session','approval-cancel',request.itemId,{...context,targetId:'newer-run'},{status:'stopped',evidence:'The old provider turn stopped.'},stamp))).rejects.toThrow(/stale|different run/i);
+    expect(state.getTask('forge-approval-cancel-session')?.approvalRequests).toEqual([request]);
+
+    await state.mutateForgeSession('forge-approval-cancel-session',{type:'pause',actor:{role:'user',id:'forge-user'}},stamp);
+    await state.mutateForgeSession('forge-approval-cancel-session',{type:'fail_orchestrator_run',actor:{role:'host',id:'planner-runtime'},runId:'planning-run-cancel',failureReason:'The provider confirmed it stopped after cancellation of the pending approval.'},stamp);
+    let cleared:unknown;await state.mutate(current=>{cleared=state.clearForgeApprovalAfterProviderCancellationInState(current,'forge-approval-cancel-session','approval-cancel',request.itemId,context,{status:'stopped',evidence:'Provider cancellation completed and the actor turn stopped.'},stamp);});
+    expect(cleared).toEqual(request);
+    expect(state.getTask('forge-approval-cancel-session')?.approvalRequests).toEqual([]);
+    expect(state.getForgeTicketInState(state.getState(),'forge-approval-cancel-session')?.orchestratorRuns[0]).toMatchObject({status:'failed',failureReason:expect.stringContaining('provider confirmed')});
+    let repeated:unknown;await state.mutate(current=>{repeated=state.clearForgeApprovalAfterProviderCancellationInState(current,'forge-approval-cancel-session','approval-cancel',request.itemId,context,{status:'stopped',evidence:'Repeated cleanup.'},stamp);});
+    expect(repeated).toBeUndefined();
   });
 
   it('rejects Forge approval metadata from a different run without overwriting the persisted state',async()=>{
