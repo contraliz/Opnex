@@ -17,7 +17,7 @@ describe('optional external project knowledge skills',()=>{
       const input={version:4,revision:19,settings:{orchestratorModel:'gpt-6-sol',orchestratorEffort:'high',approvalPolicy:'on-request',projectRoot:root,agentmemProjectId:'alpha-kb',agentmemAutoSetup:true},tasks:[task],projects:[project],activeTaskId:task.id,selectedProjectId:project.id,expandedProjectIds:[project.id,'unclassified']};
 
       const migrated=upgradeStoredState(structuredClone(input));
-      expect(migrated.version).toBe(5);
+      expect(migrated.version).toBe(7);
       expect(migrated.settings).not.toHaveProperty('projectRoot');
       expect(migrated.settings).not.toHaveProperty('agentmemProjectId');
       expect(migrated.settings).not.toHaveProperty('agentmemAutoSetup');

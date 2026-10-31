@@ -3,12 +3,13 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { assertProjectIdentityChangeAllowed, assertTaskCanResumeInProject, sameProjectRoot } from '../server/project-identity.js';
+import { createForgeTicket } from '../server/forge-state.js';
 import { saveProjectInState, upgradeStoredState, type Project, type State, type Task } from '../server/state.js';
 
 const stamp='2026-10-29T00:00:00.000Z';
 const project=(patch:any={}):Project=>({id:'11111111-1111-4111-8111-111111111111',name:'Alpha',projectRoot:'D:/work/alpha',needsLocation:false,pinned:false,createdAt:stamp,updatedAt:stamp,...patch});
-const task=(patch:any={}):Task=>({id:'session-alpha',title:'Keep its history',phase:'accepted',createdAt:stamp,updatedAt:stamp,userRoot:'D:/work/alpha',userMessages:['hello'],messages:[{id:'message-1',role:'user',text:'hello',createdAt:stamp}],correctionCount:0,processedTurns:[],...patch});
-const state=(projects:Project[]=[],tasks:Task[]=[]):State=>({version:5,revision:0,settings:{orchestratorModel:'gpt-6-sol',orchestratorEffort:'high',approvalPolicy:'on-request'},tasks,activeTaskId:null,projects,selectedProjectId:null,expandedProjectIds:projects.map(row=>row.id)});
+const task=(patch:any={}):Task=>({id:'session-alpha',sessionType:'conversation',title:'Keep its history',phase:'accepted',createdAt:stamp,updatedAt:stamp,userRoot:'D:/work/alpha',userMessages:['hello'],messages:[{id:'message-1',role:'user',text:'hello',createdAt:stamp}],correctionCount:0,processedTurns:[],...patch});
+const state=(projects:Project[]=[],tasks:Task[]=[]):State=>({version:7,revision:0,settings:{orchestratorModel:'gpt-6-sol',orchestratorEffort:'high',approvalPolicy:'on-request'},tasks,activeTaskId:null,projects,selectedProjectId:null,expandedProjectIds:projects.map(row=>row.id)});
 
 describe('project-owned workspaces',()=>{
   it('compares full canonical paths with Windows case and separator rules',()=>{
@@ -38,7 +39,7 @@ describe('project-owned workspaces',()=>{
       const alphaProject=migrated.projects.find(row=>sameProjectRoot(row.projectRoot,alphaRoot))!;
       const betaProject=migrated.projects.find(row=>sameProjectRoot(row.projectRoot,betaRoot))!;
       const missingProject=migrated.projects.find(row=>sameProjectRoot(row.projectRoot,'D:/legacy/missing'))!;
-      expect(migrated.version).toBe(5);
+      expect(migrated.version).toBe(7);
       expect(migrated.settings).not.toHaveProperty('projectRoot');
       expect(migrated.settings).not.toHaveProperty('agentmemProjectId');
       expect(migrated.tasks.map(row=>row.id)).toEqual(expected.tasks.map((row:any)=>row.id));
@@ -77,6 +78,15 @@ describe('project-owned workspaces',()=>{
     const current=project();const changed={...current,projectRoot:'D:/work/other'};
     expect(()=>assertProjectIdentityChangeAllowed(current,changed,[task({projectId:current.id,phase:'paused_after_restart'})])).toThrow(/Finish or stop/);
     expect(()=>assertProjectIdentityChangeAllowed(current,changed,[task({phase:'accepted'})])).not.toThrow();
+  });
+
+  it('keeps an active Forge ticket bound to its workspace root',()=>{
+    const current=project();
+    const forge=createForgeTicket({id:'forge-session',projectId:current.id,workspaceRoot:current.projectRoot,title:'Forge',description:'Keep the original workspace.',acceptanceCriteria:['The ticket remains bound.'],scope:{read:['src'],write:['src'],knowledge:['knowledge/opnex']},orchestrator:{model:'gpt-6.1-terra',effort:'low'},workerProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},orchestratorSkills:[],capabilities:{filesystemWriteScope:'instruction-only',knowledgeScope:'instruction-only',operationBudget:'instruction-only',toolAuthorization:'instruction-only',cancellation:'monitored',commitScopeValidation:'enforced',finalMergeGate:'enforced'},createdAt:stamp});
+    const activeForge=task({id:forge.id,projectId:current.id,userRoot:current.projectRoot,sessionType:'forge',forge});
+    const workspaces=state([current],[activeForge]);
+    expect(()=>saveProjectInState(workspaces,{...current,projectRoot:'D:/work/other'})).toThrow(/Forge ticket/i);
+    expect(workspaces.projects[0]?.projectRoot).toBe(current.projectRoot);
   });
 
   it('keeps a session bound to its recorded root after it is moved in the project list',()=>{

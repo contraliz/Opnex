@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { deleteTaskInState, renameTaskInState, taskDeletionBlockReason, type State, type Task } from '../server/state.js';
 import { sessionTitleSchema } from '../server/contracts.js';
 
-const task=(patch:Partial<Task>={}):Task=>({id:'session-a',title:'Original title',phase:'accepted',createdAt:'2026-10-20T00:00:00.000Z',updatedAt:'2026-10-20T00:00:00.000Z',userRoot:'D:/workspace/demo',userMessages:['hello'],messages:[{id:'m1',role:'user',text:'hello',createdAt:'2026-10-20T00:00:00.000Z'}],correctionCount:0,processedTurns:[],...patch});
-const state=(items:Task[],activeTaskId:string|null):State=>({version:5,revision:0,settings:{orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:items,activeTaskId,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']});
+const task=(patch:Partial<Task>={}):Task=>({id:'session-a',sessionType:'conversation',title:'Original title',phase:'accepted',createdAt:'2026-10-20T00:00:00.000Z',updatedAt:'2026-10-20T00:00:00.000Z',userRoot:'D:/workspace/demo',userMessages:['hello'],messages:[{id:'m1',role:'user',text:'hello',createdAt:'2026-10-20T00:00:00.000Z'}],correctionCount:0,processedTurns:[],...patch});
+const state=(items:Task[],activeTaskId:string|null):State=>({version:7,revision:0,settings:{orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:items,activeTaskId,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']});
 
 describe('local session lifecycle',()=>{
   it('validates trimmed non-empty titles with a bounded length',()=>{

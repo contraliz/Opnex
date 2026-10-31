@@ -81,6 +81,132 @@ export async function recruitmentGitWritableRoots(canonicalRoot: string, worktre
   return [worktree, adminDirectory, refNamespace, logNamespace];
 }
 
+export type ForgeGitWorktreeRole = 'integration' | 'worker';
+
+function forgeBranchPart(value: string, label: string): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value) || value.endsWith('.') || value.endsWith('.lock')) {
+    throw new RecruitmentGitError(`${label} must be a simple 1-64 character Forge branch segment.`);
+  }
+  return value;
+}
+
+function forgeOwnedBranch(ticketId: string, attemptId: string, role: ForgeGitWorktreeRole, workerId?: string): string {
+  const ticket = forgeBranchPart(ticketId, 'Ticket ID');
+  const attempt = forgeBranchPart(attemptId, 'Attempt ID');
+  const branch = role === 'integration'
+    ? `codex/forge/${ticket}/${attempt}/integration/head`
+    : `codex/forge/${ticket}/${attempt}/worker/${forgeBranchPart(workerId || '', 'Worker ID')}/head`;
+  return validateRecruitmentBranch(branch);
+}
+
+async function assertSafeDirectoryTree(parent: string, target: string, label: string, allowMissingTail = false): Promise<void> {
+  const resolvedParent = path.resolve(parent);
+  const resolvedTarget = path.resolve(target);
+  const relative = path.relative(resolvedParent, resolvedTarget);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new RecruitmentGitError(`${label} escaped its canonical parent.`);
+  }
+  let current = resolvedParent;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    let info;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      if (allowMissingTail && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw new RecruitmentGitError(`${label} is missing or cannot be inspected: ${current}`, { cause: error });
+    }
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new RecruitmentGitError(`${label} contains an unsafe reparse point or non-directory: ${current}`);
+    const canonical = await realpath(current);
+    if (!samePath(current, canonical)) throw new RecruitmentGitError(`${label} is not on a canonical path: ${current}`);
+  }
+}
+
+/** Returns only the filesystem roots needed for this exact Forge worktree and its attempt-scoped Git refs. */
+export async function forgeGitWritableRoots(options: {
+  canonicalRoot: string;
+  taskRoot: string;
+  ticketId: string;
+  attemptId: string;
+  role: ForgeGitWorktreeRole;
+  workerId?: string;
+  worktreeRoot: string;
+}): Promise<string[]> {
+  const project = await validateRecruitmentProject(options.canonicalRoot, 'HEAD');
+  if (options.role !== 'integration' && options.role !== 'worker') throw new RecruitmentGitError('Forge worktree role is invalid.');
+  if (!path.isAbsolute(options.taskRoot) || !path.isAbsolute(options.worktreeRoot)) throw new RecruitmentGitError('Forge task and worktree roots must be absolute paths.');
+  const taskInput = path.resolve(options.taskRoot);
+  const taskInfo = await lstat(taskInput).catch((error) => { throw new RecruitmentGitError('Forge task root is missing or inaccessible.', { cause: error }); });
+  if (!taskInfo.isDirectory() || taskInfo.isSymbolicLink()) throw new RecruitmentGitError('Forge task root must be a regular directory without a reparse-point link.');
+  const taskRoot = await realpath(taskInput);
+  if (!samePath(taskRoot, taskInput)) throw new RecruitmentGitError('Forge task root must use its canonical non-reparse path.');
+  if (samePath(taskRoot, project.projectRoot) || isWithin(project.projectRoot, taskRoot) || isWithin(taskRoot, project.projectRoot)) {
+    throw new RecruitmentGitError('Forge task root must be outside and disjoint from the canonical project.');
+  }
+  const ticketId = forgeBranchPart(options.ticketId, 'Ticket ID');
+  const attemptId = forgeBranchPart(options.attemptId, 'Attempt ID');
+  const integrationBranch = forgeOwnedBranch(ticketId, attemptId, 'integration');
+  const manifestPath = path.join(taskRoot, TASK_MANIFEST);
+  const manifestInfo = await lstat(manifestPath).catch((error) => { throw new RecruitmentGitError('Forge ownership manifest is missing or inaccessible.', { cause: error }); });
+  if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink()) throw new RecruitmentGitError('Forge ownership manifest must be a regular file.');
+  const manifest = await readTaskManifest(project.projectRoot, taskRoot);
+  if (manifest.integration.branch !== integrationBranch
+    || !samePath(manifest.integration.worktreeRoot, path.join(taskRoot, 'integration'))) {
+    throw new RecruitmentGitError('Forge integration worktree does not match its ticket/attempt ownership manifest.');
+  }
+  const workerIds = new Set<string>();
+  const workerBranches = new Set<string>();
+  for (const worker of manifest.workers) {
+    const workerId = forgeBranchPart(worker.workerId, 'Worker ID');
+    const expectedBranch = forgeOwnedBranch(ticketId, attemptId, 'worker', workerId);
+    if (workerIds.has(workerId) || workerBranches.has(expectedBranch) || worker.branch !== expectedBranch
+      || !samePath(worker.worktreeRoot, path.join(taskRoot, `worker-${workerId}`))) {
+      throw new RecruitmentGitError('Forge worker entries do not match their ticket/attempt ownership manifest.');
+    }
+    workerIds.add(workerId);
+    workerBranches.add(expectedBranch);
+  }
+
+  const branch = options.role === 'integration'
+    ? integrationBranch
+    : forgeOwnedBranch(ticketId, attemptId, 'worker', options.workerId);
+  if (options.role === 'worker' && !workerIds.has(options.workerId || '')) throw new RecruitmentGitError('Forge worker is not recorded in this ticket/attempt manifest.');
+  const expectedWorktree = options.role === 'integration'
+    ? path.join(taskRoot, 'integration')
+    : path.join(taskRoot, `worker-${options.workerId}`);
+  if (!samePath(options.worktreeRoot, expectedWorktree)) throw new RecruitmentGitError('Forge worktree root does not match its generated task-owned location.');
+  const worktreeInput = path.resolve(options.worktreeRoot);
+  const worktreeInfo = await lstat(worktreeInput).catch((error) => { throw new RecruitmentGitError('Forge worktree is missing or inaccessible.', { cause: error }); });
+  if (!worktreeInfo.isDirectory() || worktreeInfo.isSymbolicLink()) throw new RecruitmentGitError('Forge worktree must be a regular directory without a reparse-point link.');
+  const worktree = await realpath(worktreeInput);
+  if (!samePath(worktree, expectedWorktree) || !isWithin(taskRoot, worktree)) throw new RecruitmentGitError('Forge worktree resolved outside its exact task-owned location.');
+  const validatedWorktree = await validateOwnedLocation(project.projectRoot, taskRoot, worktree, branch);
+  const topLevel = await realpath((await git(validatedWorktree, ['rev-parse', '--show-toplevel'])).stdout);
+  if (!samePath(topLevel, worktree)) throw new RecruitmentGitError('Forge writable roots require the exact Git worktree root.');
+  const worktreeHead = await commitAt(validatedWorktree);
+  const branchHead = (await git(project.projectRoot, ['rev-parse', '--verify', '--quiet', '--end-of-options', `refs/heads/${branch}^{commit}`])).stdout;
+  if (!/^[0-9a-f]{40,64}$/i.test(branchHead) || worktreeHead.toLowerCase() !== branchHead.toLowerCase()) {
+    throw new RecruitmentGitError('Forge worktree HEAD no longer matches its attempt-owned branch ref.');
+  }
+  const commonDirectory = await realpath((await git(validatedWorktree, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout);
+  const canonicalCommonDirectory = await realpath((await git(project.projectRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout);
+  if (!samePath(commonDirectory, canonicalCommonDirectory)) throw new RecruitmentGitError('Forge worktree belongs to a different Git repository.');
+  const adminPath = (await git(validatedWorktree, ['rev-parse', '--path-format=absolute', '--git-dir'])).stdout;
+  const adminDirectory = await realpath(adminPath);
+  const adminParent = path.join(commonDirectory, 'worktrees');
+  if (!isWithin(adminParent, adminDirectory)) throw new RecruitmentGitError('Forge worktree Git metadata is not isolated under this repository’s worktree administration directory.');
+  await assertSafeDirectoryTree(commonDirectory, adminDirectory, 'Forge worktree Git metadata');
+  const namespace = options.role === 'integration' ? ['integration'] : ['worker', options.workerId || ''];
+  const refNamespace = path.resolve(commonDirectory, 'refs', 'heads', 'codex', 'forge', ticketId, attemptId, ...namespace);
+  const logNamespace = path.resolve(commonDirectory, 'logs', 'refs', 'heads', 'codex', 'forge', ticketId, attemptId, ...namespace);
+  for (const root of [refNamespace, logNamespace]) {
+    if (!isWithin(commonDirectory, root)) throw new RecruitmentGitError('Forge Git ref write root escaped the repository metadata directory.');
+  }
+  await assertSafeDirectoryTree(commonDirectory, refNamespace, 'Forge ref namespace', true);
+  await assertSafeDirectoryTree(commonDirectory, logNamespace, 'Forge reflog namespace', true);
+  return [worktree, adminDirectory, refNamespace, logNamespace];
+}
+
 export function validateRecruitmentBranch(branch: string): string {
   if (typeof branch !== 'string' || branch.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch)) {
     throw new RecruitmentGitError('Branch name contains unsupported characters or is too long.');
