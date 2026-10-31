@@ -157,7 +157,7 @@ export class ForgeCoordinator {
   async cancel(ticketId: string) { return this.stop(ticketId, 'cancel'); }
 
   async resume(ticketId: string) {
-    const ticket = this.requireTicket(ticketId);
+    this.requireTicket(ticketId);
     await this.command(ticketId, { type: 'resume', actor: { role: 'user', id: 'forge-user' } });
     const resumed = this.requireTicket(ticketId);
     if (resumed.activeOrchestratorRunId && !this.actorFor(resumed, 'orchestrator', resumed.activeOrchestratorRunId)) {
@@ -298,9 +298,13 @@ export class ForgeCoordinator {
       }
       const prerequisites = await this.prerequisiteCommits(ticket, item, assignmentSnapshot.assignment);
       preflightStage = 'dependency_merge';
-      const dependencyResult = await prepareForgeWorkerDependencies({ prepared, workItemId: item.id, workerId: ownerId, prerequisites });
-      if (dependencyResult.status !== 'ready') throw new Error(dependencyResult.status === 'conflict' ? `Dependency merge conflict at ${dependencyResult.conflicts.join(', ')}; preserved in the owned worktree.` : dependencyResult.reason);
-      await this.command(ticket.id, { type: 'record_attempt_dispatch_baseline', actor: HOST, taskId: item.id, ownerId, attemptId, claimToken, dispatchBaselineSha: dependencyResult.baselineCommit });
+      let dispatchBaselineSha = prepared.baseCommit;
+      if (prerequisites.length) {
+        const dependencyResult = await prepareForgeWorkerDependencies({ prepared, workItemId: item.id, workerId: ownerId, prerequisites });
+        if (dependencyResult.status !== 'ready') throw new Error(dependencyResult.status === 'conflict' ? `Dependency merge conflict at ${dependencyResult.conflicts.join(', ')}; preserved in the owned worktree.` : dependencyResult.reason);
+        dispatchBaselineSha = dependencyResult.baselineCommit;
+      }
+      await this.command(ticket.id, { type: 'record_attempt_dispatch_baseline', actor: HOST, taskId: item.id, ownerId, attemptId, claimToken, dispatchBaselineSha });
       const knowledgeSkill = await this.loadKnowledgeSkill(ticket);
       const worktreeWriteRoots = mapWriteRoots(assignmentSnapshot.assignment.write_scope, ticket.workspaceRoot, worktreeRoot);
       const gitRoots = await forgeGitWritableRoots({ canonicalRoot: ticket.workspaceRoot, taskRoot, ticketId: ticket.id, attemptId, role: 'worker', workerId: ownerId, worktreeRoot });

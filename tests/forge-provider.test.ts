@@ -8,7 +8,7 @@ function fakeCodex() {
   const client = Object.assign(events, {
     startThread: vi.fn(async () => 'thread-forge-1'),
     startTurn: vi.fn(async () => ({ turn: { id: 'turn-forge-1', status: 'inProgress' } })),
-    interrupt: vi.fn(async () => ({})),
+    interrupt: vi.fn(async (_threadId: string, _turnId: string) => ({})),
     respondServerRequest: vi.fn(),
     respondServerError: vi.fn(),
   });
