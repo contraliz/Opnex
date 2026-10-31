@@ -244,7 +244,9 @@ export class ForgeCodexProvider {
     const threadId = typeof params?.threadId === 'string' ? params.threadId : '';
     const pending = threadId ? this.active.get(threadId) : undefined;
     if (!pending) return;
-    const turnId = typeof params?.turn?.id === 'string' ? params.turn.id : '';
+    const turnId = method === 'turn/started' || method === 'turn/completed'
+      ? typeof params?.turn?.id === 'string' ? params.turn.id : ''
+      : typeof params?.turnId === 'string' ? params.turnId : '';
     if (method === 'turn/started' && turnId) {
       void this.observeStarted(threadId, pending, turnId).catch((error) => this.fail(threadId, pending, error));
       return;
