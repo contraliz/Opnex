@@ -132,6 +132,23 @@ describe('Forge Codex provider contract', () => {
     expect(client.respondServerRequest).not.toHaveBeenCalled();
   });
 
+  it('rejects app-owned tool calls on live Forge turns before Conversation dispatch', async () => {
+    const client = fakeCodex();
+    const provider = new ForgeCodexProvider({ client: client as never, validateProfile: vi.fn(), ensureReady: vi.fn() });
+    await provider.start(request);
+
+    await expect(provider.handleServerRequest(10, 'item/tool/call', {
+      threadId: 'thread-forge-1', turnId: 'turn-forge-1', namespace: 'pseudoharness', tool: 'workspace', arguments: { action: 'initialize_git_repository' },
+    })).resolves.toBe(true);
+    expect(client.respondServerError).toHaveBeenCalledWith(10, -32601, expect.stringContaining('No application effect was applied'));
+    expect(client.respondServerRequest).not.toHaveBeenCalled();
+
+    await expect(provider.handleServerRequest(11, 'item/tool/call', {
+      threadId: 'stale-thread', turnId: 'stale-turn', namespace: 'pseudoharness', tool: 'workspace', arguments: { action: 'initialize_git_repository' },
+    })).resolves.toBe(false);
+    expect(client.respondServerError).toHaveBeenCalledTimes(1);
+  });
+
   it('cancels pending provider approvals before interrupting the owned turn', async () => {
     const client = fakeCodex();
     client.interrupt.mockImplementation(async (threadId: string, turnId: string) => {

@@ -171,9 +171,18 @@ export class ForgeCodexProvider {
 
   /** Routes an app-server approval request only when its active Forge owner is known. */
   async handleServerRequest(id: string | number, method: string, params: any): Promise<boolean> {
-    // These are execution events/application requests, not user approvals. Let the
-    // owning Opnex dispatcher or existing auth bridge handle them.
-    if (method === 'item/tool/call' || method === 'account/chatgptAuthTokens/refresh') return false;
+    // Forge currently exposes no app-owned tools. Consume tool calls belonging
+    // to a live Forge thread here so they cannot fall through to a Conversation
+    // dispatcher that authorizes against unrelated task/pass state.
+    if (method === 'item/tool/call') {
+      const threadId = typeof params?.threadId === 'string' ? params.threadId : '';
+      const pending = threadId ? this.active.get(threadId) : undefined;
+      if (!pending) return false;
+      this.options.client.respondServerError(id, -32601, 'Forge does not expose an app-owned tool for this execution. No application effect was applied.');
+      return true;
+    }
+    // Existing auth bridge owns this app-wide request.
+    if (method === 'account/chatgptAuthTokens/refresh') return false;
     const threadId = typeof params?.threadId === 'string' ? params.threadId : '';
     const pending = threadId ? this.active.get(threadId) : undefined;
     if (!pending) return false;
