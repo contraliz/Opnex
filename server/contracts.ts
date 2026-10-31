@@ -49,6 +49,7 @@ const forgeTicketInputBaseSchema=z.object({
   scope:forgeScopeSchema,
   orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict(),
   workerProfile:forgeExecutionProfileSchema,
+  targetBranch:z.string().trim().min(1).max(240).default('main'),
   skillIds:z.array(z.string().uuid()).max(12).default([]).superRefine((ids,ctx)=>{if(new Set(ids).size!==ids.length)ctx.addIssue({code:'custom',message:'Select each Forge skill only once.'});}),
   limits:forgeLimitsSchema.partial().default({}),
   knowledgeBudget:forgeKnowledgeBudgetSchema.partial().default({}),

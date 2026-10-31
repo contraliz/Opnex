@@ -48,7 +48,8 @@ const claim=(ticket:ForgeTicket,taskId='task-a',ownerId='worker-1',attemptId='at
     type:'claim_task',actor:{role:'host',id:'scheduler'},taskId,ownerId,claimId:`claim-${attemptId}`,attemptId,claimToken:`token-${attemptId}`,
     runtimeId:`runtime-${attemptId}`,branch:`forge/${taskId}/${attemptId}`,worktreeRoot:`D:/workspace/demo/.forge/${taskId}`,sourceBaselineSha:'c'.repeat(40),
   } as Extract<Parameters<typeof applyForgeCommand>[1],{type:'claim_task'}>,at);
-  return applyForgeCommand(claimed,{type:'record_attempt_runtime',actor:{role:'host',id:'scheduler'},taskId,ownerId,attemptId,claimToken:`token-${attemptId}`,threadId:`thread-${attemptId}`,turnId:`turn-${attemptId}`} as Extract<Parameters<typeof applyForgeCommand>[1],{type:'record_attempt_runtime'}>,at);
+  const prepared=applyForgeCommand(claimed,{type:'record_attempt_dispatch_baseline',actor:{role:'host',id:'scheduler'},taskId,ownerId,attemptId,claimToken:`token-${attemptId}`,dispatchBaselineSha:'d'.repeat(40)},at);
+  return applyForgeCommand(prepared,{type:'record_attempt_runtime',actor:{role:'host',id:'scheduler'},taskId,ownerId,attemptId,claimToken:`token-${attemptId}`,threadId:`thread-${attemptId}`,turnId:`turn-${attemptId}`} as Extract<Parameters<typeof applyForgeCommand>[1],{type:'record_attempt_runtime'}>,at);
 };
 const acceptOutcome=(ticket:ForgeTicket,patch:Partial<Extract<Parameters<typeof applyForgeCommand>[1],{type:'accept_worker_outcome'}>>={})=>applyForgeCommand(ticket,{
   type:'accept_worker_outcome',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-1',attemptId:'attempt-a',claimToken:'token-attempt-a',
@@ -60,7 +61,7 @@ const readyForIntegration=(limits={maxActiveWorkers:3,maxExecutionAttempts:2,max
 };
 const integrationRunInput=(ticket:ForgeTicket,id='integration-run-a')=>({
   id,ownerId:`owner-${id}`,projectId:ticket.projectId,workspaceRoot:ticket.workspaceRoot,requestedProfile:ticket.workerProfile,
-  branch:`forge/${ticket.id}/integration/${id}`,worktreeRoot:`${ticket.workspaceRoot}/.forge/integration/${id}`,sourceBaselineSha:'c'.repeat(40),
+  branch:`forge/${ticket.id}/integration/${id}`,targetBranch:ticket.targetBranch,worktreeRoot:`${ticket.workspaceRoot}/.forge/integration/${id}`,sourceBaselineSha:'c'.repeat(40),
   scopes:structuredClone(ticket.scope),skillSnapshots:[],...(ticket.integration.correctionRounds.length?{correctionRoundId:ticket.integration.correctionRounds.at(-1)!.id}:{}),
 });
 const beginIntegration=(ticket:ForgeTicket,runId='integration-run-a')=>{
@@ -77,11 +78,11 @@ const finalReviewRunInput=(ticket:ForgeTicket,id='review-run-a')=>{
   return {id,ownerId:'review-runtime',purpose:'final_review' as const,projectId:ticket.projectId,workspaceRoot:ticket.workspaceRoot,
     requestedProfile:{provider:'codex' as const,model:ticket.orchestrator.model,effort:ticket.orchestrator.effort},
     scopes:{read:[...ticket.scope.read],write:[],knowledge:[...ticket.scope.knowledge]},skillSnapshots:[],expectedPlanRevision:ticket.acceptedPlan!.revision,
-    candidateId:value.id,candidateSha:value.candidateSha,targetMainSha:value.targetMainSha};
+    candidateId:value.id,candidateSha:value.candidateSha,targetMainSha:value.targetMainSha,targetBranch:value.targetBranch};
 };
 const readyForFinalReview=(knowledgeBudget={totalOperations:64,defaultAllocationOperations:2,maxAllocationOperations:8})=>recordCandidate(beginIntegration(readyForIntegration({maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3},knowledgeBudget)));
 const candidate=(ticket:ForgeTicket,patch:Partial<ForgeIntegrationCandidate>={}):ForgeIntegrationCandidate=>({
-  id:'candidate-a',integratorRunId:ticket.integration.activeRunId!,candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),
+  id:'candidate-a',integratorRunId:ticket.integration.activeRunId!,candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:ticket.targetBranch,
   workerCommits:[{taskId:'task-a',attemptId:ticket.attempts.at(-1)!.id,receiptId:ticket.attempts.at(-1)!.receiptId!,commitSha:ticket.attempts.at(-1)!.commitSha!}],
   scopeValidation:{status:'passed',evidence:['all changed paths were in the approved write scope']},
   verification:[{check:'Focused tests',result:'passed',evidence:'passed'}],combinedReceipt:receipt(),provenance:integrationProvenance(ticket.integration.activeRunId!),findings:[],createdAt:at,...patch,
@@ -229,15 +230,31 @@ describe('Forge orchestrator dispatch recovery',()=>{
     const ready=readyForFinalReview();
     const prepared=applyForgeCommand(ready,{type:'begin_orchestrator_run',actor:{role:'host',id:'review-runtime'},run:finalReviewRunInput(ready)},at);
     expect(prepared.phase).toBe('review');
-    expect(prepared.orchestratorRuns[0]).toMatchObject({purpose:'final_review',status:'prepared',candidateId:'candidate-a',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),expectedPlanRevision:1});
+    expect(prepared.orchestratorRuns[0]).toMatchObject({purpose:'final_review',status:'prepared',candidateId:'candidate-a',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',expectedPlanRevision:1});
     const observed=applyForgeCommand(prepared,{type:'record_orchestrator_runtime',actor:{role:'host',id:'review-runtime'},runId:'review-run-a',threadId:'review-thread',turnId:'review-turn'},at);
-    const reviewCommand={type:'complete_candidate_review' as const,actor:{role:'host' as const,id:'review-runtime'},runId:'review-run-a',expectedPlanRevision:1,threadId:'review-thread',turnId:'review-turn',candidateId:'candidate-a',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'accept' as const,note:'The candidate review passed.'};
+    const reviewCommand={type:'complete_candidate_review' as const,actor:{role:'host' as const,id:'review-runtime'},runId:'review-run-a',expectedPlanRevision:1,threadId:'review-thread',turnId:'review-turn',candidateId:'candidate-a',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept' as const,note:'The candidate review passed.'};
     expect(()=>applyForgeCommand(observed,{...reviewCommand,candidateSha:'d'.repeat(40)},at)).toThrow(/candidate|main sha/i);
     expect(()=>applyForgeCommand(observed,{...reviewCommand,expectedPlanRevision:2},at)).toThrow(/revision/i);
     const reviewed=applyForgeCommand(observed,reviewCommand,at);
     expect(reviewed.phase).toBe('merge_ready');
     expect(reviewed.integration.reviewDecisions[0]).toMatchObject({source:'model_run',runId:'review-run-a',candidateId:'candidate-a',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40)});
     expect(reviewed.orchestratorRuns[0]).toMatchObject({status:'completed',resultReviewId:reviewed.integration.reviewDecisions[0]?.id});
+  });
+});
+
+describe('Forge immutable local target branch',()=>{
+  it('rejects target-branch substitutions at integration, final review, approval, and merge readback',()=>{
+    const integrationReady=readyForIntegration();
+    expect(()=>applyForgeCommand(integrationReady,{type:'begin_integration',actor:{role:'host',id:'integrator-runtime'},run:{...integrationRunInput(integrationReady),targetBranch:'origin/main'}},at)).toThrow(/pinned local target branch/i);
+
+    const ready=readyForFinalReview();
+    expect(()=>applyForgeCommand(ready,{type:'begin_orchestrator_run',actor:{role:'host',id:'review-runtime'},run:{...finalReviewRunInput(ready),targetBranch:'origin/main'}},at)).toThrow(/target branch/i);
+    expect(()=>applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'origin/main',disposition:'accept',note:'Reviewed the remote ref.'},at)).toThrow(/local target branch/i);
+
+    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept',note:'Reviewed the pinned local branch.'},at);
+    expect(()=>applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'origin/main',observedMainSha:'c'.repeat(40)},at)).toThrow(/pinned local target branch/i);
+    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at);
+    expect(()=>applyForgeCommand(merging,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'failed',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'origin/main',preMergeMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at)).toThrow(/local target branch/i);
   });
 });
 
@@ -273,6 +290,56 @@ describe('Forge shared knowledge budget',()=>{
 });
 
 describe('Forge durable worker attempts',()=>{
+  it('persists the dependency-merged dispatch baseline without rewriting the original claim source',()=>{
+    const started=runningTicket({maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3},[planTask('task-a')]);
+    const claimed=applyForgeCommand(started,{type:'claim_task',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',claimId:'claim-baseline',attemptId:'attempt-baseline',claimToken:'token-baseline',runtimeId:'runtime-baseline',branch:'forge/task-a/attempt-baseline',worktreeRoot:'D:/workspace/demo/.forge/task-a',sourceBaselineSha:'a'.repeat(40)},at);
+    expect(claimed.attempts[0]).toMatchObject({sourceBaselineSha:'a'.repeat(40)});
+    expect(claimed.attempts[0]).not.toHaveProperty('dispatchBaselineSha');
+    expect(()=>applyForgeCommand(claimed,{type:'record_attempt_runtime',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-baseline',claimToken:'token-baseline',threadId:'thread-baseline',turnId:'turn-baseline'},at)).toThrow(/dispatch baseline/i);
+
+    const prepared=applyForgeCommand(claimed,{type:'record_attempt_dispatch_baseline',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-baseline',claimToken:'token-baseline',dispatchBaselineSha:'b'.repeat(40)},at);
+    expect(prepared.attempts[0]).toMatchObject({sourceBaselineSha:'a'.repeat(40),dispatchBaselineSha:'b'.repeat(40)});
+    expect(()=>applyForgeCommand(prepared,{type:'record_attempt_dispatch_baseline',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-baseline',claimToken:'token-baseline',dispatchBaselineSha:'c'.repeat(40)},at)).toThrow(/immutable/i);
+    const observed=applyForgeCommand(prepared,{type:'record_attempt_runtime',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-baseline',claimToken:'token-baseline',threadId:'thread-baseline',turnId:'turn-baseline'},at);
+    expect(observed.attempts[0]).toMatchObject({dispatchBaselineSha:'b'.repeat(40),threadId:'thread-baseline',turnId:'turn-baseline'});
+  });
+
+  it('retains proved pre-provider failures without synthetic provider or receipt IDs and consumes finite attempts',()=>{
+    const started=runningTicket({maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3},[planTask('task-a')]);
+    const firstClaim=applyForgeCommand(started,{type:'claim_task',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',claimId:'claim-preflight-a',attemptId:'attempt-preflight-a',claimToken:'token-preflight-a',runtimeId:'runtime-preflight-a',branch:'forge/task-a/first',worktreeRoot:'D:/workspace/demo/.forge/task-a',sourceBaselineSha:'a'.repeat(40)},at);
+    const firstFailure={type:'fail_attempt_preflight' as const,actor:{role:'host' as const,id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-preflight-a',claimToken:'token-preflight-a',stage:'dependency_merge' as const,failureReason:'A dependency commit could not be prepared.',evidence:['The merge adapter rejected the dependency tree before provider dispatch.']};
+    const retriable=applyForgeCommand(firstClaim,firstFailure,at);
+    expect(retriable.workitems[0]).toMatchObject({state:'open'});
+    expect(retriable.attempts[0]).toMatchObject({status:'preflight_failed',sourceBaselineSha:'a'.repeat(40),preflightFailure:{stage:'dependency_merge',reason:firstFailure.failureReason,evidence:firstFailure.evidence}});
+    expect(retriable.attempts[0]).not.toHaveProperty('threadId');
+    expect(retriable.attempts[0]).not.toHaveProperty('outcomeId');
+    expect(retriable.attempts[0]).not.toHaveProperty('receiptId');
+    expect(retriable.receipts).toHaveLength(0);
+    expect(retriable.attempts[0]?.knowledgeAllocation).toMatchObject({operations:2,status:'reserved'});
+    expect(applyForgeCommand(retriable,firstFailure,at)).toEqual(retriable);
+
+    const secondClaim=applyForgeCommand(retriable,{type:'claim_task',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-b',claimId:'claim-preflight-b',attemptId:'attempt-preflight-b',claimToken:'token-preflight-b',runtimeId:'runtime-preflight-b',branch:'forge/task-a/second',worktreeRoot:'D:/workspace/demo/.forge/task-a',sourceBaselineSha:'a'.repeat(40)},at);
+    const prepared=applyForgeCommand(secondClaim,{type:'record_attempt_dispatch_baseline',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-b',attemptId:'attempt-preflight-b',claimToken:'token-preflight-b',dispatchBaselineSha:'b'.repeat(40)},at);
+    const providerStartFailure={type:'fail_attempt_preflight' as const,actor:{role:'host' as const,id:'scheduler'},taskId:'task-a',ownerId:'worker-b',attemptId:'attempt-preflight-b',claimToken:'token-preflight-b',stage:'provider_start' as const,effect:'confirmed_not_started' as const,failureReason:'The provider explicitly rejected the start request.',evidence:['The adapter confirmed no provider turn was created.']};
+    const blocked=applyForgeCommand(prepared,providerStartFailure,at);
+    expect(blocked.workitems[0]).toMatchObject({state:'blocked',blockedReason:{kind:'execution_issue',code:'preflight_failed',attemptId:'attempt-preflight-b'}});
+    expect(blocked.attempts.map(row=>row.status)).toEqual(['preflight_failed','preflight_failed']);
+    expect(blocked.receipts).toHaveLength(0);
+  });
+
+  it('keeps uncertain in-process provider starts blocked until their exact claim is reconciled',()=>{
+    const started=runningTicket({maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3},[planTask('task-a')]);
+    const claimed=applyForgeCommand(started,{type:'claim_task',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',claimId:'claim-uncertain',attemptId:'attempt-uncertain',claimToken:'token-uncertain',runtimeId:'runtime-uncertain',branch:'forge/task-a/uncertain',worktreeRoot:'D:/workspace/demo/.forge/task-a',sourceBaselineSha:'a'.repeat(40)},at);
+    const prepared=applyForgeCommand(claimed,{type:'record_attempt_dispatch_baseline',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-uncertain',claimToken:'token-uncertain',dispatchBaselineSha:'b'.repeat(40)},at);
+    const uncertain=applyForgeCommand(prepared,{type:'mark_attempt_effect_uncertain',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-uncertain',claimToken:'token-uncertain',evidence:'The turn-start request was sent but the connection ended before an ID was observed.'},at);
+    expect(uncertain).toMatchObject({phase:'blocked',workitems:[{state:'blocked',activeAttemptId:'attempt-uncertain',blockedReason:{kind:'execution_issue',code:'unknown_effect'}}],attempts:[{status:'unknown_effect'}]});
+    expect(()=>applyForgeCommand(uncertain,{type:'fail_attempt_preflight',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-uncertain',claimToken:'token-uncertain',stage:'provider_start',effect:'confirmed_not_started',failureReason:'No provider turn was created.',evidence:['Uncertain error.']},at)).toThrow(/known no-effect|uncertain/i);
+    expect(()=>applyForgeCommand(uncertain,{type:'claim_task',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-b',claimId:'claim-duplicate',attemptId:'attempt-duplicate',claimToken:'token-duplicate',runtimeId:'runtime-duplicate',branch:'forge/task-a/duplicate',worktreeRoot:'D:/workspace/demo/.forge/task-a',sourceBaselineSha:'a'.repeat(40)},at)).toThrow(/accept|claim/i);
+    expect(()=>applyForgeCommand(uncertain,{type:'reconcile_attempt',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-uncertain',claimToken:'token-uncertain',status:'still_running',evidence:'The exact provider actor is live.'},at)).toThrow(/observed provider IDs/i);
+    const reconciled=applyForgeCommand(uncertain,{type:'reconcile_attempt',actor:{role:'host',id:'scheduler'},taskId:'task-a',ownerId:'worker-a',attemptId:'attempt-uncertain',claimToken:'token-uncertain',status:'still_running',threadId:'thread-observed',turnId:'turn-observed',evidence:'The exact original provider actor is live.'},at);
+    expect(reconciled).toMatchObject({phase:'running',workitems:[{state:'claimed',activeAttemptId:'attempt-uncertain'}],attempts:[{status:'claimed',threadId:'thread-observed',turnId:'turn-observed'}]});
+  });
+
   it('atomically claims a ready task, rejects stale owners, and accepts the outcome once',()=>{
     const started=runningTicket();
     expect(started.workitems.find(row=>row.id==='task-b')).toMatchObject({state:'blocked',blockedReason:{kind:'dependencies',taskIds:['task-a']}});
@@ -398,6 +465,7 @@ describe('Forge integration and main merge',()=>{
     expect(()=>applyForgeCommand(ready,{type:'begin_integration',actor:{role:'host',id:'integrator-runtime'},run:{...integrationRunInput(ready),workspaceRoot:'D:/other-workspace'}},at)).toThrow(/workspace/i);
     const prepared=applyForgeCommand(ready,{type:'begin_integration',actor:{role:'host',id:'integrator-runtime'},run:integrationRunInput(ready)},at);
     expect(prepared.integration.runs[0]).toMatchObject({status:'prepared',branch:'forge/ticket-a/integration/integration-run-a',scopes:ready.scope,requestedProfile:ready.workerProfile});
+    expect(prepared.integration.runs[0]?.targetBranch).toBe('main');
     expect(prepared.integration.runs[0]).not.toHaveProperty('threadId');
     expect(()=>applyForgeCommand(prepared,{type:'begin_integration',actor:{role:'host',id:'integrator-runtime'},run:integrationRunInput(ready)},at)).toThrow(/already exists|reconcile/i);
     const running=applyForgeCommand(prepared,{type:'record_integration_runtime',actor:{role:'host',id:'integrator-runtime'},runId:'integration-run-a',threadId:'integrator-thread',turnId:'integrator-turn',effectiveProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'}},at);
@@ -445,24 +513,28 @@ describe('Forge integration and main merge',()=>{
     const integrated=recordCandidate(beginIntegration(readyForIntegration()));
     expect(integrated.phase).toBe('review');
     expect(integrated.integration.status).toBe('ready_for_review');
-    const reviewed=applyForgeCommand(integrated,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'accept',note:'Receipt, diff, scopes, and checks are accepted.'},at);
+    expect(integrated.integration.candidates[0]?.targetBranch).toBe('main');
+    const reviewed=applyForgeCommand(integrated,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept',note:'Receipt, diff, scopes, and checks are accepted.'},at);
     expect(reviewed.phase).toBe('merge_ready');
-    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at);
+    expect(reviewed.integration.reviewDecisions[0]?.targetBranch).toBe('main');
+    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at);
     expect(merging.phase).toBe('merging');
-    expect(()=>applyForgeCommand(merging,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at)).toThrow(/durable intent|reconcile/i);
+    expect(merging.integration.mergeIntent?.targetBranch).toBe('main');
+    expect(()=>applyForgeCommand(merging,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at)).toThrow(/durable intent|reconcile/i);
     const recovered=applyForgeCommand(merging,{type:'recover_after_restart',actor:{role:'host',id:'scheduler'}},at);
     expect(recovered.phase).toBe('blocked');
     expect(recovered.attentionReason).toMatch(/merge status is unknown/i);
-    const complete=applyForgeCommand(recovered,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'merged',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),preMergeMainSha:'c'.repeat(40),observedMainSha:'d'.repeat(40),mergeCommitSha:'d'.repeat(40),commitReadbackSha:'d'.repeat(40)},at);
+    const complete=applyForgeCommand(recovered,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'merged',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',preMergeMainSha:'c'.repeat(40),observedMainSha:'d'.repeat(40),mergeCommitSha:'d'.repeat(40),commitReadbackSha:'d'.repeat(40)},at);
     expect(complete.phase).toBe('complete');
+    expect(complete.integration.mergeReadbacks.at(-1)?.targetBranch).toBe('main');
     expect(complete.completedAt).toBe(at);
     expect(complete.integration.status).toBe('merged');
   });
 
   it('invalidates review when main changes before the guarded merge',()=>{
     const candidateReady=recordCandidate(beginIntegration(readyForIntegration()));
-    const reviewed=applyForgeCommand(candidateReady,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'accept',note:'Approved candidate.'},at);
-    const stale=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'e'.repeat(40)},at);
+    const reviewed=applyForgeCommand(candidateReady,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept',note:'Approved candidate.'},at);
+    const stale=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'e'.repeat(40)},at);
     expect(stale.phase).toBe('integrating');
     expect(stale.integration.activeCandidateId).toBeUndefined();
     expect(stale.integration.staleCandidateIds).toContain('candidate-a');
@@ -472,9 +544,9 @@ describe('Forge integration and main merge',()=>{
 
   it('invalidates the candidate if main moves between merge approval and the merge operation',()=>{
     const ready=recordCandidate(beginIntegration(readyForIntegration()));
-    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'accept',note:'Approved candidate.'},at);
-    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at);
-    const stale=applyForgeCommand(merging,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'stale',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),preMergeMainSha:'e'.repeat(40),observedMainSha:'e'.repeat(40),detail:'Final pre-merge SHA check rejected the stale target.'},at);
+    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept',note:'Approved candidate.'},at);
+    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at);
+    const stale=applyForgeCommand(merging,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'stale',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',preMergeMainSha:'e'.repeat(40),observedMainSha:'e'.repeat(40),detail:'Final pre-merge SHA check rejected the stale target.'},at);
     expect(stale.phase).toBe('integrating');
     expect(stale.integration.staleCandidateIds).toContain('candidate-a');
     expect(stale.integration.mergeReadbacks.at(-1)).toMatchObject({result:'stale',preMergeMainSha:'e'.repeat(40)});
@@ -482,9 +554,9 @@ describe('Forge integration and main merge',()=>{
 
   it('uses the post-check main readback when main moves during merge preflight',()=>{
     const ready=recordCandidate(beginIntegration(readyForIntegration()));
-    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'accept',note:'Approved candidate.'},at);
-    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at);
-    const stale=applyForgeCommand(merging,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'stale',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),preMergeMainSha:'c'.repeat(40),observedMainSha:'e'.repeat(40),detail:'Main moved during guarded merge preflight.'},at);
+    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept',note:'Approved candidate.'},at);
+    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at);
+    const stale=applyForgeCommand(merging,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'stale',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',preMergeMainSha:'c'.repeat(40),observedMainSha:'e'.repeat(40),detail:'Main moved during guarded merge preflight.'},at);
     expect(stale.phase).toBe('integrating');
     expect(stale.integration.staleCandidateIds).toContain('candidate-a');
     expect(stale.integration.mergeReadbacks.at(-1)).toMatchObject({preMergeMainSha:'c'.repeat(40),observedMainSha:'e'.repeat(40)});
@@ -492,22 +564,22 @@ describe('Forge integration and main merge',()=>{
 
   it('releases a recovered merge intent only after readback confirms main did not move',()=>{
     const ready=recordCandidate(beginIntegration(readyForIntegration()));
-    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'accept',note:'Approved candidate.'},at);
-    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at);
+    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept',note:'Approved candidate.'},at);
+    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at);
     const recovered=applyForgeCommand(merging,{type:'recover_after_restart',actor:{role:'host',id:'scheduler'}},at);
-    expect(()=>applyForgeCommand(recovered,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at)).toThrow(/accept|reconcile|merge/i);
-    const confirmedNoMerge=applyForgeCommand(recovered,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'failed',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),preMergeMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40),detail:'Recovery verified that main still points at the approved target.'},at);
+    expect(()=>applyForgeCommand(recovered,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at)).toThrow(/accept|reconcile|merge/i);
+    const confirmedNoMerge=applyForgeCommand(recovered,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'failed',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',preMergeMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40),detail:'Recovery verified that main still points at the approved target.'},at);
     expect(confirmedNoMerge.phase).toBe('merge_ready');
     expect(confirmedNoMerge.integration.mergeIntent).toBeUndefined();
     expect(confirmedNoMerge.integration.mergeReadbacks.at(-1)?.result).toBe('failed');
-    expect(applyForgeCommand(confirmedNoMerge,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at).phase).toBe('merging');
+    expect(applyForgeCommand(confirmedNoMerge,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at).phase).toBe('merging');
   });
 
   it('resumes paused candidate review and merge approval at the same decision phase',()=>{
     const ready=recordCandidate(beginIntegration(readyForIntegration()));
     const pausedReview=applyForgeCommand(ready,{type:'pause',actor:{role:'user',id:'user-1'}},at);
     expect(applyForgeCommand(pausedReview,{type:'resume',actor:{role:'user',id:'user-1'}},at).phase).toBe('review');
-    const accepted=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'accept',note:'Approved candidate.'},at);
+    const accepted=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept',note:'Approved candidate.'},at);
     const pausedMerge=applyForgeCommand(accepted,{type:'pause',actor:{role:'user',id:'user-1'}},at);
     expect(applyForgeCommand(pausedMerge,{type:'resume',actor:{role:'user',id:'user-1'}},at).phase).toBe('merge_ready');
   });
@@ -549,7 +621,7 @@ describe('Forge integration and main merge',()=>{
   it('lets final review request a bounded correction and preserves candidate and review findings',()=>{
     const integrated=recordCandidate(beginIntegration(readyForIntegration()));
     const corrected=applyForgeCommand(integrated,{
-      type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'request_corrections',note:'The final diff review found a task-level gap.',correctionId:'review-correction-a',
+      type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'request_corrections',note:'The final diff review found a task-level gap.',correctionId:'review-correction-a',
       corrections:[{taskId:'task-a',findings:[{id:'review-finding-a',title:'Missing guard',issue:'The reviewed change misses an input case.',requiredFix:'Handle the empty input.',evidence:['reviewed candidate diff']}],assignment:correctionAssignment()}],
     },at);
     expect(corrected.phase).toBe('running');
@@ -572,9 +644,9 @@ describe('Forge integration and main merge',()=>{
 
   it('refuses to complete when main does not read back the actual merge commit',()=>{
     const ready=recordCandidate(beginIntegration(readyForIntegration()));
-    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),disposition:'accept',note:'Approved.'},at);
-    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),observedMainSha:'c'.repeat(40)},at);
-    expect(()=>applyForgeCommand(merging,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'merged',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),preMergeMainSha:'c'.repeat(40),observedMainSha:'e'.repeat(40),mergeCommitSha:'d'.repeat(40),commitReadbackSha:'f'.repeat(40)},at)).toThrow(/read back/i);
+    const reviewed=applyForgeCommand(ready,{type:'submit_manual_candidate_review',actor:{role:'user',id:'root-orchestrator'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',disposition:'accept',note:'Approved.'},at);
+    const merging=applyForgeCommand(reviewed,{type:'begin_merge',actor:{role:'host',id:'git-adapter'},candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',observedMainSha:'c'.repeat(40)},at);
+    expect(()=>applyForgeCommand(merging,{type:'record_merge_readback',actor:{role:'host',id:'git-adapter'},result:'merged',candidateSha:'b'.repeat(40),targetMainSha:'c'.repeat(40),targetBranch:'main',preMergeMainSha:'c'.repeat(40),observedMainSha:'e'.repeat(40),mergeCommitSha:'d'.repeat(40),commitReadbackSha:'f'.repeat(40)},at)).toThrow(/read back/i);
     expect(merging.phase).toBe('merging');
   });
 });

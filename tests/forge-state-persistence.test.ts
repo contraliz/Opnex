@@ -97,13 +97,14 @@ describe('Forge state persistence',()=>{
     await createForgeState(directory);
     const file=path.join(directory,'data','state.json');
     const old=JSON.parse(await readFile(file,'utf8'));
-    old.version=6;delete old.tasks[0].toolCalls;delete old.tasks[0].forge.orchestratorRuns;delete old.tasks[0].forge.activeOrchestratorRunId;
+    old.version=6;delete old.tasks[0].toolCalls;delete old.tasks[0].forge.orchestratorRuns;delete old.tasks[0].forge.activeOrchestratorRunId;delete old.tasks[0].forge.targetBranch;delete old.tasks[0].forge.approvalPolicy;
     const source=JSON.stringify(old);await writeFile(file,source,'utf8');
     vi.resetModules();
     const state=await import('../server/state.js');const migrated=await state.loadState();
     expect(migrated.version).toBe(7);
     expect(migrated.tasks[0]).toMatchObject({sessionType:'forge',toolCalls:{schemaVersion:1,total:0,statusCounts:{started:0,completed:0,failed:0,interrupted:0},calls:[],seen:{},omittedCount:0}});
     expect(migrated.tasks[0].forge?.orchestratorRuns).toEqual([]);
+    expect(migrated.tasks[0].forge).toMatchObject({targetBranch:'main',approvalPolicy:'on-request'});
     const backups=(await readdir(path.dirname(file))).filter(name=>name.startsWith('state.json.pre-migration-')&&name.endsWith('.bak'));
     expect(backups).toHaveLength(1);
     expect(await readFile(path.join(path.dirname(file),backups[0]),'utf8')).toBe(source);
@@ -208,6 +209,7 @@ describe('Forge state persistence',()=>{
     await state.mutateForgeSession('forge-session-a',{type:'accept_plan',actor:{role:'orchestrator',id:'root'},revision:1},stamp);
     await state.mutateForgeSession('forge-session-a',{type:'start',actor:{role:'user',id:'user'}},stamp);
     await state.mutateForgeSession('forge-session-a',{type:'claim_task',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',claimId:'claim-a',attemptId:'attempt-a',claimToken:'token-a',runtimeId:'runtime-a',branch:'forge/attempt-a',worktreeRoot:path.join(directory,'worktree'),sourceBaselineSha:'a'.repeat(40)},stamp);
+    await state.mutateForgeSession('forge-session-a',{type:'record_attempt_dispatch_baseline',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',dispatchBaselineSha:'b'.repeat(40)},stamp);
     await state.mutateForgeSession('forge-session-a',{type:'record_attempt_runtime',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',threadId:'thread-a',turnId:'turn-a'},stamp);
     const beforeReload=state.getForgeTicketInState(state.getState(),'forge-session-a')!;
     expect(state.getTask('forge-session-a')?.passes).toBeUndefined();
@@ -220,6 +222,7 @@ describe('Forge state persistence',()=>{
     expect(reloaded.tasks[0].forge?.knowledgeBudget).toEqual({totalOperations:64,defaultAllocationOperations:2,maxAllocationOperations:8});
     expect(reloaded.tasks[0].forge?.attempts[0].status).toBe('claimed');
     expect(reloaded.tasks[0].forge?.attempts[0].knowledgeAllocation).toMatchObject({operations:2,ownerId:'worker-a',status:'reserved'});
+    expect(reloaded.tasks[0].forge?.attempts[0]).toMatchObject({sourceBaselineSha:'a'.repeat(40),dispatchBaselineSha:'b'.repeat(40)});
     expect(reloaded.tasks[0].forge?.workitems[0].state).toBe('claimed');
 
     expect(await reloadedState.recoverForgeSessionsAfterRestart(stamp)).toEqual(['forge-session-a']);
@@ -227,9 +230,10 @@ describe('Forge state persistence',()=>{
     expect(await reloadedState.recoverForgeSessionsAfterRestart(stamp)).toEqual([]);
     await reloadedState.mutateForgeSession('forge-session-a',{type:'reconcile_attempt',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',status:'still_running',evidence:'The original worker turn is confirmed live.'},stamp);
     await reloadedState.mutateForgeSession('forge-session-a',{type:'accept_worker_outcome',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',outcomeId:'outcome-a',receiptId:'receipt-a',receipt:{status:'complete',result:'The task is implemented.',changes:['src/change.ts'],acceptance:{met:['A Forge payload is saved.'],unmet:[]},verification:[{check:'Focused tests',result:'passed',evidence:'passed'}],risks:[],knowledge:{consulted:['forge-sessions-design'],updated:[]},decision_required:null},provenance:{producerRole:'worker',threadId:'thread-a',turnId:'turn-a',recordedAt:stamp,artifactRefs:['src/change.ts'],workerId:'worker-a'},hostAttestation:{status:'verified',commitObserved:true,scopeValidation:'passed',commitSha:'d'.repeat(40),observedAt:stamp,evidenceRefs:['host git readback']},retryable:true},stamp);
-    await reloadedState.mutateForgeSession('forge-session-a',{type:'begin_integration',actor:{role:'host',id:'integrator-runtime'},run:{id:'integration-run-a',ownerId:'integrator-a',projectId,workspaceRoot,requestedProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},branch:'forge/integrator/integration-run-a',worktreeRoot:path.join(directory,'integration-run-a'),sourceBaselineSha:'c'.repeat(40),scopes:{read:['src'],write:['src'],knowledge:['knowledge/opnex']},skillSnapshots:[]}},stamp);
+    await reloadedState.mutateForgeSession('forge-session-a',{type:'begin_integration',actor:{role:'host',id:'integrator-runtime'},run:{id:'integration-run-a',ownerId:'integrator-a',projectId,workspaceRoot,requestedProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},branch:'forge/integrator/integration-run-a',targetBranch:'main',worktreeRoot:path.join(directory,'integration-run-a'),sourceBaselineSha:'c'.repeat(40),scopes:{read:['src'],write:['src'],knowledge:['knowledge/opnex']},skillSnapshots:[]}},stamp);
     const beforeIntegrationReload=reloadedState.getForgeTicketInState(reloadedState.getState(),'forge-session-a')!;
     expect(beforeIntegrationReload.integration.runs[0]).toMatchObject({id:'integration-run-a',status:'prepared',projectId,workspaceRoot,requestedProfile:{model:'gpt-6-luna'},sourceBaselineSha:'c'.repeat(40)});
+    expect(beforeIntegrationReload.integration.runs[0]?.targetBranch).toBe('main');
     expect(beforeIntegrationReload.integration.runs[0]).not.toHaveProperty('threadId');
     vi.resetModules();
     const integrationReloadModule=await import('../server/state.js');
@@ -241,6 +245,73 @@ describe('Forge state persistence',()=>{
     await integrationReloadModule.mutateForgeSession('forge-session-a',{type:'reconcile_integration_run',actor:{role:'host',id:'integrator-runtime'},runId:'integration-run-a',status:'still_running',threadId:'integrator-thread-a',turnId:'integrator-turn-a',evidence:'The same integrator turn is confirmed live.'},stamp);
     const recovered=JSON.parse(await readFile(path.join(directory,'data','state.json'),'utf8'));
     expect(recovered.tasks[0].forge.integration.runs[0]).toMatchObject({id:'integration-run-a',status:'running',threadId:'integrator-thread-a',turnId:'integrator-turn-a'});
+  });
+
+  it('persists a host-attested pre-provider failure without synthetic provider or receipt provenance',async()=>{
+    const directory=await makeDirectory();
+    const {state}=await createForgeState(directory,'forge-preflight-session');
+    await state.mutateForgeSession('forge-preflight-session',{type:'submit_manual_plan',actor:{role:'user',id:'user'},planId:'plan-a',tasks:[{
+      id:'work-a',title:'One task',description:'Implement one task.',dependencyIds:[],assignment:{outcome:'Implement it.',deliverable:'Source change.',read_scope:['src'],write_scope:['src'],exclusions:[],constraints:[],context_refs:[],acceptance:['It works.'],verification:['Focused tests pass.'],ordinary_authority:['Make routine edits.'],escalation_conditions:['The public interface must change.'],receipt_requirements:['Return a receipt.']},
+      knowledgeScope:['knowledge/opnex'],executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},skillSnapshots:[],
+    }]},stamp);
+    await state.mutateForgeSession('forge-preflight-session',{type:'accept_plan',actor:{role:'user',id:'user'},revision:1},stamp);
+    await state.mutateForgeSession('forge-preflight-session',{type:'start',actor:{role:'user',id:'user'}},stamp);
+    await state.mutateForgeSession('forge-preflight-session',{type:'claim_task',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',claimId:'claim-a',attemptId:'attempt-a',claimToken:'token-a',runtimeId:'runtime-a',branch:'forge/work-a',worktreeRoot:path.join(directory,'worktree'),sourceBaselineSha:'a'.repeat(40)},stamp);
+    await state.mutateForgeSession('forge-preflight-session',{type:'fail_attempt_preflight',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',stage:'dependency_merge',failureReason:'Dependency preparation failed before provider dispatch.',evidence:['The host merge adapter returned a deterministic conflict.']},stamp);
+    vi.resetModules();
+    const reloaded=await import('../server/state.js');
+    const ticket=reloaded.getForgeTicketInState(await reloaded.loadState(),'forge-preflight-session')!;
+    expect(ticket.attempts[0]).toMatchObject({status:'preflight_failed',sourceBaselineSha:'a'.repeat(40),failureReason:'Dependency preparation failed before provider dispatch.',preflightFailure:{stage:'dependency_merge',evidence:['The host merge adapter returned a deterministic conflict.']}});
+    expect(ticket.attempts[0]).not.toHaveProperty('threadId');
+    expect(ticket.attempts[0]).not.toHaveProperty('receiptId');
+    expect(ticket.receipts).toEqual([]);
+  });
+
+  it('persists an uncertain turn start as a blocked owner until host reconciliation',async()=>{
+    const directory=await makeDirectory();
+    const {state}=await createForgeState(directory,'forge-uncertain-session');
+    await state.mutateForgeSession('forge-uncertain-session',{type:'submit_manual_plan',actor:{role:'user',id:'user'},planId:'plan-a',tasks:[{
+      id:'work-a',title:'One task',description:'Implement one task.',dependencyIds:[],assignment:{outcome:'Implement it.',deliverable:'Source change.',read_scope:['src'],write_scope:['src'],exclusions:[],constraints:[],context_refs:[],acceptance:['It works.'],verification:['Focused tests pass.'],ordinary_authority:['Make routine edits.'],escalation_conditions:['The public interface must change.'],receipt_requirements:['Return a receipt.']},
+      knowledgeScope:['knowledge/opnex'],executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},skillSnapshots:[],
+    }]},stamp);
+    await state.mutateForgeSession('forge-uncertain-session',{type:'accept_plan',actor:{role:'user',id:'user'},revision:1},stamp);
+    await state.mutateForgeSession('forge-uncertain-session',{type:'start',actor:{role:'user',id:'user'}},stamp);
+    await state.mutateForgeSession('forge-uncertain-session',{type:'claim_task',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',claimId:'claim-a',attemptId:'attempt-a',claimToken:'token-a',runtimeId:'runtime-a',branch:'forge/work-a',worktreeRoot:path.join(directory,'worktree'),sourceBaselineSha:'a'.repeat(40)},stamp);
+    await state.mutateForgeSession('forge-uncertain-session',{type:'record_attempt_dispatch_baseline',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',dispatchBaselineSha:'b'.repeat(40)},stamp);
+    await state.mutateForgeSession('forge-uncertain-session',{type:'mark_attempt_effect_uncertain',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',evidence:'Turn-start was sent but disconnected before an ID was observed.'},stamp);
+    vi.resetModules();
+    const reloaded=await import('../server/state.js');
+    const ticket=reloaded.getForgeTicketInState(await reloaded.loadState(),'forge-uncertain-session')!;
+    expect(ticket).toMatchObject({phase:'blocked',workitems:[{state:'blocked',activeAttemptId:'attempt-a',blockedReason:{kind:'execution_issue',code:'unknown_effect'}}],attempts:[{status:'unknown_effect',dispatchBaselineSha:'b'.repeat(40)}]});
+    expect(await reloaded.recoverForgeSessionsAfterRestart(stamp)).toEqual([]);
+    await expect(reloaded.mutateForgeSession('forge-uncertain-session',{type:'fail_attempt_preflight',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',stage:'provider_start',effect:'confirmed_not_started',failureReason:'No turn was started.',evidence:['Uncertain disconnect.']},stamp)).rejects.toThrow(/known no-effect|uncertain/i);
+    await reloaded.mutateForgeSession('forge-uncertain-session',{type:'reconcile_attempt',actor:{role:'host',id:'scheduler'},taskId:'work-a',ownerId:'worker-a',attemptId:'attempt-a',claimToken:'token-a',status:'stopped',evidence:'The provider confirms no turn remains live.'},stamp);
+    expect(reloaded.getForgeTicketInState(reloaded.getState(),'forge-uncertain-session')?.attempts[0]?.status).toBe('interrupted');
+  });
+
+  it('snapshots the selected Settings approval policy and keeps it after later Settings changes',async()=>{
+    const directory=await makeDirectory();
+    const {state,workspaceRoot}=await createForgeState(directory);
+    await state.mutate(value=>{value.settings.approvalPolicy='untrusted';});
+    const created=await state.createForgeSession(ticketInput(workspaceRoot,'forge-untrusted'));
+    expect(created.forge?.approvalPolicy).toBe('untrusted');
+    await state.mutate(value=>{value.settings.approvalPolicy='never';});
+    expect(state.getForgeTicketInState(state.getState(),'forge-untrusted')?.approvalPolicy).toBe('untrusted');
+    vi.resetModules();
+    const reloaded=await import('../server/state.js');
+    expect((await reloaded.loadState()).tasks.find(task=>task.id==='forge-untrusted')?.forge?.approvalPolicy).toBe('untrusted');
+  });
+
+  it('rejects Full Access for strict Forge creation instead of downgrading the selected policy',async()=>{
+    const directory=await makeDirectory();
+    const workspaceRoot=path.join(directory,'workspace');await mkdir(workspaceRoot);
+    vi.stubEnv('OPNEX_DATA_DIR',path.join(directory,'data'));vi.resetModules();
+    const state=await import('../server/state.js');
+    await state.loadState();
+    await state.mutate(value=>state.saveProjectInState(value,{id:projectId,name:'Forge workspace',projectRoot:workspaceRoot,needsLocation:false,pinned:false}));
+    await state.mutate(value=>{value.settings.approvalPolicy='full-access';});
+    await expect(state.createForgeSession(ticketInput(workspaceRoot))).rejects.toThrow(/cannot use the Full Access approval policy/i);
+    expect(state.getState().tasks).toHaveLength(0);
   });
 
   it('serializes concurrent Forge claims through the existing atomic state owner',async()=>{

@@ -4,6 +4,7 @@ import {
   forgeCapabilitiesSchema,
   forgeEffortSchema,
   forgeExecutionProfileSchema,
+  type ApprovalPolicy,
   forgeKnowledgeBudgetSchema,
   DEFAULT_FORGE_KNOWLEDGE_BUDGET,
   MAX_FORGE_SKILL_SNAPSHOTS,
@@ -48,6 +49,7 @@ const forgePlanProposalSchema=z.object({
 }).strict();
 const forgeAcceptedPlanSchema=forgePlanProposalSchema.extend({acceptedAt:date,acceptedBy:id}).strict();
 const forgeReconciliationSchema=z.object({status:z.enum(['still_running','stopped']),evidence:text,actorId:id,recordedAt:date}).strict();
+export const forgePreflightFailureSchema=z.object({stage:z.enum(['dependency_merge','workspace_prepare','provider_start']),reason:text,evidence:z.array(text).min(1).max(40),recordedAt:date}).strict();
 export const forgeKnowledgeUsageSchema=z.object({
   operations:z.number().int().nonnegative(),source:z.enum(['agent_reported','runtime_observed']),ownerId:id,recordedBy:id,
   threadId:id,turnId:id,recordedAt:date,evidence:z.string().trim().min(1).max(4000),
@@ -60,7 +62,7 @@ export const forgeKnowledgeAllocationSchema=z.object({
 });
 const forgeBlockReasonSchema=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('dependencies'),taskIds:z.array(id).min(1).max(MAX_FORGE_WORKITEMS)}).strict(),
-  z.object({kind:z.literal('execution_issue'),code:z.enum(['attempt_failed','retry_limit','unknown_after_restart','unverified_commit','manual','correction_limit']),detail:text,attemptId:id.optional()}).strict(),
+  z.object({kind:z.literal('execution_issue'),code:z.enum(['attempt_failed','retry_limit','unknown_after_restart','unknown_effect','preflight_failed','unverified_commit','manual','correction_limit']),detail:text,attemptId:id.optional()}).strict(),
 ]);
 export const forgeVisibleTaskStateSchema=z.enum(['open','claimed','finished','blocked']);
 export const forgeWorkitemSchema=z.object({
@@ -70,10 +72,10 @@ export const forgeWorkitemSchema=z.object({
 }).strict();
 export const forgeClaimSchema=z.object({id,token:z.string().min(1).max(512),ownerId:id,attemptId:id,claimedAt:date,expiresAt:date.optional()}).strict();
 export const forgeAttemptSchema=z.object({
-  id,taskId:id,ordinal:z.number().int().min(1),assignmentRevision:z.number().int().min(1),status:z.enum(['claimed','unknown_after_restart','finished','failed','interrupted']),
+  id,taskId:id,ordinal:z.number().int().min(1),assignmentRevision:z.number().int().min(1),status:z.enum(['claimed','unknown_after_restart','unknown_effect','finished','failed','interrupted','preflight_failed']),
   claim:forgeClaimSchema,runtimeId:id,branch:z.string().trim().min(1).max(240),worktreeRoot:z.string().trim().min(1).max(1024),sourceBaselineSha:sha,
   executionProfile:forgeExecutionProfileSchema,scopes:forgeScopeSchema,skillSnapshots:z.array(forgeSkillSnapshotSchema).max(MAX_FORGE_SKILL_SNAPSHOTS),knowledgeAllocation:forgeKnowledgeAllocationSchema.optional(),
-  threadId:id.optional(),turnId:id.optional(),startedAt:date.optional(),completedAt:date.optional(),outcomeId:id.optional(),receiptId:id.optional(),commitSha:sha.optional(),failureReason:z.string().max(4000).optional(),reconciliation:forgeReconciliationSchema.optional(),
+  dispatchBaselineSha:sha.optional(),preflightFailure:forgePreflightFailureSchema.optional(),threadId:id.optional(),turnId:id.optional(),startedAt:date.optional(),completedAt:date.optional(),outcomeId:id.optional(),receiptId:id.optional(),commitSha:sha.optional(),failureReason:z.string().max(4000).optional(),reconciliation:forgeReconciliationSchema.optional(),
 }).strict();
 export const forgeHostAttestationSchema=z.object({
   status:z.enum(['verified','rejected']),commitObserved:z.boolean(),scopeValidation:z.enum(['passed','failed']),commitSha:sha.optional(),
@@ -92,7 +94,7 @@ export const forgeIntegrationFindingSchema=z.object({id,taskId:id.optional(),tit
 export const forgeCorrectionFindingSchema=forgeIntegrationFindingSchema.extend({taskId:id}).strict();
 export const forgeIntegrationRunInputSchema=z.object({
   id,ownerId:id,projectId:z.string().uuid(),workspaceRoot:z.string().trim().min(1).max(1024),requestedProfile:forgeExecutionProfileSchema,
-  branch:z.string().trim().min(1).max(240),worktreeRoot:z.string().trim().min(1).max(1024),sourceBaselineSha:sha,scopes:forgeScopeSchema,knowledgeAllocation:z.number().int().min(0).max(8).optional(),
+  branch:z.string().trim().min(1).max(240),targetBranch:z.string().trim().min(1).max(240).default('main'),worktreeRoot:z.string().trim().min(1).max(1024),sourceBaselineSha:sha,scopes:forgeScopeSchema,knowledgeAllocation:z.number().int().min(0).max(8).optional(),
   skillSnapshots:z.array(forgeSkillSnapshotSchema).max(MAX_FORGE_SKILL_SNAPSHOTS),correctionRoundId:id.optional(),
 }).strict();
 export const forgeIntegrationRunSchema=forgeIntegrationRunInputSchema.extend({
@@ -105,7 +107,7 @@ const forgeOrchestratorRunBaseSchema=z.object({
   scopes:forgeScopeSchema,skillSnapshots:z.array(forgeSkillSnapshotSchema).max(MAX_FORGE_SKILL_SNAPSHOTS),knowledgeAllocation:z.number().int().min(0).max(8).optional(),expectedPlanRevision:z.number().int().min(1),
 }).strict();
 const forgePlanningRunInputSchema=forgeOrchestratorRunBaseSchema.extend({purpose:z.literal('planning'),sourceBaselineSha:sha}).strict();
-const forgeFinalReviewRunInputSchema=forgeOrchestratorRunBaseSchema.extend({purpose:z.literal('final_review'),candidateId:id,candidateSha:sha,targetMainSha:sha}).strict();
+const forgeFinalReviewRunInputSchema=forgeOrchestratorRunBaseSchema.extend({purpose:z.literal('final_review'),candidateId:id,candidateSha:sha,targetMainSha:sha,targetBranch:z.string().trim().min(1).max(240).default('main')}).strict();
 export const forgeOrchestratorRunInputSchema=z.discriminatedUnion('purpose',[forgePlanningRunInputSchema,forgeFinalReviewRunInputSchema]);
 const forgeOrchestratorRunRuntimeFields={
   status:z.enum(['prepared','running','unknown_after_restart','completed','failed','interrupted']),effectiveProfile:forgeExecutionProfileSchema.optional(),
@@ -116,7 +118,7 @@ export const forgeOrchestratorRunSchema=z.discriminatedUnion('purpose',[
   forgeFinalReviewRunInputSchema.extend({...forgeOrchestratorRunRuntimeFields,knowledgeAllocation:forgeKnowledgeAllocationSchema.optional(),resultReviewId:id.optional()}),
 ]);
 export const forgeIntegrationCandidateSchema=z.object({
-  id,integratorRunId:id,candidateSha:sha,targetMainSha:sha,workerCommits:z.array(forgeWorkerCommitSchema).min(1).max(MAX_FORGE_WORKITEMS),
+  id,integratorRunId:id,candidateSha:sha,targetMainSha:sha,targetBranch:z.string().trim().min(1).max(240).default('main'),workerCommits:z.array(forgeWorkerCommitSchema).min(1).max(MAX_FORGE_WORKITEMS),
   scopeValidation:z.object({status:z.enum(['passed','failed']),evidence:z.array(text).min(1).max(40)}).strict(),
   verification:z.array(forgeVerificationSchema).min(1).max(40),combinedReceipt:receiptSchema,provenance:forgeReceiptProvenanceSchema,
   findings:z.array(forgeIntegrationFindingSchema).max(40),createdAt:date,
@@ -127,11 +129,11 @@ const forgeCorrectionRoundSchema=z.object({
   items:z.array(z.object({taskId:id,findingIds:z.array(id).min(1).max(40),assignmentRevision:z.number().int().min(2)}).strict()).min(1).max(MAX_FORGE_WORKITEMS),
 }).strict();
 const forgeReviewDecisionSchema=z.object({
-  id,candidateId:id,candidateSha:sha,targetMainSha:sha,disposition:z.enum(['accept','request_corrections','block']),note:z.string().max(4000),reviewedAt:date,reviewedBy:id,source:z.enum(['legacy','manual','model_run']).default('legacy'),runId:id.optional(),correctionRoundId:id.optional(),
+  id,candidateId:id,candidateSha:sha,targetMainSha:sha,targetBranch:z.string().trim().min(1).max(240).default('main'),disposition:z.enum(['accept','request_corrections','block']),note:z.string().max(4000),reviewedAt:date,reviewedBy:id,source:z.enum(['legacy','manual','model_run']).default('legacy'),runId:id.optional(),correctionRoundId:id.optional(),
 }).strict();
-const forgeMergeIntentSchema=z.object({candidateId:id,candidateSha:sha,targetMainSha:sha,startedAt:date,startedBy:id}).strict();
+const forgeMergeIntentSchema=z.object({candidateId:id,candidateSha:sha,targetMainSha:sha,targetBranch:z.string().trim().min(1).max(240).default('main'),startedAt:date,startedBy:id}).strict();
 const forgeMergeReadbackSchema=z.object({
-  id,candidateId:id,candidateSha:sha,targetMainSha:sha,preMergeMainSha:sha.optional(),result:z.enum(['merged','stale','failed']),observedMainSha:sha,
+  id,candidateId:id,candidateSha:sha,targetMainSha:sha,targetBranch:z.string().trim().min(1).max(240).default('main'),preMergeMainSha:sha.optional(),result:z.enum(['merged','stale','failed']),observedMainSha:sha,
   mergeCommitSha:sha.optional(),commitReadbackSha:sha.optional(),detail:z.string().max(4000).optional(),recordedAt:date,
 }).strict();
 export const forgeIntegrationSchema=z.object({
@@ -145,7 +147,7 @@ export const forgeTicketSchema=z.object({
   schemaVersion:z.literal(1),id,projectId:z.string().uuid(),workspaceRoot:z.string().trim().min(1).max(1024),
   title:z.string().trim().min(1).max(120),description:text,acceptanceCriteria:z.array(text).min(1).max(30),
   scope:forgeScopeSchema,orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict(),
-  workerProfile:forgeExecutionProfileSchema,orchestratorSkills:z.array(forgeSkillSnapshotSchema).max(MAX_FORGE_SKILL_SNAPSHOTS),limits:forgeLimitsSchema,capabilities:forgeCapabilitiesSchema,
+  workerProfile:forgeExecutionProfileSchema,targetBranch:z.string().trim().min(1).max(240).default('main'),approvalPolicy:z.enum(['on-request','untrusted','never']).default('on-request'),orchestratorSkills:z.array(forgeSkillSnapshotSchema).max(MAX_FORGE_SKILL_SNAPSHOTS),limits:forgeLimitsSchema,capabilities:forgeCapabilitiesSchema,
   phase:forgeTicketPhaseSchema,planRevision:z.number().int().min(0),proposedPlan:forgePlanProposalSchema.optional(),acceptedPlan:forgeAcceptedPlanSchema.optional(),
   knowledgeBudget:forgeKnowledgeBudgetSchema.default(DEFAULT_FORGE_KNOWLEDGE_BUDGET),orchestratorRuns:z.array(forgeOrchestratorRunSchema).max(100).default([]),activeOrchestratorRunId:id.optional(),
   workitems:z.array(forgeWorkitemSchema).max(MAX_FORGE_WORKITEMS),attempts:z.array(forgeAttemptSchema).max(1000),receipts:z.array(forgeStoredReceiptSchema).max(1000),integration:forgeIntegrationSchema,
@@ -193,9 +195,14 @@ export const forgeTicketSchema=z.object({
     if(attemptIds.has(attempt.id)||claimIds.has(attempt.claim.id)||claimTokens.has(attempt.claim.token))fail(['attempts'],'Forge attempt and claim identifiers must be unique.');
     attemptIds.add(attempt.id);claimIds.add(attempt.claim.id);claimTokens.add(attempt.claim.token);attemptById.set(attempt.id,attempt);
     if(!task||attempt.claim.attemptId!==attempt.id||attempt.assignmentRevision>task.assignmentRevision||!task.attemptIds.includes(attempt.id))fail(['attempts'],'Forge attempts must remain linked to their owning workitem and claim.');
-    if(((attempt.status==='finished'||attempt.status==='failed')&&(!attempt.outcomeId||!attempt.receiptId))||((attempt.status==='claimed'||attempt.status==='unknown_after_restart')&&(attempt.outcomeId!==undefined||attempt.receiptId!==undefined)))fail(['attempts'],'Forge attempt outcome fields must agree with its persisted status.');
+    const liveAttempt=attempt.status==='claimed'||attempt.status==='unknown_after_restart'||attempt.status==='unknown_effect';
+    if(((attempt.status==='finished'||attempt.status==='failed')&&(!attempt.outcomeId||!attempt.receiptId))||(liveAttempt||attempt.status==='preflight_failed'||attempt.status==='interrupted')&&(attempt.outcomeId!==undefined||attempt.receiptId!==undefined))fail(['attempts'],'Forge attempt outcome fields must agree with its persisted status.');
+    if((!!attempt.threadId)!=(!!attempt.turnId)||attempt.startedAt&&!attempt.threadId)fail(['attempts'],'Observed worker turns require paired provider IDs.');
+    if(attempt.status==='preflight_failed'&&(!attempt.preflightFailure||!attempt.failureReason||!attempt.completedAt||attempt.threadId||attempt.turnId||attempt.startedAt||attempt.commitSha))fail(['attempts'],'Pre-provider failures must retain evidence without provider IDs, a commit, or a worker receipt.');
+    if(attempt.status!=='preflight_failed'&&attempt.preflightFailure)fail(['attempts'],'Pre-provider failure evidence belongs only to a preflight-failed attempt.');
+    if(attempt.status==='preflight_failed'&&attempt.preflightFailure?.stage==='provider_start'&&!attempt.dispatchBaselineSha)fail(['attempts'],'Provider-start preflight failures require the persisted dispatch baseline.');
     if(attempt.status==='finished'&&(!attempt.commitSha||!attempt.completedAt))fail(['attempts'],'Finished Forge attempts require a commit SHA and completion time.');
-    if((attempt.status==='failed'||attempt.status==='interrupted')&&(!attempt.failureReason||!attempt.completedAt))fail(['attempts'],'Failed or interrupted Forge attempts require a reason and completion time.');
+    if((attempt.status==='failed'||attempt.status==='interrupted'||attempt.status==='preflight_failed')&&(!attempt.failureReason||!attempt.completedAt))fail(['attempts'],'Failed or interrupted Forge attempts require a reason and completion time.');
   }
   const orchestratorRunIds=new Set<string>(),orchestratorRunById=new Map<string,typeof ticket.orchestratorRuns[number]>();
   for(const run of ticket.orchestratorRuns){
@@ -209,7 +216,7 @@ export const forgeTicketSchema=z.object({
     if(run.purpose==='final_review'&&(run.status==='completed'?!run.resultReviewId:!!run.resultReviewId))fail(['orchestratorRuns'],'Final-review result IDs must agree with the run status.');
     if(run.purpose==='final_review'){
       const candidate=ticket.integration.candidates.find(row=>row.id===run.candidateId);
-      if(!candidate||candidate.candidateSha!==run.candidateSha||candidate.targetMainSha!==run.targetMainSha||run.expectedPlanRevision!==ticket.acceptedPlan?.revision)fail(['orchestratorRuns'],'Final-review runs must pin an existing candidate, target main SHA, and accepted plan revision.');
+      if(!candidate||candidate.candidateSha!==run.candidateSha||candidate.targetMainSha!==run.targetMainSha||candidate.targetBranch!==run.targetBranch||run.targetBranch!==ticket.targetBranch||run.expectedPlanRevision!==ticket.acceptedPlan?.revision)fail(['orchestratorRuns'],'Final-review runs must pin an existing candidate, target branch, target main SHA, and accepted plan revision.');
     }
   }
   const liveOrchestratorRuns=ticket.orchestratorRuns.filter(run=>['prepared','running','unknown_after_restart'].includes(run.status));
@@ -227,6 +234,7 @@ export const forgeTicketSchema=z.object({
   const integrationRunIds=new Set<string>(),integrationRunById=new Map<string,typeof ticket.integration.runs[number]>();
   for(const run of ticket.integration.runs){
     if(integrationRunIds.has(run.id)||run.projectId!==ticket.projectId||run.workspaceRoot!==ticket.workspaceRoot)fail(['integration','runs'],'Integrator runs must be uniquely identified and bound to the ticket workspace.');
+    if(run.targetBranch!==ticket.targetBranch)fail(['integration','runs'],'Integrator runs must use the ticket pinned local target branch.');
     integrationRunIds.add(run.id);integrationRunById.set(run.id,run);
     if(run.correctionRoundId&&!ticket.integration.correctionRounds.some(round=>round.id===run.correctionRoundId))fail(['integration','runs'],'Integrator runs must reference a saved correction round.');
     if(run.status==='completed'&&!run.candidateId||run.status!=='completed'&&run.candidateId)fail(['integration','runs'],'Integrator candidate IDs must agree with the run status.');
@@ -249,19 +257,19 @@ export const forgeTicketSchema=z.object({
     const run=integrationRunById.get(candidate.integratorRunId);
     if(candidateIds.has(candidate.id)||candidateRunIds.has(candidate.integratorRunId))fail(['integration','candidates'],'Integration candidate and run IDs must be unique.');
     candidateIds.add(candidate.id);candidateRunIds.add(candidate.integratorRunId);
-    if(!run||run.status!=='completed'||run.candidateId!==candidate.id||run.threadId!==candidate.provenance.threadId||run.turnId!==candidate.provenance.turnId||candidate.provenance.producerRole!=='integrator')fail(['integration','candidates'],'Integration candidates must be linked to their completed integrator run and observed provenance.');
+    if(!run||run.status!=='completed'||run.candidateId!==candidate.id||run.targetBranch!==candidate.targetBranch||candidate.targetBranch!==ticket.targetBranch||run.threadId!==candidate.provenance.threadId||run.turnId!==candidate.provenance.turnId||candidate.provenance.producerRole!=='integrator')fail(['integration','candidates'],'Integration candidates must be linked to their completed integrator run, local target branch, and observed provenance.');
   }
   for(const task of ticket.workitems){
     const taskAttempts=ticket.attempts.filter(attempt=>attempt.taskId===task.id);
     if(new Set(task.attemptIds).size!==task.attemptIds.length||task.attemptIds.length!==taskAttempts.length||task.attemptIds.some(id=>!taskAttempts.some(attempt=>attempt.id===id)))fail(['workitems'],'Workitem attempt IDs must match its saved attempt history.');
     if(task.assignmentRevision!==1+task.correctionAssignments.length||task.correctionAssignments.some((assignment,index)=>assignment.revision!==index+2||assignment.source!=='correction'||new Set(assignment.skillSnapshots.map(skill=>skill.id)).size!==assignment.skillSnapshots.length))fail(['workitems'],'Correction assignments must have a continuous immutable revision history and unique skill snapshots.');
     const active=task.activeAttemptId?attemptById.get(task.activeAttemptId):undefined;
-    const liveAttempts=taskAttempts.filter(attempt=>attempt.status==='claimed'||attempt.status==='unknown_after_restart');
+    const liveAttempts=taskAttempts.filter(attempt=>attempt.status==='claimed'||attempt.status==='unknown_after_restart'||attempt.status==='unknown_effect');
     if(liveAttempts.length>1||liveAttempts.some(attempt=>attempt.id!==task.activeAttemptId))fail(['workitems'],'Every live Forge attempt must be the workitem active attempt, with at most one live attempt.');
     if(task.activeAttemptId&&active?.taskId!==task.id)fail(['workitems'],'An active attempt must belong to the workitem.');
     if(task.state==='claimed'&&(!active||active.status!=='claimed'||task.blockedReason))fail(['workitems'],'Claimed workitems require exactly one live claimed attempt.');
-    if(task.state!=='claimed'&&task.blockedReason?.kind==='execution_issue'&&task.blockedReason.code==='unknown_after_restart'&&(!active||active.status!=='unknown_after_restart'))fail(['workitems'],'Unknown-after-restart blocks must retain their original attempt.');
-    if(task.activeAttemptId&&task.state!=='claimed'&&!(task.state==='blocked'&&task.blockedReason?.kind==='execution_issue'&&task.blockedReason.code==='unknown_after_restart'))fail(['workitems'],'Only claimed or unknown-after-restart workitems may retain an active attempt.');
+    if(task.state!=='claimed'&&task.blockedReason?.kind==='execution_issue'&&task.blockedReason.code==='unknown_after_restart'&&(!active||active.status!=='unknown_after_restart')||task.state!=='claimed'&&task.blockedReason?.kind==='execution_issue'&&task.blockedReason.code==='unknown_effect'&&(!active||active.status!=='unknown_effect'))fail(['workitems'],'Unknown workitem blocks must retain their original attempt.');
+    if(task.activeAttemptId&&task.state!=='claimed'&&!(task.state==='blocked'&&task.blockedReason?.kind==='execution_issue'&&['unknown_after_restart','unknown_effect'].includes(task.blockedReason.code)))fail(['workitems'],'Only claimed or unknown-effect workitems may retain an active attempt.');
     if(task.state==='finished'){
       const finished=taskAttempts.find(attempt=>attempt.assignmentRevision===task.assignmentRevision&&attempt.status==='finished');
       const receipt=finished&&ticket.receipts.find(row=>row.id===finished.receiptId&&row.attemptId===finished.id);
@@ -280,16 +288,22 @@ export const forgeTicketSchema=z.object({
   }
   if(ticket.integration.activeCandidateId&&!ticket.integration.candidates.some(candidate=>candidate.id===ticket.integration.activeCandidateId))fail(['integration','activeCandidateId'],'The active integration candidate must be saved.');
   for(const decision of ticket.integration.reviewDecisions){
+    const candidate=ticket.integration.candidates.find(row=>row.id===decision.candidateId);
+    if(!candidate||decision.targetBranch!==candidate.targetBranch||decision.targetBranch!==ticket.targetBranch)fail(['integration','reviewDecisions'],'Review decisions must retain the candidate local target branch.');
     if(decision.source==='model_run'){
       const run=decision.runId?orchestratorRunById.get(decision.runId):undefined;
-      if(!run||run.purpose!=='final_review'||run.status!=='completed'||run.resultReviewId!==decision.id||run.candidateId!==decision.candidateId||run.candidateSha!==decision.candidateSha||run.targetMainSha!==decision.targetMainSha)fail(['integration','reviewDecisions'],'Model final-review decisions must be bound to their completed candidate-specific run.');
+      if(!run||run.purpose!=='final_review'||run.status!=='completed'||run.resultReviewId!==decision.id||run.candidateId!==decision.candidateId||run.candidateSha!==decision.candidateSha||run.targetMainSha!==decision.targetMainSha||run.targetBranch!==decision.targetBranch)fail(['integration','reviewDecisions'],'Model final-review decisions must be bound to their completed candidate-specific run and target branch.');
     }else if(decision.runId)fail(['integration','reviewDecisions'],'Only model-run decisions may reference an orchestrator run.');
   }
   for(const run of ticket.orchestratorRuns){
     if(run.purpose==='final_review'&&run.status==='completed'&&!ticket.integration.reviewDecisions.some(decision=>decision.id===run.resultReviewId&&decision.runId===run.id))fail(['orchestratorRuns'],'Completed final-review runs must retain their review decision.');
   }
+  if(ticket.integration.mergeIntent&&(ticket.integration.mergeIntent.targetBranch!==ticket.targetBranch||!ticket.integration.candidates.some(candidate=>candidate.id===ticket.integration.mergeIntent!.candidateId&&candidate.targetBranch===ticket.integration.mergeIntent!.targetBranch)))fail(['integration','mergeIntent'],'Merge intent must retain the candidate local target branch.');
+  for(const readback of ticket.integration.mergeReadbacks){
+    if(readback.targetBranch!==ticket.targetBranch||!ticket.integration.candidates.some(candidate=>candidate.id===readback.candidateId&&candidate.targetBranch===readback.targetBranch))fail(['integration','mergeReadbacks'],'Merge readbacks must retain the candidate local target branch.');
+  }
   if(ticket.phase==='merging'&&!ticket.integration.mergeIntent||ticket.integration.mergeIntent&&!['merging','paused','cancelled','blocked'].includes(ticket.phase))fail(['integration','mergeIntent'],'A durable merge intent must remain in an active or recoverable merge phase.');
-  if(ticket.phase==='complete'&&(!ticket.integration.mergeReadbacks.some(readback=>readback.result==='merged'&&readback.commitReadbackSha===readback.mergeCommitSha&&readback.observedMainSha===readback.mergeCommitSha&&ticket.integration.candidates.some(candidate=>candidate.id===readback.candidateId&&candidate.candidateSha===readback.candidateSha&&candidate.targetMainSha===readback.targetMainSha))||ticket.integration.status!=='merged'))fail(['phase'],'A complete Forge ticket requires an actual matching merge readback.');
+  if(ticket.phase==='complete'&&(!ticket.integration.mergeReadbacks.some(readback=>readback.result==='merged'&&readback.commitReadbackSha===readback.mergeCommitSha&&readback.observedMainSha===readback.mergeCommitSha&&ticket.integration.candidates.some(candidate=>candidate.id===readback.candidateId&&candidate.candidateSha===readback.candidateSha&&candidate.targetMainSha===readback.targetMainSha&&candidate.targetBranch===readback.targetBranch))||ticket.integration.status!=='merged'))fail(['phase'],'A complete Forge ticket requires an actual matching merge readback.');
   if(ticket.integration.status==='merged'&&ticket.phase!=='complete')fail(['integration','status'],'A merged Forge integration must correspond to a completed ticket.');
 });
 
@@ -327,6 +341,7 @@ export type ForgePlanProposal=z.infer<typeof forgePlanProposalSchema>;
 export type ForgeAcceptedPlan=z.infer<typeof forgeAcceptedPlanSchema>;
 export type ForgePlan=ForgeAcceptedPlan;
 export type ForgeReconciliation=z.infer<typeof forgeReconciliationSchema>;
+export type ForgePreflightFailure=z.infer<typeof forgePreflightFailureSchema>;
 export type ForgeKnowledgeUsage=z.infer<typeof forgeKnowledgeUsageSchema>;
 export type ForgeKnowledgeAllocation=z.infer<typeof forgeKnowledgeAllocationSchema>;
 export type ForgeBlockReason=z.infer<typeof forgeBlockReasonSchema>;
@@ -352,11 +367,12 @@ export type ForgeMergeIntent=z.infer<typeof forgeMergeIntentSchema>;
 export type ForgeMergeReadback=z.infer<typeof forgeMergeReadbackSchema>;
 export type ForgeIntegration=z.infer<typeof forgeIntegrationSchema>;
 export type ForgeTicket=z.infer<typeof forgeTicketSchema>;
+export type ForgeApprovalPolicy=Extract<ApprovalPolicy,'on-request'|'untrusted'|'never'>;
 
 export type ForgeTicketCreateInput={
   id:string;projectId:string;workspaceRoot:string;title:string;description:string;acceptanceCriteria:string[];
   scope:z.infer<typeof forgeScopeSchema>;orchestrator:{model:string;effort:z.infer<typeof forgeEffortSchema>};
-  workerProfile:z.infer<typeof forgeExecutionProfileSchema>;orchestratorSkills:ForgeSkillSnapshot[];
+  workerProfile:z.infer<typeof forgeExecutionProfileSchema>;orchestratorSkills:ForgeSkillSnapshot[];targetBranch?:string;approvalPolicy?:ApprovalPolicy;
   limits?:Partial<z.infer<typeof forgeLimitsSchema>>;knowledgeBudget?:Partial<ForgeKnowledgeBudget>;
   capabilities:Omit<z.infer<typeof forgeCapabilitiesSchema>,'operationBudget'>&{operationBudget?:'enforced'|'monitored'|'instruction-only'|'unavailable'};createdAt:string;
 };
@@ -369,16 +385,20 @@ export type ForgeCommand=
   | {type:'reconcile_orchestrator_run';actor:ForgeActor;runId:string;status:'still_running';threadId:string;turnId:string;effectiveProfile?:ForgeExecutionProfile;evidence:string}
   | {type:'reconcile_orchestrator_run';actor:ForgeActor;runId:string;status:'stopped';evidence:string}
   | {type:'complete_planning';actor:ForgeActor;runId:string;expectedPlanRevision:number;threadId:string;turnId:string;planId:string;tasks:ForgePlanTaskInput[]}
-  | {type:'complete_candidate_review';actor:ForgeActor;runId:string;expectedPlanRevision:number;threadId:string;turnId:string;candidateId:string;candidateSha:string;targetMainSha:string;disposition:'accept'|'request_corrections'|'block';note:string;correctionId?:string;corrections?:{taskId:string;findings:{id:string;title:string;issue:string;requiredFix:string;evidence:string[]}[];assignment:ForgeAssignmentSnapshotInput}[]}
+  | {type:'complete_candidate_review';actor:ForgeActor;runId:string;expectedPlanRevision:number;threadId:string;turnId:string;candidateId:string;candidateSha:string;targetMainSha:string;targetBranch:string;disposition:'accept'|'request_corrections'|'block';note:string;correctionId?:string;corrections?:{taskId:string;findings:{id:string;title:string;issue:string;requiredFix:string;evidence:string[]}[];assignment:ForgeAssignmentSnapshotInput}[]}
   | {type:'record_knowledge_usage';actor:ForgeActor;targetType:'planning'|'final_review'|'worker_attempt'|'integration';targetId:string;operations:number;source:'agent_reported'|'runtime_observed';threadId:string;turnId:string;evidence:string}
-  | {type:'submit_manual_candidate_review';actor:ForgeActor;candidateSha:string;targetMainSha:string;disposition:'accept'|'request_corrections'|'block';note:string;correctionId?:string;corrections?:{taskId:string;findings:{id:string;title:string;issue:string;requiredFix:string;evidence:string[]}[];assignment:ForgeAssignmentSnapshotInput}[]}
+  | {type:'submit_manual_candidate_review';actor:ForgeActor;candidateSha:string;targetMainSha:string;targetBranch:string;disposition:'accept'|'request_corrections'|'block';note:string;correctionId?:string;corrections?:{taskId:string;findings:{id:string;title:string;issue:string;requiredFix:string;evidence:string[]}[];assignment:ForgeAssignmentSnapshotInput}[]}
   | {type:'accept_plan';actor:ForgeActor;revision:number}
   | {type:'start';actor:ForgeActor}
   | {type:'claim_task';actor:ForgeActor;taskId:string;ownerId:string;claimId:string;attemptId:string;claimToken:string;runtimeId:string;branch:string;worktreeRoot:string;sourceBaselineSha:string;knowledgeAllocation?:number;expiresAt?:string}
+  | {type:'record_attempt_dispatch_baseline';actor:ForgeActor;taskId:string;ownerId:string;attemptId:string;claimToken:string;dispatchBaselineSha:string}
   | {type:'record_attempt_runtime';actor:ForgeActor;taskId:string;ownerId:string;attemptId:string;claimToken:string;threadId:string;turnId:string}
+  | {type:'fail_attempt_preflight';actor:ForgeActor;taskId:string;ownerId:string;attemptId:string;claimToken:string;stage:'dependency_merge'|'workspace_prepare';failureReason:string;evidence:string[]}
+  | {type:'fail_attempt_preflight';actor:ForgeActor;taskId:string;ownerId:string;attemptId:string;claimToken:string;stage:'provider_start';effect:'confirmed_not_started';failureReason:string;evidence:string[]}
+  | {type:'mark_attempt_effect_uncertain';actor:ForgeActor;taskId:string;ownerId:string;attemptId:string;claimToken:string;evidence:string}
   | {type:'accept_worker_outcome';actor:ForgeActor;taskId:string;ownerId:string;attemptId:string;claimToken:string;outcomeId:string;receiptId:string;receipt:Receipt;provenance:ForgeReceiptProvenance;hostAttestation?:ForgeHostAttestation;retryable:boolean;failureReason?:string}
   | {type:'recover_after_restart';actor:ForgeActor}
-  | {type:'reconcile_attempt';actor:ForgeActor;taskId:string;ownerId:string;attemptId:string;claimToken:string;status:'still_running'|'stopped';evidence:string}
+  | {type:'reconcile_attempt';actor:ForgeActor;taskId:string;ownerId:string;attemptId:string;claimToken:string;status:'still_running'|'stopped';threadId?:string;turnId?:string;evidence:string}
   | {type:'pause';actor:ForgeActor}
   | {type:'resume';actor:ForgeActor}
   | {type:'cancel';actor:ForgeActor}
@@ -389,6 +409,6 @@ export type ForgeCommand=
   | {type:'reconcile_integration_run';actor:ForgeActor;runId:string;status:'stopped';evidence:string}
   | {type:'record_integration_candidate';actor:ForgeActor;candidate:ForgeIntegrationCandidate}
   | {type:'request_corrections';actor:ForgeActor;correctionId:string;items:{taskId:string;findingIds:string[];assignment:ForgeAssignmentSnapshotInput}[]}
-  | {type:'begin_merge';actor:ForgeActor;candidateSha:string;targetMainSha:string;observedMainSha:string}
-  | {type:'record_merge_readback';actor:ForgeActor;result:'merged'|'stale'|'failed';candidateSha:string;targetMainSha:string;preMergeMainSha?:string;observedMainSha:string;mergeCommitSha?:string;commitReadbackSha?:string;detail?:string};
+  | {type:'begin_merge';actor:ForgeActor;candidateSha:string;targetMainSha:string;targetBranch:string;observedMainSha:string}
+  | {type:'record_merge_readback';actor:ForgeActor;result:'merged'|'stale'|'failed';candidateSha:string;targetMainSha:string;targetBranch:string;preMergeMainSha?:string;observedMainSha:string;mergeCommitSha?:string;commitReadbackSha?:string;detail?:string};
 
