@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { ForgeCoordinator } from '../server/forge-coordinator.js';
 import { upgradeStoredState, saveProjectInState } from '../server/state.js';
 import type { ForgeProviderApprovalRequest, ForgeProviderEvent, ForgeProviderHandle, ForgeProviderOutcome, ForgeProviderRequest, ForgeProviderStartEvidence } from '../server/forge-provider.js';
@@ -127,22 +128,43 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     const integrator = requests.at(-1)!;
     expect(integrator.request.role).toBe('integrator');
     const pinned = objectFromPrompt(integrator.request.prompt, 'PINNED CANDIDATE');
-    const integrated = { type: 'integration', knowledgeOperations: 0, receipt: { ...receipt, changes: ['src/feature-1.ts', 'src/feature-2.ts'], verification: [{ check: 'Candidate Git check', result: 'passed', evidence: 'git status --short exited 0' }] }, workerReceipts: pinned.workerReceipts.map((row: any) => ({ taskId: row.taskId, attemptId: row.attemptId, receiptId: row.receiptId, receipt: row.receipt })), scopeValidation: { status: 'passed', evidence: ['Worker commits are in scope.'] }, verification: [{ check: 'Candidate Git check', result: 'passed', evidence: 'git status --short' }], findings: [], corrections: [] };
+    const integrated = { type: 'integration', knowledgeOperations: 0, receipt: { ...receipt, changes: ['src/feature-1.ts', 'src/feature-2.ts'], verification: [{ check: 'Candidate Git check', result: 'passed', evidence: 'git status --short exited 0' }] }, workerReceipts: pinned.workerReceipts.map((row: any) => ({ taskId: row.taskId, attemptId: row.attemptId, receiptId: row.receiptId, receipt: row.receipt })), scopeValidation: { status: 'passed', evidence: ['Worker commits are in scope.'] }, verification: [{ check: 'Candidate Git check', result: 'passed', evidence: 'git status --short' }], findings: [{ id: 'finding-b', taskId: 'feature-b', title: 'Correction fixture', issue: 'The dependent change needs one bounded correction.', requiredFix: 'Update the dependent feature implementation.', evidence: ['The fixture asks for a correction round.'] }], corrections: [{ taskId: 'feature-b', findingIds: ['finding-b'], assignment, knowledgeScope: ['knowledge/opnex'], skillIds: [knowledgeSkill.id] }] };
     integrator.resolve({ status: 'completed', text: JSON.stringify(integrated), turn: { id: integrator.handle.turnId, status: 'completed' } });
+    await waitFor(() => requests.filter((row) => row.request.role === 'worker').length === 3, 20_000, () => JSON.stringify({ phase: coordinator.getTicket(ticket.id)?.phase, rounds: coordinator.getTicket(ticket.id)?.integration.correctionRounds }));
+    const correctionWorker = requests.filter((row) => row.request.role === 'worker').at(-1)!;
+    await writeFile(path.join(correctionWorker.request.executionRoot, dependentFile), 'export const feature_2 = true;\nexport const correction_applied = true;\n');
+    git(correctionWorker.request.executionRoot, 'add', dependentFile); git(correctionWorker.request.executionRoot, 'commit', '-m', 'correct dependent feature');
+    correctionWorker.resolve({ status: 'completed', text: JSON.stringify({ type: 'receipt', receipt: { ...receipt, changes: [dependentFile] }, decision_needed: null, evidence: [], options: [], recommendation: null, consequences: [], knowledgeOperations: 0 }), turn: { id: correctionWorker.handle.turnId, status: 'completed' } });
+    await waitFor(() => requests.filter((row) => row.request.role === 'integrator').length === 2, 20_000, () => JSON.stringify({ phase: coordinator.getTicket(ticket.id)?.phase, roles: requests.map(({ request }) => request.role) }));
+    const finalIntegrator = requests.filter((row) => row.request.role === 'integrator').at(-1)!;
+    const repinned = objectFromPrompt(finalIntegrator.request.prompt, 'PINNED CANDIDATE');
+    const correctedIntegration = { ...integrated, workerReceipts: repinned.workerReceipts.map((row: any) => ({ taskId: row.taskId, attemptId: row.attemptId, receiptId: row.receiptId, receipt: row.receipt })), findings: [], corrections: [] };
+    finalIntegrator.resolve({ status: 'completed', text: JSON.stringify(correctedIntegration), turn: { id: finalIntegrator.handle.turnId, status: 'completed' } });
     await waitFor(() => coordinator.getTicket(ticket.id)?.phase === 'review');
     await waitFor(() => requests.at(-1)?.request.role === 'orchestrator' && requests.at(-1)?.request.taskId !== ticket.id && requests.at(-1)?.request.taskId !== planning.request.taskId, 20_000, () => JSON.stringify({ phase: coordinator.getTicket(ticket.id)?.phase, runs: coordinator.getTicket(ticket.id)?.orchestratorRuns.map(({ purpose, status, failureReason }) => ({ purpose, status, failureReason })), roles: requests.map(({ request }) => [request.role, request.taskId]) }));
     const review = requests.at(-1)!;
     const identity = objectFromPrompt(review.request.prompt, 'CANDIDATE IDENTITY');
-    review.resolve({ status: 'completed', text: JSON.stringify({ type: 'review', knowledgeOperations: 0, ...identity, disposition: 'accept', note: 'The combined receipt, checks, and diff are accepted.', corrections: [] }), turn: { id: review.handle.turnId, status: 'completed' } });
+    review.resolve({ status: 'completed', text: JSON.stringify({ type: 'review', knowledgeOperations: 0, ...identity, candidateSha: '0'.repeat(40), disposition: 'accept', note: 'The stale candidate must be rejected.', corrections: [] }), turn: { id: review.handle.turnId, status: 'completed' } });
+    await waitFor(() => requests.filter((row) => row.request.role === 'orchestrator' && row.request.taskId !== ticket.id && row.request.taskId !== planning.request.taskId).length === 2, 20_000, () => JSON.stringify({ phase: coordinator.getTicket(ticket.id)?.phase, reviews: coordinator.getTicket(ticket.id)?.orchestratorRuns.filter((run) => run.purpose === 'final_review').map(({ status, failureReason }) => ({ status, failureReason })) }));
+    expect(coordinator.getTicket(ticket.id)?.phase).toBe('review');
+    expect(git(repo, 'rev-parse', 'main')).toBe(coordinator.getTicket(ticket.id)?.integration.candidates[1].targetMainSha);
+    const currentReview = requests.at(-1)!;
+    const currentIdentity = objectFromPrompt(currentReview.request.prompt, 'CANDIDATE IDENTITY');
+    currentReview.resolve({ status: 'completed', text: JSON.stringify({ type: 'review', knowledgeOperations: 0, ...currentIdentity, disposition: 'accept', note: 'The combined receipt, checks, and diff are accepted.', corrections: [] }), turn: { id: currentReview.handle.turnId, status: 'completed' } });
     await waitFor(() => coordinator.getTicket(ticket.id)?.phase === 'complete', 20_000, () => JSON.stringify({ phase: coordinator.getTicket(ticket.id)?.phase, mergeReadbacks: coordinator.getTicket(ticket.id)?.integration.mergeReadbacks, attention: coordinator.getTicket(ticket.id)?.attentionReason }));
     const done = coordinator.getTicket(ticket.id)!;
     const targetHead = git(repo, 'rev-parse', 'main');
     expect(done.integration.mergeReadbacks).toEqual([expect.objectContaining({ result: 'merged', commitReadbackSha: targetHead, observedMainSha: targetHead })]);
     expect(done.workitems.map((item) => item.state)).toEqual(['finished', 'finished']);
+    expect(done.integration.correctionRounds).toHaveLength(1);
+    expect(done.integration.correctionRounds[0].items.map((item) => item.taskId)).toEqual(['feature-b']);
+    expect(done.attempts.filter((attempt) => attempt.taskId === 'feature-b')).toHaveLength(2);
+    expect(done.receipts.filter((row) => row.attemptId && done.attempts.find((attempt) => attempt.id === row.attemptId)?.taskId === 'feature-b')).toHaveLength(2);
+    expect([...done.orchestratorRuns, ...done.attempts, ...done.integration.runs].reduce((sum, run) => sum + (run.knowledgeAllocation?.operations || 0), 0)).toBe(16);
     expect(done.receipts[0].hostAttestation).toMatchObject({ status: 'verified', commitObserved: true, scopeValidation: 'passed' });
     expect(done.integration.candidates[0].candidateSha).not.toBe(done.integration.candidates[0].targetMainSha);
-    expect(state.tasks.find((task) => task.id === ticket.id)!.toolCalls?.calls).toHaveLength(1);
-    expect(requests.map((row) => row.request.role)).toEqual(['orchestrator', 'worker', 'worker', 'integrator', 'orchestrator']);
+    expect(state.tasks.find((task) => task.id === ticket.id)!.toolCalls?.calls).toHaveLength(2);
+    expect(requests.map((row) => row.request.role)).toEqual(['orchestrator', 'worker', 'worker', 'integrator', 'worker', 'integrator', 'orchestrator', 'orchestrator']);
     expect(git(repo, 'show', 'main:src/feature-1.ts')).toContain('feature_1 = true');
     expect(git(repo, 'show', 'main:src/feature-2.ts')).toContain('feature_2 = true');
   });
@@ -169,6 +191,12 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     const created = await createdResponse.json();
     expect(createdResponse.status, JSON.stringify(created)).toBe(201);
     expect(created).toMatchObject({ projectId, phase: 'draft', title: 'HTTP ticket', targetBranch: 'main' });
+    const malformedStart = await fetch(`${origin}/api/forge/tickets/${created.id}/start`, { method: 'POST', headers, body: JSON.stringify({ ignored: true }) });
+    expect(malformedStart.status).toBe(409);
+    expect(await malformedStart.json()).toMatchObject({ error: expect.stringContaining('Unrecognized key') });
+    const malformedCancel = await fetch(`${origin}/api/forge/tickets/${created.id}/cancel`, { method: 'POST', headers, body: JSON.stringify({ force: true }) });
+    expect(malformedCancel.status).toBe(409);
+    expect((await (await fetch(`${origin}/api/forge/tickets/${created.id}`)).json()).phase).toBe('draft');
     expect((await (await fetch(`${origin}/api/forge/tickets/${created.id}`)).json()).id).toBe(created.id);
     const eventResponse = await fetch(`${origin}/events`);
     const eventReader = eventResponse.body!.getReader();
@@ -185,10 +213,105 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     expect((await saved.json()).phase).toBe('cancelled');
     if (child.exitCode !== null) throw new Error(`Forge API kernel exited early: ${output}`);
   });
+
+  it('keeps a possibly-live worker owned across restart and cleans approval only after confirmed stop', async () => {
+    const uncertain = await createActiveWorkerFixture('uncertain');
+    try {
+      const request = uncertain.requests.at(-1)!;
+      expect(request.request.role).toBe('worker');
+      const task = uncertain.state.tasks.find((row) => row.id === uncertain.ticket.id)!;
+      expect(task.approvalRequests).toHaveLength(1);
+
+      const paused = await uncertain.coordinator.pause(uncertain.ticket.id);
+      expect(paused.attempts[0].status).toBe('unknown_effect');
+      expect(uncertain.state.tasks.find((row) => row.id === uncertain.ticket.id)!.approvalRequests).toHaveLength(1);
+
+      const restarted = new ForgeCoordinator({
+        getState: () => uncertain.state,
+        mutate: async (fn) => { fn(uncertain.state); uncertain.state.revision++; },
+        startRole: async () => { throw new Error('Restart must reconcile the saved writer before launching another.'); },
+        cancelRole: async () => ({ status: 'uncertain' }),
+        stateRoot: uncertain.worktrees,
+      });
+      await expect(restarted.resume(uncertain.ticket.id)).rejects.toThrow(/reconcile unknown Forge attempts/i);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(uncertain.requests.filter((row) => row.request.role === 'worker')).toHaveLength(1);
+      expect(restarted.getTicket(uncertain.ticket.id)?.attempts).toHaveLength(1);
+      expect(uncertain.state.tasks.find((row) => row.id === uncertain.ticket.id)!.approvalRequests).toHaveLength(1);
+    } finally { await uncertain.cleanup(); }
+
+    const confirmed = await createActiveWorkerFixture('stopped');
+    try {
+      const request = confirmed.requests.at(-1)!;
+      const saved = confirmed.state.tasks.find((row) => row.id === confirmed.ticket.id)!.approvalRequests![0];
+      await confirmed.coordinator.pause(confirmed.ticket.id);
+      expect(confirmed.state.tasks.find((row) => row.id === confirmed.ticket.id)!.approvalRequests).toEqual([]);
+      expect(confirmed.coordinator.getTicket(confirmed.ticket.id)?.receipts).toHaveLength(1);
+      expect(confirmed.coordinator.getTicket(confirmed.ticket.id)?.receipts[0]).toMatchObject({ provenance: { threadId: request.handle.threadId, turnId: request.handle.turnId } });
+      expect(saved.forgeContext).toMatchObject({ ticketId: confirmed.ticket.id, targetType: 'worker_attempt' });
+    } finally { await confirmed.cleanup(); }
+  });
+
+  it('retains failed worker attempts and reuses the saved allocation on retry', async () => {
+    const fixture = await createActiveWorkerFixture('uncertain', 2);
+    try {
+      const first = fixture.requests.at(-1)!;
+      const firstAttempt = fixture.coordinator.getTicket(fixture.ticket.id)!.attempts[0];
+      expect(firstAttempt.knowledgeAllocation?.operations).toBe(2);
+      first.resolve({ status: 'failed', text: 'provider transport failed', turn: { id: first.handle.turnId, status: 'failed' } });
+      await waitFor(() => fixture.requests.filter((row) => row.request.role === 'worker').length === 2, 10_000);
+      const retried = fixture.coordinator.getTicket(fixture.ticket.id)!;
+      expect(retried.attempts).toHaveLength(2);
+      expect(retried.attempts[0]).toMatchObject({ status: 'failed', knowledgeAllocation: { operations: 2 } });
+      expect(retried.attempts[1]).toMatchObject({ status: 'claimed', knowledgeAllocation: { operations: 2 } });
+      expect(retried.receipts).toHaveLength(1);
+      expect(retried.receipts[0].provenance).toMatchObject({ turnId: first.handle.turnId });
+      const second = fixture.requests.filter((row) => row.request.role === 'worker').at(-1)!;
+      second.resolve({ status: 'failed', text: 'provider failed again', turn: { id: second.handle.turnId, status: 'failed' } });
+      await waitFor(() => fixture.coordinator.getTicket(fixture.ticket.id)?.phase === 'blocked', 10_000);
+      const exhausted = fixture.coordinator.getTicket(fixture.ticket.id)!;
+      expect(exhausted.workitems[0]).toMatchObject({ state: 'blocked', blockedReason: { code: 'retry_limit' } });
+      expect(exhausted.attempts).toHaveLength(2);
+      expect(fixture.requests.filter((row) => row.request.role === 'worker')).toHaveLength(2);
+      expect([...exhausted.orchestratorRuns, ...exhausted.attempts, ...exhausted.integration.runs].reduce((sum, run) => sum + (run.knowledgeAllocation?.operations || 0), 0)).toBe(6);
+    } finally { await fixture.cleanup(); }
+  });
 });
 
 async function waitFor(check: () => boolean | undefined | Promise<unknown>, timeoutMs = 5_000, details: () => string = () => '') {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) { if (await check()) return; await new Promise((resolve) => setTimeout(resolve, 10)); }
   throw new Error(`Forge lifecycle fixture did not reach the expected persisted phase. ${details()}`);
+}
+
+async function createActiveWorkerFixture(stopStatus: 'stopped' | 'uncertain', maxExecutionAttempts = 1) {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), 'forge-runtime-lifecycle-'));
+  const repo = path.join(fixture, 'r'); const worktrees = path.join(fixture, 'w');
+  await mkdir(path.join(repo, 'src'), { recursive: true }); await mkdir(worktrees);
+  git(repo, 'init', '-b', 'main'); git(repo, 'config', 'core.longpaths', 'true'); git(repo, 'config', 'user.name', 'Forge runtime fixture'); git(repo, 'config', 'user.email', 'forge@example.invalid');
+  await writeFile(path.join(repo, 'src', 'base.ts'), 'export const base = true;\n'); git(repo, 'add', '.'); git(repo, 'commit', '-m', 'baseline');
+  const state = upgradeStoredState({ version: 7, revision: 0, settings: { approvalPolicy: 'on-request', executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' } }, tasks: [], projects: [], selectedProjectId: null, expandedProjectIds: ['unclassified'] });
+  saveProjectInState(state, { id: projectId, projectRoot: repo, needsLocation: false, pinned: false });
+  const requests: Array<{ request: ForgeProviderRequest; handle: ForgeProviderHandle; resolve: (outcome: ForgeProviderOutcome) => void }> = [];
+  const startRole = async (request: ForgeProviderRequest, onStarted?: (evidence: ForgeProviderStartEvidence) => void | Promise<void>, _onEvent?: (event: ForgeProviderEvent) => void | Promise<void>, onApproval?: (approval: ForgeProviderApprovalRequest) => void | Promise<void>) => {
+    const id = requests.length + 1; const threadId = `fixture-thread-${id}`; const turnId = `fixture-turn-${id}`;
+    const evidence: ForgeProviderStartEvidence = { provider: 'codex', role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, model: request.model, effort: request.effort, observedAt: new Date().toISOString() };
+    await onStarted?.(evidence);
+    let resolve!: (outcome: ForgeProviderOutcome) => void;
+    const completion = new Promise<ForgeProviderOutcome>((done) => { resolve = done; });
+    const handle: ForgeProviderHandle = { ...evidence, completion };
+    requests.push({ request, handle, resolve });
+    if (request.role === 'worker') await onApproval?.({ requestId: id, method: 'item/commandExecution/requestApproval', itemId: `approval-${id}`, role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, request: { command: 'git status', availableDecisions: ['accept', 'decline'] } });
+    return handle;
+  };
+  const coordinator = new ForgeCoordinator({ getState: () => state, mutate: async (fn) => { fn(state); state.revision++; }, startRole, cancelRole: async () => ({ status: stopStatus }), stateRoot: worktrees });
+  const ticket = await coordinator.create({ projectId, title: 'Worker recovery fixture', description: 'Exercise persisted worker ownership.', acceptanceCriteria: ['No duplicate writer starts.'], scope: { read: ['src'], write: ['src'], knowledge: ['knowledge/opnex'] }, orchestrator: { model: 'gpt-6.1-terra', effort: 'low' }, workerProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, limits: { maxExecutionAttempts }, ...(maxExecutionAttempts === 2 ? { knowledgeBudget: { totalOperations: 6 } } : {}) });
+  await coordinator.start(ticket.id);
+  const planning = requests.at(-1)!;
+  const skill = coordinator.getTicket(ticket.id)!.orchestratorSkills.find((row) => row.name === 'agentmem-project')!;
+  planning.resolve({ status: 'completed', text: JSON.stringify({ type: 'plan', knowledgeOperations: 0, tasks: [{ id: 'one', title: 'One', description: 'Create src/one.ts.', dependencyIds: [], assignment, knowledgeScope: ['knowledge/opnex'], executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, skillIds: [skill.id] }] }), turn: { id: planning.handle.turnId, status: 'completed' } });
+  await waitFor(() => !!coordinator.getTicket(ticket.id)?.proposedPlan);
+  await coordinator.start(ticket.id, 1);
+  await waitFor(() => requests.some((row) => row.request.role === 'worker'));
+  return { fixture, repo, worktrees, state, coordinator, ticket, requests, cleanup: async () => rm(fixture, { recursive: true, force: true }) };
 }
