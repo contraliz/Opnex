@@ -54,16 +54,6 @@ export const forgePlanOutputSchema = z.object({
 
 export type ForgePlanOutput = z.infer<typeof forgePlanOutputSchema>;
 
-const snapshotJsonSchema = {
-  type: 'object', additionalProperties: false,
-  required: ['id', 'revision', 'name', 'description', 'source', 'instructions', 'files'],
-  properties: {
-    id: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' },
-    description: { type: 'string' }, source: { type: 'string' }, instructions: { type: 'string' },
-    files: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'size'], properties: { path: { type: 'string' }, size: { type: 'integer', minimum: 0 } } } },
-  },
-} as const;
-
 export const forgePlanOutputJsonSchema = {
   type: 'object', additionalProperties: false, required: ['type', 'tasks', 'knowledgeOperations'],
   properties: {
@@ -345,7 +335,7 @@ export function forgeReviewPrompt(options: {
 }
 
 export function skillSnapshotsText(skills: ForgeSkillSnapshot[]) {
-  return skills.map((skill) => `### ${skill.name}\nSource: ${skill.source}\nRevision: ${skill.revision}\nDescription: ${skill.description || '(none)'}\n\n${skill.instructions}`).join('\n\n');
+  return skills.map((skill) => `### ${skill.name}\nImmutable skill ID: ${skill.id}\nSource: ${skill.source}\nRevision: ${skill.revision}\nDescription: ${skill.description || '(none)'}\n\n${skill.instructions}`).join('\n\n');
 }
 
 function withKnowledgeSkill(skills: ForgeSkillSnapshot[], knowledgeSkill?: ForgeSkillSnapshot) {
