@@ -1,6 +1,8 @@
 # Forge sessions
 
-Forge adds a workspace-owned ticket workflow alongside the existing Conversation sessions. A Forge ticket is a draft until you start planning; creating it does not dispatch model work.
+Forge adds a workspace-owned ticket workflow alongside the existing Conversation sessions. A Forge ticket is a draft until you start it; creating it does not dispatch model work.
+
+> **Known limitation:** strict Forge workers currently cannot complete Git commits. Their worktree commit writes to shared Git object storage outside the worker's permitted write roots. The private per-attempt object-store correction is not implemented. A recent bounded disposable live ticket did not complete: its worker could not commit, and the host validator also failed on an equal-baseline `rev-list` check. Forge is not production-accepted; treat this branch as a testing handoff.
 
 ## Create and start a ticket
 
@@ -8,7 +10,7 @@ Select a named workspace and choose **Forge** when opening a new session. Enter 
 
 Forge requires the `agentmem-project` skill to be present in the workspace or a configured Codex skill location. That only supplies instructions: Opnex does not configure or call the external AgentMem service. Without a matching external service registration, knowledge lookup is unavailable. The ticket can continue with other work when its assignment does not require that knowledge. Knowledge scope and operation limits are instruction-only unless the external skill interface enforces them.
 
-Create the draft, read its saved scope and profiles, then choose **Start planning**. Review the proposed assignments and dependency links before choosing **Accept plan and start workers**. The board reports `open`, `claimed`, `finished`, and `blocked` work items, plus receipts, attempts, tool counts, worker commits, integration checks, and runtime capability labels.
+Create the draft, review its saved scope and profiles, then choose **Start Forge** to authorize execution within that ticket. The selected orchestrator plans and validates the work; a valid plan automatically continues into eligible workers without another confirmation. Invalid or stale plans fail safely and remain visible on the board. Pause or cancel Forge if you need to stop after starting. The board reports `open`, `claimed`, `finished`, and `blocked` work items, plus receipts, attempts, tool counts, worker commits, integration checks, and runtime capability labels.
 
 ## Pause, resume, and completion
 
@@ -23,3 +25,7 @@ Forge uses each worker's own Git worktree, but a worktree alone does not confine
 The default ticket limits are up to three active workers, two execution attempts per work item, three integrator correction rounds, a shared 64-operation knowledge budget, and a default allocation of two (maximum eight) knowledge operations per run. These are workflow limits, not provider credits or dollar caps. Retries and replacement attempts use the same shared knowledge balance.
 
 Forge currently exposes no Opnex-owned tools to its model roles. Tool requests received on a Forge provider turn fail closed and do not fall through to Conversation handlers. Provider-native tools remain subject to the provider's actual runtime and sandbox; the board's scope and capability labels describe only what Opnex can verify.
+
+## Testing handoff
+
+Earlier in integration, the full suite passed (73 files, 699 tests), and `npm run typecheck`, `npm run lint`, `npm run build`, `npm run desktop:smoke`, and `npm run desktop:interaction-smoke` passed. These results predate the final UI handoff edits and do not verify the handoff branch's final head. Rerun those commands from the repository root when testing this branch. A disposable live Forge ticket can confirm planning and dispatch, but do not count it as successful completion until the worker commit, integrated candidate review, guarded merge, and readback all succeed. No production acceptance is claimed.
