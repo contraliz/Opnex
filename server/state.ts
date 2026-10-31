@@ -549,6 +549,32 @@ export function resolveForgeApprovalRequestInState(state:State,taskId:string,req
   task.approvalRequests=task.approvalRequests!.filter((_row,rowIndex)=>rowIndex!==index);task.updatedAt=now;
   return structuredClone(request);
 }
+export function clearForgeApprovalAfterProviderCancellationInState(state:State,taskId:string,requestId:string|number,itemId:string,context:ForgeApprovalIdentity,confirmation:{status:'stopped'|'completed';evidence:string},now=new Date().toISOString()){
+  const task=state.tasks.find(row=>row.id===taskId);
+  if(!task)throw new Error('Forge session not found.');
+  if(task.sessionType!=='forge'||!task.forge)throw new Error('This session is not a Forge ticket.');
+  if(!isDate(now)||!confirmation.evidence.trim())throw new Error('Confirmed Forge approval cancellation requires valid evidence and timestamp.');
+  if(confirmation.status!=='stopped'&&confirmation.status!=='completed')throw new Error('Uncertain provider cancellation cannot clear a pending Forge approval.');
+  const exact=(request:ApprovalRequest)=>request.requestId===requestId&&request.itemId===itemId&&request.forgeContext?.ticketId===context.ticketId&&request.forgeContext.targetType===context.targetType&&request.forgeContext.targetId===context.targetId&&request.forgeContext.ownerId===context.ownerId&&request.forgeContext.claimToken===context.claimToken&&request.threadId===context.threadId&&request.turnId===context.turnId;
+  const index=(task.approvalRequests||[]).findIndex(exact);
+  if(index<0){
+    if((task.approvalRequests||[]).some(request=>request.requestId===requestId&&request.itemId===itemId))throw new Error('The Forge approval cancellation is stale or belongs to a different run, owner, claim, thread, or turn.');
+    return undefined;
+  }
+  const request=task.approvalRequests![index] as ForgeApprovalRequest;
+  if(!isForgeApprovalRequest(request,task.forge))throw new Error('The Forge approval request failed its saved ownership validation.');
+  const owner=context.targetType==='planning'||context.targetType==='final_review'
+    ?task.forge.orchestratorRuns.find(run=>run.id===context.targetId&&run.purpose===context.targetType&&run.ownerId===context.ownerId)
+    :context.targetType==='integration'
+      ?task.forge.integration.runs.find(run=>run.id===context.targetId&&run.ownerId===context.ownerId)
+      :task.forge.attempts.find(attempt=>attempt.id===context.targetId&&attempt.claim.ownerId===context.ownerId&&attempt.claim.token===context.claimToken);
+  const terminal=owner&&(context.targetType==='worker_attempt'
+    ?['finished','failed','interrupted','preflight_failed'].includes(owner.status)
+    :['completed','failed','interrupted'].includes(owner.status));
+  if(!terminal)throw new Error('A Forge approval can be cleared only after its exact provider owner is confirmed stopped or completed.');
+  task.approvalRequests=task.approvalRequests!.filter((_row,rowIndex)=>rowIndex!==index);task.updatedAt=now;
+  return structuredClone(request);
+}
 export function recoverForgeSessionsAfterRestartInState(state:State,now=new Date().toISOString()){
   const recovered:string[]=[];
   for(const task of state.tasks){
