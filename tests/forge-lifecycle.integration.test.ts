@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ForgeCoordinator } from '../server/forge-coordinator.js';
 import { upgradeStoredState, saveProjectInState } from '../server/state.js';
-import type { ForgeProviderEvent, ForgeProviderHandle, ForgeProviderOutcome, ForgeProviderRequest, ForgeProviderStartEvidence } from '../server/forge-provider.js';
+import type { ForgeProviderApprovalRequest, ForgeProviderEvent, ForgeProviderHandle, ForgeProviderOutcome, ForgeProviderRequest, ForgeProviderStartEvidence } from '../server/forge-provider.js';
 
 const root = 'D:/programming/opnex-forge-private/runtime-high';
 const projectId = '11111111-1111-4111-8111-111111111111';
@@ -67,7 +67,7 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     saveProjectInState(state, { id: projectId, projectRoot: repo, needsLocation: false, pinned: false });
     let sequence = 0;
     const requests: Array<{ request: ForgeProviderRequest; handle: ForgeProviderHandle; resolve: (outcome: ForgeProviderOutcome) => void }> = [];
-    const startRole = async (request: ForgeProviderRequest, onStarted?: (evidence: ForgeProviderStartEvidence) => void | Promise<void>, onEvent?: (event: ForgeProviderEvent) => void | Promise<void>) => {
+    const startRole = async (request: ForgeProviderRequest, onStarted?: (evidence: ForgeProviderStartEvidence) => void | Promise<void>, onEvent?: (event: ForgeProviderEvent) => void | Promise<void>, onApproval?: (approval: ForgeProviderApprovalRequest) => void | Promise<void>) => {
       const id = ++sequence; const threadId = `fixture-thread-${id}`; const turnId = `fixture-turn-${id}`;
       const observedAt = new Date().toISOString();
       const evidence: ForgeProviderStartEvidence = { provider: 'codex', role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, model: request.model, effort: request.effort, observedAt };
@@ -76,6 +76,7 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
       const completion = new Promise<ForgeProviderOutcome>((done) => { resolve = done; });
       const handle: ForgeProviderHandle = { ...evidence, completion };
       requests.push({ request, handle, resolve });
+      if (request.prompt.startsWith('Create one complete Forge execution plan')) await onApproval?.({ requestId: 700, method: 'item/commandExecution/requestApproval', itemId: 'plan-approval', role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, request: { command: 'git status', availableDecisions: ['accept', 'decline'] } });
       if (request.role === 'integrator') {
         const command = 'git status --short'; git(request.executionRoot, 'status', '--short');
         await onEvent?.({ method: 'item/started', role: request.role, ticketId: request.ticketId, taskId: request.taskId, threadId, turnId, params: { item: { id: `check-${id}`, type: 'commandExecution', command } } });
@@ -88,6 +89,7 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
       mutate: async (fn) => { fn(state); state.revision++; },
       startRole,
       cancelRole: async () => ({ status: 'stopped' }),
+      respondApproval: () => true,
       stateRoot: worktrees,
       now: () => new Date().toISOString(),
     });
@@ -95,6 +97,10 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     expect(ticket.phase).toBe('draft');
     await coordinator.start(ticket.id);
     const planning = requests.at(-1)!;
+    const savedApproval = state.tasks.find((task) => task.id === ticket.id)!.approvalRequests![0];
+    expect(savedApproval).toMatchObject({ requestId: 700, threadId: planning.handle.threadId, turnId: planning.handle.turnId, forgeContext: { ticketId: ticket.id, targetId: planning.request.taskId } });
+    await coordinator.approve(ticket.id, savedApproval.requestId, { decision: 'decline' });
+    expect(state.tasks.find((task) => task.id === ticket.id)!.approvalRequests).toEqual([]);
     const knowledgeSkill = state.tasks.find((task) => task.id === ticket.id)!.forge!.orchestratorSkills.find((skill) => skill.name === 'agentmem-project')!;
     const plan = { type: 'plan', knowledgeOperations: 0, tasks: [
       { id: 'feature-a', title: 'Add first feature', description: 'Create src/feature-a.ts.', dependencyIds: [], assignment, knowledgeScope: ['knowledge/opnex'], executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, skillIds: [knowledgeSkill.id] },
@@ -164,6 +170,12 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     expect(createdResponse.status, JSON.stringify(created)).toBe(201);
     expect(created).toMatchObject({ projectId, phase: 'draft', title: 'HTTP ticket', targetBranch: 'main' });
     expect((await (await fetch(`${origin}/api/forge/tickets/${created.id}`)).json()).id).toBe(created.id);
+    const eventResponse = await fetch(`${origin}/events`);
+    const eventReader = eventResponse.body!.getReader();
+    const eventText = new TextDecoder().decode((await eventReader.read()).value);
+    expect(eventText).toContain(`"id":"${created.id}"`);
+    expect(eventText).toContain('"sessionType":"forge"');
+    await eventReader.cancel();
     const staleStart = await fetch(`${origin}/api/forge/tickets/${created.id}/start`, { method: 'POST', headers, body: JSON.stringify({ planRevision: 1 }) });
     expect(staleStart.status).toBe(409);
     const cancelled = await fetch(`${origin}/api/forge/tickets/${created.id}/cancel`, { method: 'POST', headers, body: '{}' });
