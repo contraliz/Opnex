@@ -486,7 +486,7 @@ export function createForgeSessionInState(state:State,input:ForgeSessionCreateIn
   const id=input.id||randomUUID();
   if(state.tasks.some(row=>row.id===id))throw new Error('A session with this ID already exists.');
   const createdAt=input.createdAt||new Date().toISOString();
-  const forge=createForgeTicket({...input,id,workspaceRoot:project.projectRoot,createdAt});
+  const forge=createForgeTicket({...input,id,workspaceRoot:project.projectRoot,approvalPolicy:state.settings.approvalPolicy,createdAt});
   const message:Message={id:randomUUID(),role:'user',text:forge.description,createdAt};
   const task:Task={id,title:forge.title,phase:'accepted',createdAt,updatedAt:createdAt,lastInteractedAt:createdAt,projectId:project.id,sessionType:'forge',forge,toolCalls:createToolCallLog(),userRoot:project.projectRoot,userMessages:[forge.description],messages:[message],correctionCount:0,processedTurns:[]};
   state.tasks.unshift(task);state.activeTaskId=id;

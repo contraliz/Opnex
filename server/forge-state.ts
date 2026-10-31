@@ -104,7 +104,7 @@ function taskPlanFor(ticket:ForgeTicket,taskId:string){
   if(!task)throw new Error('Forge plan task not found.');
   return task;
 }
-function activeCount(ticket:ForgeTicket){return ticket.attempts.filter(attempt=>attempt.status==='claimed'||attempt.status==='unknown_after_restart').length;}
+function activeCount(ticket:ForgeTicket){return ticket.attempts.filter(attempt=>attempt.status==='claimed'||attempt.status==='unknown_after_restart'||attempt.status==='unknown_effect').length;}
 function requireClaim(attempt:ForgeAttempt,command:{ownerId:string;claimToken:string;attemptId:string}){
   if(attempt.id!==command.attemptId||attempt.claim.ownerId!==command.ownerId||attempt.claim.token!==command.claimToken)
     throw new Error('This Forge result does not match the active claim owner and token.');
@@ -124,9 +124,10 @@ function updateTicketPhaseAfterOutcome(ticket:ForgeTicket,now:string){
 
 export function createForgeTicket(input:ForgeTicketCreateInput):ForgeTicket{
   if(Object.values(input.scope).some(paths=>paths.some(path=>!scopePathIsSafe(path))))throw new Error('Forge ticket scopes must use safe relative or absolute paths without traversal.');
+  if(input.approvalPolicy==='full-access')throw new Error('Forge sessions cannot use the Full Access approval policy. Choose On Request, Untrusted, or Never before creating this ticket.');
   const {limits,knowledgeBudget,...fields}=structuredClone(input);
   const ticket:ForgeTicket={
-    schemaVersion:1,...fields,orchestratorSkills:mergeForgeSkillSnapshots(input.orchestratorSkills),capabilities:{...fields.capabilities,operationBudget:fields.capabilities.operationBudget??'instruction-only'},limits:{...DEFAULT_FORGE_LIMITS,...limits},knowledgeBudget:{...DEFAULT_FORGE_KNOWLEDGE_BUDGET,...knowledgeBudget},updatedAt:input.createdAt,phase:'draft',planRevision:0,orchestratorRuns:[],workitems:[],attempts:[],receipts:[],
+    schemaVersion:1,...fields,targetBranch:input.targetBranch??'main',approvalPolicy:input.approvalPolicy??'on-request',orchestratorSkills:mergeForgeSkillSnapshots(input.orchestratorSkills),capabilities:{...fields.capabilities,operationBudget:fields.capabilities.operationBudget??'instruction-only'},limits:{...DEFAULT_FORGE_LIMITS,...limits},knowledgeBudget:{...DEFAULT_FORGE_KNOWLEDGE_BUDGET,...knowledgeBudget},updatedAt:input.createdAt,phase:'draft',planRevision:0,orchestratorRuns:[],workitems:[],attempts:[],receipts:[],
     integration:{status:'not_started',runs:[],candidates:[],staleCandidateIds:[],supersededCandidateIds:[],correctionRounds:[],reviewDecisions:[],mergeReadbacks:[]},
   };
   return forgeTicketSchema.parse(ticket);
@@ -218,7 +219,7 @@ function beginOrchestratorRun(ticket:ForgeTicket,command:Extract<ForgeCommand,{t
     if(ticket.orchestratorRuns.filter(run=>run.purpose==='planning').length>=ticket.limits.maxExecutionAttempts)throw new Error('The configured model planning attempt limit has been reached.');
   }else{
     const candidate=currentCandidate(ticket);
-    if(ticket.phase!=='review'||ticket.integration.status!=='ready_for_review'||input.expectedPlanRevision!==ticket.acceptedPlan?.revision||input.candidateId!==candidate.id||input.candidateSha!==candidate.candidateSha||input.targetMainSha!==candidate.targetMainSha)throw new Error('The final-review run must pin the current candidate, target main SHA, and accepted plan revision.');
+    if(ticket.phase!=='review'||ticket.integration.status!=='ready_for_review'||input.expectedPlanRevision!==ticket.acceptedPlan?.revision||input.candidateId!==candidate.id||input.candidateSha!==candidate.candidateSha||input.targetMainSha!==candidate.targetMainSha||input.targetBranch!==candidate.targetBranch||input.targetBranch!==ticket.targetBranch)throw new Error('The final-review run must pin the current candidate, target branch, target main SHA, and accepted plan revision.');
     if(ticket.orchestratorRuns.filter(run=>run.purpose==='final_review'&&run.candidateId===candidate.id).length>=ticket.limits.maxExecutionAttempts)throw new Error('The configured final-review attempt limit has been reached for this candidate.');
   }
   const {knowledgeAllocation:requestedKnowledgeOperations,...runInput}=structuredClone(input);
@@ -330,7 +331,7 @@ function claimTask(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:'claim_
     if(previous.knowledgeAllocation?.operations!==requested)throw new Error('A repeated Forge claim cannot change its reserved knowledge allocation.');
     return;
   }
-  if(previous&&task.activeAttemptId===previous.id&&previous.status==='unknown_after_restart')throw new Error('Reconcile this unknown Forge claim before starting or resuming its writer.');
+  if(previous&&task.activeAttemptId===previous.id&&(previous.status==='unknown_after_restart'||previous.status==='unknown_effect'))throw new Error('Reconcile this unknown Forge claim before starting or resuming its writer.');
   if(previous||ticket.attempts.some(row=>row.claim.id===command.claimId)||ticket.attempts.some(row=>row.claim.token===command.claimToken))throw new Error('Forge attempt or claim identifiers must be unique.');
   if(task.state!=='open')throw new Error('Only an open Forge task can be claimed.');
   const planTask=taskPlanFor(ticket,task.id);
@@ -362,7 +363,61 @@ function recordAttemptRuntime(ticket:ForgeTicket,command:Extract<ForgeCommand,{t
     if(attempt.threadId===command.threadId&&attempt.turnId===command.turnId)return;
     throw new Error('A Forge attempt runtime cannot be rebound to another provider thread or turn.');
   }
+  if(!attempt.dispatchBaselineSha)throw new Error('Persist the actual dependency-merged dispatch baseline before starting the provider turn.');
   attempt.threadId=command.threadId;attempt.turnId=command.turnId;attempt.startedAt=now;ticket.updatedAt=now;
+}
+function recordAttemptDispatchBaseline(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:'record_attempt_dispatch_baseline'}>,now:string){
+  requireActor(command.actor,'host');
+  const attempt=ticket.attempts.find(row=>row.id===command.attemptId&&row.taskId===command.taskId);
+  if(!attempt)throw new Error('Forge attempt not found.');
+  requireClaim(attempt,command);
+  const task=workitemFor(ticket,command.taskId);
+  if(attempt.dispatchBaselineSha){
+    if(attempt.dispatchBaselineSha===command.dispatchBaselineSha)return;
+    throw new Error('A Forge attempt dispatch baseline is immutable once recorded.');
+  }
+  if(attempt.status!=='claimed'||task.state!=='claimed'||task.activeAttemptId!==attempt.id||attempt.threadId||attempt.turnId||attempt.startedAt)throw new Error('The dispatch baseline must be persisted for the active claim before provider dispatch.');
+  attempt.dispatchBaselineSha=command.dispatchBaselineSha;ticket.updatedAt=now;
+}
+function failAttemptPreflight(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:'fail_attempt_preflight'}>,now:string){
+  requireActor(command.actor,'host');
+  const attempt=ticket.attempts.find(row=>row.id===command.attemptId&&row.taskId===command.taskId);
+  if(!attempt)throw new Error('Forge attempt not found.');
+  requireClaim(attempt,command);
+  const task=workitemFor(ticket,command.taskId);
+  const reason=command.failureReason.trim(),evidence=command.evidence.map(value=>value.trim());
+  if(attempt.status==='preflight_failed'){
+    const saved=attempt.preflightFailure;
+    if(saved?.stage===command.stage&&saved.reason===reason&&JSON.stringify(saved.evidence)===JSON.stringify(evidence))return;
+    throw new Error('A preflight-failed Forge attempt cannot be replaced with different failure evidence.');
+  }
+  if(attempt.status!=='claimed'||task.state!=='claimed'||task.activeAttemptId!==attempt.id||attempt.threadId||attempt.turnId||attempt.startedAt)throw new Error('Only a known no-effect pre-provider failure can close an active claim. Reconcile uncertain provider effects instead.');
+  if(!reason||!evidence.length||evidence.some(value=>!value))throw new Error('A preflight failure requires a reason and concrete evidence.');
+  if(command.stage==='provider_start'&&command.effect!=='confirmed_not_started')throw new Error('A provider-start preflight failure requires explicit confirmation that no provider effect started. Use uncertain-effect reconciliation after a timeout or disconnect.');
+  if(command.stage==='provider_start'&&!attempt.dispatchBaselineSha)throw new Error('Provider-start failure evidence requires the persisted dependency-merged dispatch baseline.');
+  attempt.status='preflight_failed';attempt.preflightFailure={stage:command.stage,reason,evidence,recordedAt:now};attempt.failureReason=reason.slice(0,4000);attempt.completedAt=now;
+  task.activeAttemptId=undefined;
+  const sameRevisionAttempts=ticket.attempts.filter(row=>row.taskId===task.id&&row.assignmentRevision===task.assignmentRevision).length;
+  if(sameRevisionAttempts<ticket.limits.maxExecutionAttempts){task.state='open';delete task.blockedReason;}
+  else{task.state='blocked';task.blockedReason={kind:'execution_issue',code:'preflight_failed',detail:reason,attemptId:attempt.id};}
+  task.updatedAt=now;updateTicketPhaseAfterOutcome(ticket,now);
+}
+function markAttemptEffectUncertain(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:'mark_attempt_effect_uncertain'}>,now:string){
+  requireActor(command.actor,'host');
+  const attempt=ticket.attempts.find(row=>row.id===command.attemptId&&row.taskId===command.taskId);
+  if(!attempt)throw new Error('Forge attempt not found.');
+  requireClaim(attempt,command);
+  const task=workitemFor(ticket,command.taskId);
+  const evidence=command.evidence.trim();
+  if(attempt.status==='unknown_effect'&&task.activeAttemptId===attempt.id&&task.blockedReason?.kind==='execution_issue'&&task.blockedReason.code==='unknown_effect'){
+    if(task.blockedReason.detail===evidence)return;
+    throw new Error('An uncertain Forge effect cannot be replaced with different evidence.');
+  }
+  if(attempt.status!=='claimed'||task.state!=='claimed'||task.activeAttemptId!==attempt.id)throw new Error('Only the active Forge claim can be marked uncertain.');
+  if(!evidence)throw new Error('Uncertain provider effects require host evidence.');
+  attempt.status='unknown_effect';task.state='blocked';task.blockedReason={kind:'execution_issue',code:'unknown_effect',detail:evidence,attemptId:attempt.id};task.updatedAt=now;
+  if(ticket.phase!=='paused'&&ticket.phase!=='cancelled'&&ticket.phase!=='complete')ticket.phase='blocked';
+  ticket.attentionReason=`Forge attempt ${attempt.id} has an uncertain provider effect. Reconcile the original owner before retrying.`;ticket.updatedAt=now;
 }
 function sameSavedOutcome(existing:ForgeStoredReceipt,command:Extract<ForgeCommand,{type:'accept_worker_outcome'}>,attestation:ForgeHostAttestation|undefined){
   return existing.id===command.receiptId&&existing.outcomeId===command.outcomeId&&
@@ -446,19 +501,24 @@ function reconcileAttempt(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:
   if(!attempt)throw new Error('Forge attempt not found.');
   requireClaim(attempt,command);
   const task=workitemFor(ticket,command.taskId);
-  if(attempt.status!=='unknown_after_restart'||task.activeAttemptId!==attempt.id||task.blockedReason?.kind!=='execution_issue'||task.blockedReason.code!=='unknown_after_restart')
-    throw new Error('Only an unknown post-restart Forge attempt can be reconciled.');
+  const expectedBlock=attempt.status==='unknown_effect'?'unknown_effect':'unknown_after_restart';
+  if((attempt.status!=='unknown_after_restart'&&attempt.status!=='unknown_effect')||task.activeAttemptId!==attempt.id||task.blockedReason?.kind!=='execution_issue'||task.blockedReason.code!==expectedBlock)
+    throw new Error('Only an unknown Forge attempt can be reconciled.');
   if(!command.evidence.trim())throw new Error('Forge attempt reconciliation requires host evidence.');
+  if((!!command.threadId)!=(!!command.turnId))throw new Error('Reconciled provider thread and turn IDs must be recorded together.');
+  if(attempt.threadId&&(command.threadId!==undefined||command.turnId!==undefined)&&(attempt.threadId!==command.threadId||attempt.turnId!==command.turnId))throw new Error('Reconciliation cannot rebind an attempt to a different provider thread or turn.');
   attempt.reconciliation={status:command.status,evidence:command.evidence,actorId:command.actor.id,recordedAt:now};
   if(command.status==='still_running'){
+    if(!attempt.threadId&&(!command.threadId||!command.turnId||!attempt.dispatchBaselineSha))throw new Error('A live reconciled attempt must provide observed provider IDs and its persisted dispatch baseline.');
+    if(!attempt.threadId){attempt.threadId=command.threadId;attempt.turnId=command.turnId;attempt.startedAt=now;}
     attempt.status='claimed';task.state='claimed';delete task.blockedReason;task.updatedAt=now;
-    const remainsUnknown=ticket.attempts.some(row=>row.status==='unknown_after_restart');
-    if(!remainsUnknown&&ticket.phase==='blocked'&&ticket.attentionReason?.startsWith('A live Forge attempt requires reconciliation:')){
+    const remainsUnknown=ticket.attempts.some(row=>row.status==='unknown_after_restart'||row.status==='unknown_effect');
+    if(!remainsUnknown&&ticket.phase==='blocked'&&(ticket.attentionReason?.startsWith('A live Forge attempt requires reconciliation:')||ticket.attentionReason?.startsWith('Forge attempt ')&&ticket.attentionReason.includes(' has an uncertain provider effect.'))){
       ticket.phase='running';delete ticket.attentionReason;
     }
     return;
   }
-  attempt.status='interrupted';attempt.completedAt=now;attempt.failureReason=`Restart reconciliation confirmed the attempt stopped: ${command.evidence}`.slice(0,4000);
+  attempt.status='interrupted';attempt.completedAt=now;attempt.failureReason=`Host reconciliation confirmed the attempt stopped: ${command.evidence}`.slice(0,4000);
   task.activeAttemptId=undefined;
   const sameRevisionAttempts=ticket.attempts.filter(row=>row.taskId===task.id&&row.assignmentRevision===task.assignmentRevision).length;
   if(sameRevisionAttempts<ticket.limits.maxExecutionAttempts){task.state='open';delete task.blockedReason;}
@@ -471,7 +531,7 @@ function pauseTicket(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:'paus
   ticket.pausedFromPhase=ticket.phase;ticket.phase='paused';ticket.pausedAt=now;ticket.updatedAt=now;
 }
 function phaseAfterResume(ticket:ForgeTicket):ForgeTicket['phase']{
-  if(ticket.attempts.some(attempt=>attempt.status==='unknown_after_restart')||ticket.integration.mergeIntent)throw new Error('Reconcile unknown Forge attempts and merge effects before resuming dispatch.');
+  if(ticket.attempts.some(attempt=>attempt.status==='unknown_after_restart'||attempt.status==='unknown_effect')||ticket.integration.mergeIntent)throw new Error('Reconcile unknown Forge attempts and merge effects before resuming dispatch.');
   const activeOrchestratorRun=ticket.orchestratorRuns.find(run=>run.id===ticket.activeOrchestratorRunId);
   if(activeOrchestratorRun?.status==='unknown_after_restart')throw new Error('Reconcile the unknown orchestrator run before resuming.');
   if(activeOrchestratorRun&&(activeOrchestratorRun.status==='prepared'||activeOrchestratorRun.status==='running'))return activeOrchestratorRun.purpose==='planning'?'planning':'review';
@@ -516,6 +576,7 @@ function beginIntegration(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:
   if(ticket.integration.status!=='not_started')throw new Error('The current Forge integration state is not ready to start.');
   if(ticket.integration.activeRunId)throw new Error('Reconcile the active Forge integrator run before starting another one.');
   if(input.projectId!==ticket.projectId||input.workspaceRoot!==ticket.workspaceRoot)throw new Error('The integrator run must use the ticket workspace identity and root.');
+  if(input.targetBranch!==ticket.targetBranch)throw new Error('The integrator run must use the ticket’s pinned local target branch.');
   const latestCorrection=ticket.integration.correctionRounds.at(-1)?.id;
   if(input.correctionRoundId!==latestCorrection)throw new Error('The integrator run must link to the latest correction round.');
   if(ticket.integration.runs.filter(run=>run.correctionRoundId===latestCorrection).length>=ticket.limits.maxExecutionAttempts){
@@ -602,6 +663,7 @@ function recordIntegrationCandidate(ticket:ForgeTicket,command:Extract<ForgeComm
   const run=integrationRunFor(ticket,candidate.integratorRunId);
   const phaseAcceptsResult=ticket.phase==='integrating'||ticket.phase==='paused'||ticket.phase==='cancelled';
   if(!phaseAcceptsResult||ticket.integration.status!=='running'||ticket.integration.activeRunId!==run.id||run.status!=='running'||ticket.workitems.some(task=>task.state!=='finished'))throw new Error('The ticket is not ready to record an integration candidate for its active integrator run.');
+  if(candidate.targetBranch!==ticket.targetBranch||candidate.targetBranch!==run.targetBranch)throw new Error('The integration candidate must retain the run’s exact local target branch.');
   if(candidate.provenance.producerRole!=='integrator')throw new Error('Integration evidence must be attributed to the integrator.');
   if(candidate.provenance.threadId!==run.threadId||candidate.provenance.turnId!==run.turnId)throw new Error('Integration candidate provenance must match the observed active integrator run.');
   const actual=expectedWorkerCommits(ticket);
@@ -681,8 +743,8 @@ function requestCorrections(ticket:ForgeTicket,command:Extract<ForgeCommand,{typ
 type CandidateReviewCommand=Extract<ForgeCommand,{type:'submit_manual_candidate_review'}>|Extract<ForgeCommand,{type:'complete_candidate_review'}>;
 function applyCandidateReview(ticket:ForgeTicket,command:CandidateReviewCommand,now:string,source:'manual'|'model_run',runId?:string,reviewedBy=command.actor.id):ForgeReviewDecision{
   const candidate=currentCandidate(ticket);
-  if(ticket.phase!=='review'||ticket.integration.status!=='ready_for_review'||candidate.candidateSha!==command.candidateSha||candidate.targetMainSha!==command.targetMainSha)
-    throw new Error('Review must refer to the current verified integration candidate and target main SHA.');
+  if(ticket.phase!=='review'||ticket.integration.status!=='ready_for_review'||candidate.candidateSha!==command.candidateSha||candidate.targetMainSha!==command.targetMainSha||candidate.targetBranch!==command.targetBranch||candidate.targetBranch!==ticket.targetBranch)
+    throw new Error('Review must refer to the current verified candidate, pinned local target branch, and target SHA.');
   const existing=ticket.integration.reviewDecisions.find(row=>row.candidateId===candidate.id&&row.candidateSha===candidate.candidateSha&&row.targetMainSha===candidate.targetMainSha&&row.disposition===command.disposition&&row.source===source&&row.runId===runId);
   if(existing){
     if(existing.note===command.note&&existing.reviewedBy===reviewedBy)return existing;
@@ -695,10 +757,10 @@ function applyCandidateReview(ticket:ForgeTicket,command:CandidateReviewCommand,
     const findings=command.corrections.flatMap(item=>item.findings.map(finding=>({...finding,taskId:item.taskId})));
     const items=command.corrections.map(item=>({taskId:item.taskId,findingIds:item.findings.map(finding=>finding.id),assignment:item.assignment}));
     const created=recordCorrectionRound(ticket,reviewedBy,command.correctionId,items,findings,'final_review',now);
-    decision={id,candidateId:candidate.id,candidateSha:candidate.candidateSha,targetMainSha:candidate.targetMainSha,disposition:command.disposition,note:command.note,reviewedAt:now,reviewedBy,source,...(runId?{runId}:{}),...(created?{correctionRoundId:command.correctionId}:{})};
+    decision={id,candidateId:candidate.id,candidateSha:candidate.candidateSha,targetMainSha:candidate.targetMainSha,targetBranch:candidate.targetBranch,disposition:command.disposition,note:command.note,reviewedAt:now,reviewedBy,source,...(runId?{runId}:{}),...(created?{correctionRoundId:command.correctionId}:{})};
   }else{
     if(command.correctionId||command.corrections)throw new Error('Only a correction review may include correction assignments.');
-    decision={id,candidateId:candidate.id,candidateSha:candidate.candidateSha,targetMainSha:candidate.targetMainSha,disposition:command.disposition,note:command.note,reviewedAt:now,reviewedBy,source,...(runId?{runId}:{})};
+    decision={id,candidateId:candidate.id,candidateSha:candidate.candidateSha,targetMainSha:candidate.targetMainSha,targetBranch:candidate.targetBranch,disposition:command.disposition,note:command.note,reviewedAt:now,reviewedBy,source,...(runId?{runId}:{})};
     if(command.disposition==='accept')ticket.phase='merge_ready';
     else{ticket.integration.status='blocked';ticket.phase='blocked';ticket.attentionReason=command.note||'The final candidate review blocked this Forge ticket.';}
   }
@@ -715,11 +777,11 @@ function submitManualCandidateReview(ticket:ForgeTicket,command:Extract<ForgeCom
 function completeCandidateReview(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:'complete_candidate_review'}>,now:string){
   requireActor(command.actor,'host');
   const run=orchestratorRunFor(ticket,command.runId);
-  if(run.purpose!=='final_review'||run.expectedPlanRevision!==command.expectedPlanRevision||command.expectedPlanRevision!==ticket.acceptedPlan?.revision||run.candidateId!==command.candidateId||run.candidateSha!==command.candidateSha||run.targetMainSha!==command.targetMainSha)throw new Error('The final-review result targets a different candidate, target main SHA, or accepted plan revision.');
+  if(run.purpose!=='final_review'||run.expectedPlanRevision!==command.expectedPlanRevision||command.expectedPlanRevision!==ticket.acceptedPlan?.revision||run.candidateId!==command.candidateId||run.candidateSha!==command.candidateSha||run.targetMainSha!==command.targetMainSha||run.targetBranch!==command.targetBranch)throw new Error('The final-review result targets a different candidate, local target branch, target main SHA, or accepted plan revision.');
   if(run.threadId!==command.threadId||run.turnId!==command.turnId)throw new Error('The final-review result provenance does not match the observed orchestrator thread and turn.');
   if(run.status==='completed'&&run.resultReviewId){
     const saved=ticket.integration.reviewDecisions.find(decision=>decision.id===run.resultReviewId&&decision.runId===run.id);
-    if(saved&&saved.disposition===command.disposition&&saved.note===command.note&&saved.candidateId===command.candidateId&&saved.candidateSha===command.candidateSha&&saved.targetMainSha===command.targetMainSha&&saved.correctionRoundId===command.correctionId)return;
+    if(saved&&saved.disposition===command.disposition&&saved.note===command.note&&saved.candidateId===command.candidateId&&saved.candidateSha===command.candidateSha&&saved.targetMainSha===command.targetMainSha&&saved.targetBranch===command.targetBranch&&saved.correctionRoundId===command.correctionId)return;
   }
   if(ticket.activeOrchestratorRunId!==run.id||run.status!=='running'||ticket.phase!=='review'||!run.threadId||!run.turnId)throw new Error('Only the active observed final-review run may provide this candidate decision.');
   const decision=applyCandidateReview(ticket,command,now,'model_run',run.id,run.ownerId);
@@ -727,7 +789,7 @@ function completeCandidateReview(ticket:ForgeTicket,command:Extract<ForgeCommand
 }
 function invalidateCurrentCandidate(ticket:ForgeTicket,candidate:ForgeIntegrationCandidate,observedMainSha:string,now:string,detail:string,readback?:ForgeIntegration['mergeReadbacks'][number]){
   if(!ticket.integration.staleCandidateIds.includes(candidate.id))ticket.integration.staleCandidateIds.push(candidate.id);
-  ticket.integration.mergeReadbacks.push(readback||{id:`stale:${candidate.id}:${observedMainSha}`,candidateId:candidate.id,candidateSha:candidate.candidateSha,targetMainSha:candidate.targetMainSha,result:'stale',observedMainSha,detail,recordedAt:now});
+  ticket.integration.mergeReadbacks.push(readback||{id:`stale:${candidate.id}:${observedMainSha}`,candidateId:candidate.id,candidateSha:candidate.candidateSha,targetMainSha:candidate.targetMainSha,targetBranch:candidate.targetBranch,result:'stale',observedMainSha,detail,recordedAt:now});
   delete ticket.integration.activeCandidateId;delete ticket.integration.mergeIntent;ticket.integration.status='not_started';
   if(ticket.phase==='paused')ticket.pausedFromPhase='integrating';
   else if(ticket.phase!=='cancelled')ticket.phase='integrating';
@@ -737,11 +799,11 @@ function beginMerge(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:'begin
   requireActor(command.actor,'host');
   const candidate=currentCandidate(ticket);
   if(ticket.phase==='merging'&&ticket.integration.mergeIntent?.candidateId===candidate.id)throw new Error('A Forge merge already has a durable intent. Reconcile its main readback before starting another Git effect.');
-  const accepted=ticket.integration.reviewDecisions.some(row=>row.candidateId===candidate.id&&row.candidateSha===command.candidateSha&&row.targetMainSha===command.targetMainSha&&row.disposition==='accept');
-  if(ticket.phase!=='merge_ready'||!accepted||candidate.candidateSha!==command.candidateSha||candidate.targetMainSha!==command.targetMainSha)
-    throw new Error('A matching orchestrator approval is required before final merge.');
+  const accepted=ticket.integration.reviewDecisions.some(row=>row.candidateId===candidate.id&&row.candidateSha===command.candidateSha&&row.targetMainSha===command.targetMainSha&&row.targetBranch===command.targetBranch&&row.disposition==='accept');
+  if(ticket.phase!=='merge_ready'||!accepted||candidate.candidateSha!==command.candidateSha||candidate.targetMainSha!==command.targetMainSha||candidate.targetBranch!==command.targetBranch||command.targetBranch!==ticket.targetBranch)
+    throw new Error('A matching review of the ticket’s pinned local target branch is required before final merge.');
   if(command.observedMainSha!==candidate.targetMainSha){invalidateCurrentCandidate(ticket,candidate,command.observedMainSha,now,'The target main SHA changed after review; rebuild and recheck the integration candidate.');return;}
-  ticket.integration.mergeIntent={candidateId:candidate.id,candidateSha:candidate.candidateSha,targetMainSha:candidate.targetMainSha,startedAt:now,startedBy:command.actor.id};
+  ticket.integration.mergeIntent={candidateId:candidate.id,candidateSha:candidate.candidateSha,targetMainSha:candidate.targetMainSha,targetBranch:candidate.targetBranch,startedAt:now,startedBy:command.actor.id};
   ticket.phase='merging';ticket.updatedAt=now;
 }
 function recordMergeReadback(ticket:ForgeTicket,command:Extract<ForgeCommand,{type:'record_merge_readback'}>,now:string){
@@ -749,10 +811,10 @@ function recordMergeReadback(ticket:ForgeTicket,command:Extract<ForgeCommand,{ty
   const intent=ticket.integration.mergeIntent;
   const recovering=ticket.phase==='blocked'&&ticket.attentionReason?.startsWith('The final merge status is unknown after restart.');
   if(!intent||!(ticket.phase==='merging'||recovering||ticket.phase==='paused'||ticket.phase==='cancelled'))throw new Error('Forge has no authorized merge operation to verify.');
-  if(intent.candidateSha!==command.candidateSha||intent.targetMainSha!==command.targetMainSha)throw new Error('Merge readback does not match the approved candidate and target SHA.');
+  if(intent.candidateSha!==command.candidateSha||intent.targetMainSha!==command.targetMainSha||intent.targetBranch!==command.targetBranch)throw new Error('Merge readback does not match the approved candidate, local target branch, and target SHA.');
   const candidate=ticket.integration.candidates.find(row=>row.id===intent.candidateId);
   if(!candidate)throw new Error('Approved Forge candidate evidence is missing.');
-  const readback={id:`merge:${candidate.id}:${ticket.integration.mergeReadbacks.length+1}`,candidateId:candidate.id,candidateSha:intent.candidateSha,targetMainSha:intent.targetMainSha,...(command.preMergeMainSha?{preMergeMainSha:command.preMergeMainSha}:{}),result:command.result,observedMainSha:command.observedMainSha,...(command.mergeCommitSha?{mergeCommitSha:command.mergeCommitSha}:{}),...(command.commitReadbackSha?{commitReadbackSha:command.commitReadbackSha}:{}),...(command.detail?{detail:command.detail}:{}),recordedAt:now};
+  const readback={id:`merge:${candidate.id}:${ticket.integration.mergeReadbacks.length+1}`,candidateId:candidate.id,candidateSha:intent.candidateSha,targetMainSha:intent.targetMainSha,targetBranch:intent.targetBranch,...(command.preMergeMainSha?{preMergeMainSha:command.preMergeMainSha}:{}),result:command.result,observedMainSha:command.observedMainSha,...(command.mergeCommitSha?{mergeCommitSha:command.mergeCommitSha}:{}),...(command.commitReadbackSha?{commitReadbackSha:command.commitReadbackSha}:{}),...(command.detail?{detail:command.detail}:{}),recordedAt:now};
   if(command.result==='stale'){
     const changedSha=command.preMergeMainSha&&command.preMergeMainSha!==intent.targetMainSha?command.preMergeMainSha:command.observedMainSha;
     if(changedSha===intent.targetMainSha)throw new Error('A stale merge result requires evidence that main moved from the verified target.');
@@ -789,7 +851,10 @@ export function applyForgeCommand(ticket:ForgeTicket,command:ForgeCommand,now:st
     case 'accept_plan':acceptPlan(next,command,now);break;
     case 'start':startTicket(next,command,now);break;
     case 'claim_task':claimTask(next,command,now);break;
+    case 'record_attempt_dispatch_baseline':recordAttemptDispatchBaseline(next,command,now);break;
     case 'record_attempt_runtime':recordAttemptRuntime(next,command,now);break;
+    case 'fail_attempt_preflight':failAttemptPreflight(next,command,now);break;
+    case 'mark_attempt_effect_uncertain':markAttemptEffectUncertain(next,command,now);break;
     case 'accept_worker_outcome':acceptWorkerOutcome(next,command,now);break;
     case 'recover_after_restart':recoverAfterRestart(next,command,now);break;
     case 'reconcile_attempt':reconcileAttempt(next,command,now);break;
