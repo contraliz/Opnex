@@ -15,3 +15,15 @@ docs/design-system.md
 .vitest/
 artifacts/
 desktop-release/
+.local-preserved/
+.opnex-live-build-*/
+docs/checkpoints/
+qa-direct-skills-mcp.mjs
+qa-live-agentmem-check.mjs
+qa-live-agentmem-gateway-check.mjs
+qa-live-skills-app-server.mjs
+server/.protocol-temp/
+src/.vite-temp/
+src/vite.temp.config.ts
+tests/.verify-client/
+tests/.verify-server/

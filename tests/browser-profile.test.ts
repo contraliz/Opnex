@@ -8,7 +8,7 @@ describe('local Electron browser profile',()=>{
   it('keeps the persistent Windows browser session under Local AppData',()=>{
     const localAppData=path.resolve('fixture-local-app-data');
     const userData=path.resolve('fixture-user-data');
-    expect(browserProfilePath({platform:'win32',localAppData,userData})).toBe(path.join(localAppData,'Pseudoharness','browser-profile'));
+    expect(browserProfilePath({platform:'win32',localAppData,userData})).toBe(path.join(localAppData,'Opnex','browser-profile'));
   });
   it('keeps disposable smoke profiles isolated under the supplied temporary app-data directory',()=>{
     const userData=path.resolve('fixture-smoke-app-data');

@@ -1,12 +1,17 @@
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import {
   createWindowsDeepSeekHarnessSdkLaunch,
+  deepSeekHarnessConversationStorage,
+  deepSeekHarnessProviderRoute,
   DeepSeekHarnessError,
   DeepSeekHarnessSdkRuntime,
+  prepareDeepSeekHarnessConversationStorage,
   resolveDeepSeekHarnessPermission,
+  withDeepSeekHarnessConversationStorage,
 } from '../server/deepseek-harness.js';
 
 const fixture = path.resolve('tests/fixtures/deepseek-harness-sdk-fixture.mjs');
@@ -14,6 +19,7 @@ const cwd = process.cwd();
 const baseLaunch = (mode = 'normal', configuredMcpServers?: readonly string[]) => ({
   command: process.execPath,
   args: [fixture, '--profile', 'sdk', `--fixture=${mode}`],
+  profileName: 'sdk',
   ...(configuredMcpServers ? { configuredMcpServers } : {}),
   harnessVersion: '0.2.1-fixture',
 });
@@ -21,11 +27,30 @@ const fullAccess = resolveDeepSeekHarnessPermission({
   approvalPolicy: 'full-access', selectedForTask: true, workspaceRoot: cwd, writeScope: [cwd], requiresFilesystemConfinement: false,
 });
 const options = (mode = 'normal', sessionId?: string, configuredMcpServers?: readonly string[]) => ({
-  launch: baseLaunch(mode, configuredMcpServers), cwd, provider: 'deepseek-official', model: 'deepseek-flash',
-  reasoningEffort: 'high', permission: fullAccess, ...(sessionId ? { sessionId } : {}), requestTimeoutMs: 5000,
+  launch: baseLaunch(mode, configuredMcpServers), cwd, provider: 'opencode-go', model: 'deepseek-v4.1-flash',
+  reasoningEffort: 'max', permission: fullAccess, ...(sessionId ? { sessionId } : {}), requestTimeoutMs: 5000,
 });
 
 describe('DeepSeek Harness SDK worker boundary', () => {
+  it('maps the selected OpenCode Go provider to the installed native DSH route', async () => {
+    expect(deepSeekHarnessProviderRoute('opencode-go')).toBe('dsh-opencode-go');
+    expect(() => deepSeekHarnessProviderRoute('unknown-provider')).toThrow(/no installed native DSH route/i);
+
+    const runtime = new DeepSeekHarnessSdkRuntime({
+      ...options('init-provider'),
+      provider: 'opencode-go',
+      launch: { ...baseLaunch('init-provider'), profileName: 'opnex-sdk', args: [fixture, '--profile', 'opnex-sdk', '--fixture=init-provider'] },
+    });
+    const info = await runtime.connect();
+    expect(info).toMatchObject({
+      provider: 'opencode-go',
+      requestedProviderRoute: 'dsh-opencode-go',
+      profileName: 'opnex-sdk',
+      serverInfo: { version: 'fixture-provider:dsh-opencode-go' },
+    });
+    await runtime.shutdown();
+  });
+
   it('builds a shell-free SDK command from a verified Windows app installation root', async () => {
     if (process.platform !== 'win32') return;
     const root = await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-dsh-launch-'));
@@ -39,13 +64,55 @@ describe('DeepSeek Harness SDK worker boundary', () => {
       await writeFile(appArchive, 'fixture');
       const launch = createWindowsDeepSeekHarnessSdkLaunch(root, '0.2.1-fixture');
       expect(launch.command).toBe(exe);
-      expect(launch.args).toEqual(['--expose-internals', cli, '--profile', 'sdk']);
+      const storage = deepSeekHarnessConversationStorage();
+      expect(launch.args).toEqual(['--expose-internals', cli, '--profile', 'opnex-sdk', '--patch', storage.patchPath]);
+      expect(launch.profileName).toBe('opnex-sdk');
+      expect(launch.conversationStorage).toEqual(storage);
       expect(launch.harnessVersion).toBe('0.2.1-fixture');
       expect(launch.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' });
       expect(() => createWindowsDeepSeekHarnessSdkLaunch(path.join(root, 'missing'))).toThrow(/does not contain the verified SDK runtime files/i);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('redirects only native DSH storage to one stable Opnex conversation home', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'opnex-dsh-storage-'));
+    try {
+      const storage = deepSeekHarnessConversationStorage(root);
+      expect(storage.home).toBe(path.join(root, 'dsh-conversations'));
+      expect(storage.patchPath).toBe(path.join(root, 'dsh-conversations.patch.yml'));
+      await expect(prepareDeepSeekHarnessConversationStorage(storage)).resolves.toBe(storage.home);
+      await expect(prepareDeepSeekHarnessConversationStorage(storage)).resolves.toBe(storage.home);
+      const persisted = await readFile(storage.patchPath, 'utf8');
+      expect(persisted).toBe(storage.patchContents);
+      expect(persisted).toContain(`root: '${path.join(storage.home, 'sessions')}'`);
+      expect(persisted).toContain(`root: '${path.join(storage.home, 'storages')}'`);
+      expect(persisted).toContain(`dshHome: '${storage.home}'`);
+      expect(persisted).toContain("name: '@deepseek-ai/dsh-session-persistence-jsonl'");
+      expect(persisted).toContain("name: '@deepseek-ai/dsh-storage-json'");
+      expect(persisted).toContain("name: '@deepseek-ai/dsh-attachment-local'");
+      expect(persisted).not.toMatch(/system-prompt|agent-instructions|tool-|provider|model|credential/i);
+
+      const conflicting = { ...storage, patchContents: `${storage.patchContents}unexpected: true\n` };
+      await expect(prepareDeepSeekHarnessConversationStorage(conflicting)).rejects.toThrow(/unexpected contents/i);
+      expect(await readFile(storage.patchPath, 'utf8')).toBe(storage.patchContents);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps native DSH storage untouched or redirects it to the selected isolated folder', () => {
+    const root = path.join(os.tmpdir(), 'opnex-storage-test'), home = path.join(root, 'external-sessions');
+    const base = { command: 'dsh.exe', args: ['--profile', 'opnex-sdk', '--patch', 'old-storage.patch.yml'], profileName: 'opnex-sdk' };
+    const isolated = deepSeekHarnessConversationStorage(root, home);
+    const native = withDeepSeekHarnessConversationStorage(base);
+    const selected = withDeepSeekHarnessConversationStorage(base, isolated);
+    expect(native.args).toEqual(['--profile', 'opnex-sdk']);
+    expect(native.conversationStorage).toBeUndefined();
+    expect(selected.args).toEqual(['--profile', 'opnex-sdk', '--patch', isolated.patchPath]);
+    expect(isolated.home).toBe(home);
+    expect(isolated.patchContents).toContain(`root: '${path.join(home, 'sessions')}'`);
   });
 
   it('runs one task-owned SDK session, forwards events, and reports provider capability/version metadata', async () => {
@@ -55,10 +122,10 @@ describe('DeepSeek Harness SDK worker boundary', () => {
 
     const info = await runtime.connect();
     expect(info).toMatchObject({
-      provider: 'deepseek-official', model: 'deepseek-flash', requestedReasoningEffort: 'high',
-      harnessVersion: '0.2.1-fixture', permissionMode: 'danger-full-access',
-      selectedApprovalPolicy: 'full-access', workspaceRoot: cwd, writeScope: [cwd], access: 'unrestricted',
-      filesystemScope: 'assignment-instruction-only',
+      provider: 'opencode-go', requestedProviderRoute: 'dsh-opencode-go', model: 'deepseek-v4.1-flash', requestedReasoningEffort: 'max',
+      harnessVersion: '0.2.1-fixture', permissionMode: 'native-profile',
+      selectedApprovalPolicy: 'full-access', workspaceRoot: cwd, writeScope: [cwd], access: 'native-profile',
+      filesystemScope: 'native-profile',
       mcpToolCatalog: { status: 'not-configured', configuredServerNames: [], availableServerNames: [], missingServerNames: [], toolNames: [] },
       serverInfo: { name: 'deepseek-harness-sdk-runtime', version: 'fixture-0.0.1' },
       capabilities: {
@@ -82,8 +149,20 @@ describe('DeepSeek Harness SDK worker boundary', () => {
     await recovered.shutdown();
   });
 
+  it('keeps the user DSH home while excluding unrelated app credentials from the SDK process', async () => {
+    const priorHome=process.env.DSH_HOME,priorSecret=process.env.OPNEX_FIXTURE_SECRET;const nativeHome=path.join(os.tmpdir(),'native-user-dsh-home');let childEnvironment:NodeJS.ProcessEnv|undefined;
+    process.env.DSH_HOME=nativeHome;process.env.OPNEX_FIXTURE_SECRET='fixture-only';
+    const captureSpawn=(command:string,args:readonly string[]|undefined,spawnOptions:import('node:child_process').SpawnOptions|undefined)=>{childEnvironment=spawnOptions?.env;return spawn(command,[...(args||[])],spawnOptions??{});};
+    const runtime=new DeepSeekHarnessSdkRuntime({...options(),spawnProcess:captureSpawn as unknown as typeof spawn});
+    try{
+      await runtime.connect();expect(childEnvironment?.DSH_HOME).toBe(nativeHome);expect(childEnvironment).not.toHaveProperty('OPNEX_FIXTURE_SECRET');expect(runtime.runtimeInfo).toMatchObject({profileName:'sdk'});
+    }finally{
+      await runtime.shutdown();if(priorHome===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=priorHome;if(priorSecret===undefined)delete process.env.OPNEX_FIXTURE_SECRET;else process.env.OPNEX_FIXTURE_SECRET=priorSecret;
+    }
+  });
+
   it('reports only session-observed MCP tool names and preserves tool call/result provenance', async () => {
-    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['agentmem', 'pseudoharness_skills']));
+    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['project_notes', 'pseudoharness_skills']));
     const catalogEvents: unknown[] = [];
     const notifications: Array<{ method: string; params: unknown }> = [];
     runtime.on('mcpToolCatalog', catalog => catalogEvents.push(catalog));
@@ -96,16 +175,16 @@ describe('DeepSeek Harness SDK worker boundary', () => {
 
     expect(runtime.runtimeInfo?.mcpToolCatalog).toEqual({
       status: 'ready',
-      configuredServerNames: ['agentmem', 'pseudoharness_skills'],
-      availableServerNames: ['agentmem', 'pseudoharness_skills'],
+      configuredServerNames: ['project_notes', 'pseudoharness_skills'],
+      availableServerNames: ['project_notes', 'pseudoharness_skills'],
       missingServerNames: [],
-      toolNames: ['mcp__agentmem__decisions', 'mcp__pseudoharness_skills__skills_list'],
+      toolNames: ['mcp__project_notes__search', 'mcp__pseudoharness_skills__skills_list'],
       observedAtSequence: 17,
     });
     expect(catalogEvents).toHaveLength(1);
     const toolCall = notifications.find(item => (item.params as any)?.event?.type === 'tool/call')?.params as any;
     const toolResult = notifications.find(item => (item.params as any)?.event?.type === 'tool/result')?.params as any;
-    expect(toolCall.event.data).toMatchObject({ turn: 1, step: 1, callId: 'fixture-mcp-call', name: 'mcp__agentmem__decisions' });
+    expect(toolCall.event.data).toMatchObject({ turn: 1, step: 1, callId: 'fixture-mcp-call', name: 'mcp__project_notes__search' });
     expect(typeof toolCall.event.data.arguments).toBe('string');
     expect(toolResult.event.data).toMatchObject({ turn: 1, step: 1, message: { role: 'tool', toolCallId: 'fixture-mcp-call', source: { kind: 'tool', callId: 'fixture-mcp-call' }, isError: false } });
     expect(toolResult.event.sourceEventSeqs).toEqual([18]);
@@ -113,12 +192,12 @@ describe('DeepSeek Harness SDK worker boundary', () => {
   });
 
   it('marks a configured MCP server missing when the real session header omits its tools', async () => {
-    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['agentmem', 'missing-server']));
+    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['project_notes', 'missing-server']));
     await runtime.startSession([{ type: 'text', text: 'Read-only catalog check.' }]);
     await runtime.waitSession();
     expect(runtime.mcpToolCatalog).toMatchObject({
       status: 'missing-tools',
-      availableServerNames: ['agentmem'],
+      availableServerNames: ['project_notes','pseudoharness_skills'],
       missingServerNames: ['missing-server'],
     });
     await runtime.shutdown();

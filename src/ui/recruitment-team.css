@@ -24,28 +24,56 @@
   color: var(--text);
 }
 
-.recruitment-team__heading .recruitment-team__status {
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-
-.recruitment-team__heading-status {
-  display: grid;
-  justify-items: end;
-  gap: 0.45rem;
-}
-
-.recruitment-team__worker-count {
-  color: var(--text);
-  font-size: 0.95rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
 .recruitment-team__heading h2,
 .recruitment-team__card-heading h3,
 .recruitment-team__assignment h4 {
   margin: 0;
+}
+
+.recruitment-team__heading h2 {
+  font-size: 1rem;
+}
+
+.recruitment-team-summary-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.recruitment-team-summary-status {
+  flex: 0 0 auto;
+  max-width: 10rem;
+  margin-left: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.recruitment-team-disclosure .disclosure-head > strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.recruitment-team-disclosure .disclosure-content {
+  padding: 0.75rem;
+}
+
+.recruitment-team-disclosure .recruitment-team {
+  gap: 0.55rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recruitment-team-disclosure .disclosure-panel,
+  .recruitment-team-disclosure .disclosure-chevron {
+    transition: none;
+  }
 }
 
 .recruitment-team__heading p,

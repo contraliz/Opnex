@@ -1,0 +1,146 @@
+import { useEffect, useMemo, useState } from 'react';
+import { BookOpen, Folder, Settings2 } from 'lucide-react';
+import type { ForgeTicket, ForgeTicketCreateRequest, Project, Runtime, Settings } from '../types.js';
+import { createForgeTicket, api } from './api.js';
+import { modelChoiceName, codexModelChoices } from './ModelPicker.js';
+import ModelPicker from './ModelPicker.js';
+import type { SkillSummary } from './skills-types.js';
+
+type SkillSearch={skills?:SkillSummary[]};
+type Props={project:Project|null;settings:Settings;models:Runtime['codex']['models'];onCreated:(ticket:ForgeTicket)=>void|Promise<void>;onOpenSettings:()=>void;onOpenSkills:()=>void;onOpenWorkspace:()=>void};
+type Limits={maxActiveWorkers:number;maxExecutionAttempts:number;maxCorrectionRounds:number};
+type KnowledgeBudget={totalOperations:number;defaultAllocationOperations:number;maxAllocationOperations:number};
+
+const defaultWorkerProfile={provider:'codex' as const,model:'gpt-6-luna',effort:'max' as const};
+const lines=(value:string)=>value.split(/\r?\n/).map(row=>row.trim()).filter(Boolean);
+const approvalName=(value:Settings['approvalPolicy'])=>value==='on-request'?'On request':value==='untrusted'?'Untrusted commands':value==='never'?'Never ask':'Full Access';
+const validApprovalPolicy=(value:Settings['approvalPolicy'])=>value==='on-request'||value==='untrusted'||value==='never';
+
+export default function ForgeSessionCreate({project,settings,models,onCreated,onOpenSettings,onOpenSkills,onOpenWorkspace}:Props){
+  const [title,setTitle]=useState('');
+  const [description,setDescription]=useState('');
+  const [acceptanceText,setAcceptanceText]=useState('');
+  const [readText,setReadText]=useState('.');
+  const [writeText,setWriteText]=useState('');
+  const [knowledgeText,setKnowledgeText]=useState('');
+  const [targetBranch,setTargetBranch]=useState('main');
+  const [orchestratorModel,setOrchestratorModel]=useState(settings.orchestratorModel);
+  const [orchestratorEffort,setOrchestratorEffort]=useState(settings.orchestratorEffort);
+  const [selectedSkillIds,setSelectedSkillIds]=useState<string[]>([]);
+  const [librarySkills,setLibrarySkills]=useState<SkillSummary[]>([]);
+  const [libraryStatus,setLibraryStatus]=useState<'loading'|'ready'|'unavailable'>('loading');
+  const [agentmemStatus,setAgentmemStatus]=useState<'loading'|'found'|'missing'|'unavailable'>('loading');
+  const [agentmemSource,setAgentmemSource]=useState('');
+  const [skillError,setSkillError]=useState('');
+  const [skillRefresh,setSkillRefresh]=useState(0);
+  const [limits,setLimits]=useState<Limits>({maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3});
+  const [knowledgeBudget,setKnowledgeBudget]=useState<KnowledgeBudget>({totalOperations:64,defaultAllocationOperations:2,maxAllocationOperations:8});
+  const [working,setWorking]=useState(false);
+  const [error,setError]=useState('');
+
+  useEffect(()=>{
+    if(!project||project.needsLocation||!project.projectRoot){setAgentmemStatus('unavailable');setLibraryStatus('unavailable');return;}
+    const controller=new AbortController();let current=true;
+    setAgentmemStatus('loading');setLibraryStatus('loading');setSkillError('');
+    const agentmemUrl=`/api/skills?source=codex&q=agentmem-project&limit=50&projectId=${encodeURIComponent(project.id)}`;
+    void api<SkillSearch>(agentmemUrl,undefined,controller.signal).then(configured=>{
+      if(!current)return;
+      const agentmem=(configured.skills||[]).find(skill=>skill.name.trim().toLocaleLowerCase()==='agentmem-project');
+      setAgentmemSource(agentmem?.source||'');setAgentmemStatus(agentmem?'found':'missing');
+    }).catch(cause=>{
+      if(!current||controller.signal.aborted)return;
+      setAgentmemStatus('unavailable');setSkillError(String(cause));
+    });
+    void api<SkillSearch>('/api/skills?limit=100',undefined,controller.signal).then(saved=>{
+      if(!current)return;
+      setLibrarySkills((saved.skills||[]).filter(skill=>!skill.archived).slice(0,100));setLibraryStatus('ready');
+    }).catch(()=>{
+      if(!current||controller.signal.aborted)return;
+      setLibraryStatus('unavailable');
+    });
+    return()=>{current=false;controller.abort();};
+  },[project?.id,project?.projectRoot,project?.needsLocation,skillRefresh]);
+
+  const workerProfile=settings.executionProfile||defaultWorkerProfile;
+  const choices=useMemo(()=>codexModelChoices(models),[models]);
+  const selectedModel=choices.find(choice=>choice.id===orchestratorModel);
+  const effortChoices=selectedModel?.efforts||[];
+  const acceptanceCriteria=lines(acceptanceText),readScope=lines(readText),writeScope=lines(writeText),knowledgeScope=lines(knowledgeText);
+  const limitsValid=Number.isInteger(limits.maxActiveWorkers)&&limits.maxActiveWorkers>=1&&limits.maxActiveWorkers<=3&&Number.isInteger(limits.maxExecutionAttempts)&&limits.maxExecutionAttempts>=1&&limits.maxExecutionAttempts<=2&&Number.isInteger(limits.maxCorrectionRounds)&&limits.maxCorrectionRounds>=0&&limits.maxCorrectionRounds<=3;
+  const budgetValid=Number.isInteger(knowledgeBudget.totalOperations)&&knowledgeBudget.totalOperations>=0&&knowledgeBudget.totalOperations<=100000&&Number.isInteger(knowledgeBudget.defaultAllocationOperations)&&knowledgeBudget.defaultAllocationOperations>=0&&knowledgeBudget.defaultAllocationOperations<=8&&Number.isInteger(knowledgeBudget.maxAllocationOperations)&&knowledgeBudget.maxAllocationOperations>=0&&knowledgeBudget.maxAllocationOperations<=8&&knowledgeBudget.defaultAllocationOperations<=knowledgeBudget.maxAllocationOperations;
+  const workspaceUsable=!!project&&!project.needsLocation&&!!project.projectRoot.trim();
+  const approvalValid=validApprovalPolicy(settings.approvalPolicy);
+  const formReady=workspaceUsable&&agentmemStatus==='found'&&approvalValid&&!!title.trim()&&!!description.trim()&&acceptanceCriteria.length>0&&acceptanceCriteria.length<=30&&writeScope.length>0&&!!targetBranch.trim()&&!!selectedModel?.available&&effortChoices.includes(orchestratorEffort)&&limitsValid&&budgetValid&&libraryStatus!=='loading'&&selectedSkillIds.length<=12;
+
+  const refreshSkills=()=>{setSkillRefresh(value=>value+1);};
+  const changeLimit=(field:keyof Limits,value:string)=>setLimits(current=>({...current,[field]:Number(value)}));
+  const changeBudget=(field:keyof KnowledgeBudget,value:string)=>setKnowledgeBudget(current=>({...current,[field]:Number(value)}));
+  const toggleSkill=(id:string,checked:boolean)=>setSelectedSkillIds(current=>checked?[...current,id].slice(0,12):current.filter(value=>value!==id));
+
+  const submit=async(event:React.FormEvent)=>{
+    event.preventDefault();if(!formReady||!project||working)return;
+    const request:ForgeTicketCreateRequest={
+      projectId:project.id,title:title.trim(),description:description.trim(),acceptanceCriteria,
+      scope:{read:readScope,write:writeScope,knowledge:knowledgeScope},
+      orchestrator:{model:orchestratorModel,effort:orchestratorEffort as ForgeTicket['orchestrator']['effort']},
+      workerProfile:{provider:workerProfile.provider,model:workerProfile.model,effort:workerProfile.effort},
+      targetBranch:targetBranch.trim(),skillIds:selectedSkillIds,
+      limits,knowledgeBudget,
+    };
+    setWorking(true);setError('');
+    try{await onCreated(await createForgeTicket(request));}
+    catch(cause){setError(cause instanceof Error?cause.message:String(cause));}
+    finally{setWorking(false);}
+  };
+
+  return <form className="forge-create-card" onSubmit={submit} aria-labelledby="forge-create-title">
+    <header className="forge-create-heading"><div><div className="forge-kicker"><Folder size={13} aria-hidden="true"/> Forge ticket</div><h1 id="forge-create-title">Create a Forge draft</h1><p>Start with a bounded ticket. Planning and worker execution begin only after you start it.</p></div></header>
+    <div className="forge-workspace-summary" aria-label="Forge workspace">
+      <Folder size={15} aria-hidden="true"/><div><strong>{project?.name||'No workspace selected'}</strong><code>{project?.projectRoot||'Choose a workspace before creating a Forge ticket.'}</code></div>
+      {(!project||project.needsLocation||!project.projectRoot)&&<button type="button" className="forge-inline-action" onClick={onOpenWorkspace}>Choose workspace</button>}
+      {project&&!project.needsLocation&&!!project.projectRoot&&<button type="button" className="forge-inline-action" onClick={onOpenWorkspace}>Change directory</button>}
+    </div>
+    {!workspaceUsable&&<div className="forge-inline-alert" role="status">Choose a workspace with an existing working directory. Forge tickets cannot use the unclassified workspace.</div>}
+
+    <div className={`forge-skill-readiness ${agentmemStatus}`} role={agentmemStatus==='missing'?'alert':'status'}>
+      <BookOpen size={15} aria-hidden="true"/><div>
+        {agentmemStatus==='loading'?<><strong>Checking the required AgentMem skill…</strong><span>Only this workspace and the configured Codex skill locations are checked.</span></>:null}
+        {agentmemStatus==='found'?<><strong>Required AgentMem skill found</strong><span>{agentmemSource?`Available from ${agentmemSource}`:'Available to the configured Codex runtime.'} · Opnex snapshots it for Forge roles.</span></>:null}
+        {agentmemStatus==='missing'?<><strong>Required AgentMem skill is missing</strong><span>Install or import the existing <code>agentmem-project</code> skill under this workspace’s <code>.agents/skills/</code> folder or a configured Codex skill/plugin, then check again.</span></>:null}
+        {agentmemStatus==='unavailable'?<><strong>Required AgentMem skill availability is unknown</strong><span>{skillError||'Choose a workspace directory before checking its configured skills.'} Recheck after restoring the workspace or configured skill access.</span></>:null}
+      </div>
+      {(agentmemStatus==='missing'||agentmemStatus==='unavailable')&&<button type="button" className="forge-inline-action" onClick={refreshSkills}>Check again</button>}
+    </div>
+
+    {!approvalValid&&<div className="forge-inline-alert" role="alert">Forge does not accept the current Full Access approval policy. Choose On request, Untrusted commands, or Never ask in Settings before creating this ticket.<button type="button" className="forge-inline-action" onClick={onOpenSettings}>Open Settings</button></div>}
+    {error&&<div className="forge-inline-alert" role="alert">{error}</div>}
+
+    <div className="forge-create-fields">
+      <label>Ticket title<input aria-label="Ticket title" maxLength={120} value={title} onChange={event=>setTitle(event.currentTarget.value)} required autoComplete="off"/></label>
+      <label>Task description<textarea aria-label="Task description" maxLength={12000} rows={3} value={description} onChange={event=>setDescription(event.currentTarget.value)} required/></label>
+      <label>Acceptance criteria<textarea aria-label="Acceptance criteria" rows={3} value={acceptanceText} onChange={event=>setAcceptanceText(event.currentTarget.value)} placeholder="One criterion per line" required/><small>Enter one checkable criterion per line.</small></label>
+      <div className="forge-scope-fields"><label>Allowed read scope<textarea aria-label="Allowed read scope" rows={2} value={readText} onChange={event=>setReadText(event.currentTarget.value)} placeholder="One workspace-relative path per line"/><small>Paths stay relative to this workspace. “.” means the workspace.</small></label><label>Allowed write scope<textarea aria-label="Allowed write scope" rows={2} value={writeText} onChange={event=>setWriteText(event.currentTarget.value)} placeholder="src\ntests"/><small>At least one allowed write path is required.</small></label><label>Knowledge scope<textarea aria-label="Knowledge scope" rows={2} value={knowledgeText} onChange={event=>setKnowledgeText(event.currentTarget.value)} placeholder="One knowledge path or topic per line"/></label></div>
+
+      <div className="forge-profile-grid">
+        <fieldset className="forge-profile-field"><legend>Orchestrator</legend><div className="forge-profile-model"><ModelPicker label="Orchestrator model" providerKey="codex" model={orchestratorModel} effort={orchestratorEffort} choices={choices} disabled={working} onChange={(choice,effort)=>{setOrchestratorModel(choice.id);setOrchestratorEffort(effort);}}/><label>Effort<select aria-label="Orchestrator effort" value={orchestratorEffort} disabled={working||!effortChoices.length} onChange={event=>setOrchestratorEffort(event.currentTarget.value)}>{effortChoices.map(value=><option value={value} key={value}>{value}</option>)}</select></label></div><small>Selected from the current supported Codex model catalog for this ticket.</small></fieldset>
+        <fieldset className="forge-profile-field"><legend>Worker profile from Settings</legend><div className="forge-worker-profile"><strong>{workerProfile.provider==='codex'?'Codex':workerProfile.provider==='deepseek'?'DeepSeek Harness':'Configured provider'}</strong><span>{modelChoiceName(workerProfile.model)} · {workerProfile.effort}</span><button type="button" className="forge-inline-action" onClick={onOpenSettings}><Settings2 size={13} aria-hidden="true"/> Change in Settings</button></div><small>Snapshotted when this ticket is created; workers are assigned by the orchestrator.</small></fieldset>
+      </div>
+
+      <div className="forge-profile-grid forge-ticket-meta-grid"><label>Local target branch<input aria-label="Local target branch" maxLength={240} value={targetBranch} onChange={event=>setTargetBranch(event.currentTarget.value)}/><small>Pinned at creation. No remote branch is pushed.</small></label><div className="forge-approval-policy"><strong>Approval policy from Settings</strong><span>{approvalName(settings.approvalPolicy)}</span><small>Forge snapshots this policy. Full Access is not supported.</small></div></div>
+
+      <section className="forge-ticket-skills" aria-labelledby="forge-ticket-skills-title"><header><div><h2 id="forge-ticket-skills-title">Additional ticket skills</h2><p>The required AgentMem skill is added separately. Select up to 12 saved Opnex skills for the orchestrator’s assignments.</p></div><button type="button" className="forge-inline-action" onClick={onOpenSkills}>Open Skills library</button></header>
+        {libraryStatus==='loading'?<span role="status">Loading saved skills…</span>:libraryStatus==='unavailable'?<span role="status">The optional skills library is unavailable; you can still create this ticket without additional skills.</span>:librarySkills.length?<div className="forge-skill-options">{librarySkills.map(skill=><label className="forge-skill-option" key={skill.id}><input type="checkbox" checked={selectedSkillIds.includes(skill.id)} disabled={working||(!selectedSkillIds.includes(skill.id)&&selectedSkillIds.length>=12)} onChange={event=>toggleSkill(skill.id,event.currentTarget.checked)}/><span><strong>{skill.name}</strong><small>{skill.description||'Saved skill'} · revision {skill.revision.slice(0,12)}</small></span></label>)}</div>:<span role="status">No saved Opnex skills are available. The required AgentMem skill remains separate.</span>}
+      </section>
+
+      <details className="forge-advanced-limits"><summary>Advanced ticket limits</summary><div className="forge-limit-grid">
+        <label>Maximum active workers<input aria-label="Maximum active workers" type="number" min={1} max={3} value={limits.maxActiveWorkers} disabled={working} onChange={event=>changeLimit('maxActiveWorkers',event.currentTarget.value)}/><small>1–3 workers</small></label>
+        <label>Execution attempts per work item<input aria-label="Execution attempts per work item" type="number" min={1} max={2} value={limits.maxExecutionAttempts} disabled={working} onChange={event=>changeLimit('maxExecutionAttempts',event.currentTarget.value)}/><small>1–2 attempts total, including retries</small></label>
+        <label>Integrator correction rounds<input aria-label="Integrator correction rounds" type="number" min={0} max={3} value={limits.maxCorrectionRounds} disabled={working} onChange={event=>changeLimit('maxCorrectionRounds',event.currentTarget.value)}/><small>0–3 correction rounds</small></label>
+        <label>Total knowledge operations<input aria-label="Total knowledge operations" type="number" min={0} max={100000} value={knowledgeBudget.totalOperations} disabled={working} onChange={event=>changeBudget('totalOperations',event.currentTarget.value)}/><small>Shared across the ticket; default 64</small></label>
+        <label>Default allocation per run<input aria-label="Default allocation per run" type="number" min={0} max={8} value={knowledgeBudget.defaultAllocationOperations} disabled={working} onChange={event=>changeBudget('defaultAllocationOperations',event.currentTarget.value)}/><small>Default 2; maximum 8</small></label>
+        <label>Maximum allocation per run<input aria-label="Maximum allocation per run" type="number" min={0} max={8} value={knowledgeBudget.maxAllocationOperations} disabled={working} onChange={event=>changeBudget('maxAllocationOperations',event.currentTarget.value)}/><small>At most 8 operations</small></label>
+      </div><p className="forge-budget-note">Knowledge limits are instructions unless the selected external skill interface enforces them. Runtime capability labels are shown on the ticket board.</p>{!budgetValid&&<p className="forge-inline-alert" role="alert">The default knowledge allocation cannot exceed the maximum allocation.</p>}</details>
+    </div>
+    <footer className="forge-create-footer"><span>Workspace: {project?.name||'not selected'} · Approval: {approvalName(settings.approvalPolicy)}</span><button type="submit" className="forge-primary-action" disabled={!formReady||working}>{working?'Creating draft…':'Create draft'}</button></footer>
+  </form>;
+}

@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { LocalGitWorkspace } from '../src/ui/LocalGitWorkspace';
 
 vi.mock('../src/ui/api',()=>({api:vi.fn()}));
 import { api } from '../src/ui/api';
 
 const github={available:false,authenticated:false,detail:'GitHub CLI is unavailable.'};
+const projectId='11111111-1111-4111-8111-111111111111';
 function page(repository:string,historyOffset=0,branchOffset=0){
   const branches=Array.from({length:100},(_,i)=>({name:`branch-${String(branchOffset+i).padStart(3,'0')}`,hash:`b${branchOffset+i}`,current:branchOffset===0&&i===0,remote:false}));
   const commits=Array.from({length:100},(_,i)=>({hash:`c${historyOffset+i}`,parents:i===99?[`outside-${historyOffset+100}`]:[`c${historyOffset+i+1}`],author:'Fixture',date:'2026-10-24T00:00:00Z',subject:`${repository} commit ${historyOffset+i}`,refs:[]}));
@@ -19,16 +20,60 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 afterEach(()=>{cleanup();sessionStorage.clear();vi.resetAllMocks();});
 
 describe('native local Git workspace paging and routes',()=>{
-  it('explains that the selected project root must contain the repository root',async()=>{
+  it('previews the non-ignored files and requires a commit message before creating the first commit',async()=>{
+    const preview={status:'unborn',eligible:true,branch:'main',files:[{path:'src/app.ts',status:'working'},{path:'README.md',status:'staged'}],totalFiles:2,empty:false,truncated:false,previewToken:'11111111-1111-4111-8111-111111111112'};let committed=false;
+    vi.mocked(api).mockImplementation(async(url)=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github'))return github as any;
+      if(url.startsWith('/api/git-workspace/initial-commit-preview'))return (committed?{status:'committed',eligible:false,reason:'already-committed',files:[],totalFiles:0,empty:true,truncated:false}:preview) as any;
+      if(url==='/api/git-workspace/initial-commit'){committed=true;return {commit:'a'.repeat(40),branch:'main'} as any;}
+      return {...page('C:/repo'),repositoryStatus:'repository'} as any;
+    });
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/repo"/>);
+    fireEvent.click(await screen.findByRole('button',{name:'Create initial commit'}));
+    const dialog=await screen.findByRole('dialog',{name:'Create initial commit'});
+    expect(dialog.textContent).toContain('2 paths will be included');expect(dialog.textContent).toContain('src/app.ts');expect(dialog.textContent).toContain('README.md');
+    fireEvent.change(within(dialog).getByRole('textbox',{name:'Commit message'}),{target:{value:'Set the project baseline'}});
+    fireEvent.click(within(dialog).getByRole('button',{name:'Create initial commit'}));
+    await waitFor(()=>expect(vi.mocked(api)).toHaveBeenCalledWith('/api/git-workspace/initial-commit',{projectId,previewToken:preview.previewToken,message:'Set the project baseline'}));
+    await waitFor(()=>expect(screen.queryByRole('button',{name:'Create initial commit'})).toBeNull());
+  });
+
+  it('does not show the initial commit action for a repository with existing history',async()=>{
+    vi.mocked(api).mockImplementation(async(url)=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github'))return github as any;
+      if(url.startsWith('/api/git-workspace/initial-commit-preview'))return {status:'committed',eligible:false,reason:'already-committed',files:[],totalFiles:0,empty:true,truncated:false} as any;
+      return {...page('C:/repo'),repositoryStatus:'repository'} as any;
+    });
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/repo"/>);
+    await screen.findByText('C:/repo');
+    expect(screen.queryByRole('button',{name:'Create initial commit'})).toBeNull();
+  });
+
+  it('shows the repository creation action when the selected workspace has no Git repository',async()=>{
+    const workspace={id:projectId,name:'project',projectRoot:'C:/repo/project',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};let status:'missing'|'repository'='missing';
+    vi.mocked(api).mockImplementation(async(url)=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.includes('/github'))return github as any;
+      if(url==='/api/git-workspace/init'){status='repository';return {created:true} as any;}
+      return {...unavailable('Choose a folder inside a Git repository to see local branches and history.'),repositoryStatus:status} as any;
+    });
+    render(<LocalGitWorkspace projectId={projectId} workspaces={[workspace]}/>);
+    fireEvent.click(await screen.findByRole('button',{name:'Create repository'}));
+    await waitFor(()=>expect(vi.mocked(api)).toHaveBeenCalledWith('/api/git-workspace/init',{projectId}));
+  });
+
+  it('explains that the selected workspace root must contain the repository root',async()=>{
     vi.mocked(api).mockImplementation(async url=>{
       if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
       if(url.endsWith('/github')||url.includes('/github?'))return github as any;
-      return unavailable('The Git repository is outside the selected project folder.','C:/repo') as any;
+      return unavailable('The Git repository is outside the selected workspace folder.','C:/repo') as any;
     });
-    render(<LocalGitWorkspace projectRoot="C:/repo/project"/>);
-    expect(await screen.findByText('The Git repository is outside the selected project folder.',{selector:'.git-empty strong'})).toBeTruthy();
-    expect(screen.getByText(/select the repository root itself or a project folder that contains it/i)).toBeTruthy();
-    expect(screen.queryByText(/choose a project folder inside a local Git repository/i)).toBeNull();
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/repo/project"/>);
+    expect(await screen.findByText('The Git repository is outside the selected workspace folder.',{selector:'.git-empty strong'})).toBeTruthy();
+    expect(screen.getByText(/select the repository root itself or a workspace folder that contains it/i)).toBeTruthy();
+    expect(screen.queryByText(/choose a workspace folder inside a local Git repository/i)).toBeNull();
   });
 
   it('keeps the inside-a-repository guidance when the selected folder has no repository',async()=>{
@@ -37,9 +82,9 @@ describe('native local Git workspace paging and routes',()=>{
       if(url.endsWith('/github')||url.includes('/github?'))return github as any;
       return unavailable('Choose a folder inside a Git repository to see local branches and history.') as any;
     });
-    render(<LocalGitWorkspace projectRoot="C:/repo/project"/>);
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/repo/project"/>);
     expect(await screen.findByText('Choose a folder inside a Git repository to see local branches and history.',{selector:'.git-empty strong'})).toBeTruthy();
-    expect(screen.getByText(/choose a project folder inside a local Git repository/i)).toBeTruthy();
+    expect(screen.getByText(/choose a workspace folder inside a local Git repository/i)).toBeTruthy();
   });
 
   it('connects the actual lane node toward commit text and omits the duplicate glyph',async()=>{
@@ -54,7 +99,7 @@ describe('native local Git workspace paging and routes',()=>{
       if(url.endsWith('/github'))return github as any;
       return {...page('C:/fixture'),commits:graphCommits} as any;
     });
-    render(<LocalGitWorkspace projectRoot="C:/fixture"/>);
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/fixture"/>);
     fireEvent.click(await screen.findByRole('button',{name:'History'}));
     await screen.findByText('feature commit');
 
@@ -73,7 +118,7 @@ describe('native local Git workspace paging and routes',()=>{
       if(url.endsWith('/github'))return github as any;
       const query=new URLSearchParams(url.slice(url.indexOf('?')+1));return page('C:/fixture',Number(query.get('offset')),Number(query.get('branchOffset'))) as any;
     });
-    render(<LocalGitWorkspace/>);
+    render(<LocalGitWorkspace projectId={projectId}/>);
     fireEvent.click(await screen.findByRole('button',{name:/Branches/}));
     fireEvent.click(await screen.findByRole('button',{name:'Load next 100 branches'}));
     await waitFor(()=>expect(document.querySelectorAll('.git-branch-row')).toHaveLength(200));
@@ -83,8 +128,8 @@ describe('native local Git workspace paging and routes',()=>{
     fireEvent.click(screen.getByRole('button',{name:/Branches/}));
     expect(document.querySelectorAll('.git-branch-row')).toHaveLength(200);
     const callUrls=vi.mocked(api).mock.calls.map(([url])=>url as string);
-    expect(callUrls).toContain('/api/git-workspace?offset=0&branchOffset=100');
-    expect(callUrls).toContain('/api/git-workspace?offset=100&branchOffset=100');
+    expect(callUrls).toContain(`/api/git-workspace?projectId=${projectId}&offset=0&branchOffset=100`);
+    expect(callUrls).toContain(`/api/git-workspace?projectId=${projectId}&offset=100&branchOffset=100`);
     expect(new Set([...document.querySelectorAll('.git-branch-row strong')].map(el=>el.textContent)).size).toBe(200);
     fireEvent.click(screen.getByRole('button',{name:'History'}));
     expect(document.querySelectorAll('.git-commit-row')).toHaveLength(200);
@@ -109,15 +154,15 @@ describe('native local Git workspace paging and routes',()=>{
     expect(oldCall?.[2]?.aborted).toBe(true);
   });
 
-  it('uses the Git tab project-root snapshot only when there is no task route',async()=>{
+  it('uses the selected workspace identity only when there is no task route',async()=>{
     vi.mocked(api).mockImplementation(async url=>{
       if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
       if(url.endsWith('/github'))return github as any;
       return page('D:/fixture root') as any;
     });
-    render(<LocalGitWorkspace projectRoot="D:/fixture root"/>);
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="D:/fixture root"/>);
     await screen.findByText('D:/fixture root');
-    expect(vi.mocked(api).mock.calls.map(([url])=>url)).toContain('/api/git-workspace?root=D%3A%2Ffixture%20root&offset=0&branchOffset=0');
+    expect(vi.mocked(api).mock.calls.map(([url])=>url)).toContain(`/api/git-workspace?projectId=${projectId}&offset=0&branchOffset=0`);
 
     cleanup();vi.resetAllMocks();
     vi.mocked(api).mockImplementation(async url=>{
@@ -138,7 +183,7 @@ describe('native local Git workspace paging and routes',()=>{
       if(url.endsWith('/github'))return github as any;
       return page('C:/fixture') as any;
     });
-    render(<LocalGitWorkspace projectRoot="C:/fixture" onOpenBrowserTab={openBrowserTab}/>);
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/fixture" onOpenBrowserTab={openBrowserTab}/>);
     const signIn=await screen.findByRole('button',{name:'Sign in with GitHub'});
     await waitFor(()=>expect((signIn as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(signIn);

@@ -1,7 +1,7 @@
 {
   "name": "opnex",
   "version": "1.1.2",
-  "description": "Local Codex delegation harness with app-server and AgentMem integrations",
+  "description": "Local Codex request-routing and delegation app with project workspaces",
   "main": "dist-server/index.js",
   "bin": {
     "opnex": "bin/opnex.js",

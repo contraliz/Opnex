@@ -1,29 +1,37 @@
 import { createRef, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertCircle, BookOpen, Check, ChevronDown, ChevronRight, Command, Copy, Database, FileText, Folder, FolderPlus, GitBranch, Globe, Keyboard, Maximize2, MessageSquarePlus, Minus, PanelLeft, PanelRight, Pin, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Terminal, X } from 'lucide-react';
+import { Activity, AlertCircle, BookOpen, Check, ChevronDown, ChevronRight, Command, Copy, Database, FileText, Folder, FolderPlus, GitBranch, Globe, Keyboard, Maximize2, MessageSquarePlus, Minus, PanelLeft, PanelRight, Pin, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Terminal, Users, X } from 'lucide-react';
 import { api, bootstrap, KERNEL_PROTOCOL_VERSION } from './api';
 import { Markdown } from './Markdown';
 import Composer from './Composer';
 import { prepareMarkdownSubmission } from './LiveMarkdownEditor';
 import SettingsDialog from './SettingsDialog';
+import { ProjectEditorDialog } from './ProjectEditorDialog';
 import { SessionDialog, SessionRow } from './SessionControls';
 import { HeadsUpPanel } from './HeadsUpPanel';
 import { PassGitDiff } from './PassGitDiff';
 import { RecruitmentTeamPanel } from './RecruitmentTeamPanel';
+import { ToolCallLogView, toolCallLogTitle } from './ToolCallLogView';
+import { ForgeBoard } from './ForgeBoard';
+import ForgeSessionCreate from './ForgeSessionCreate';
+import { respondForgeApproval } from './api';
+import './Forge.css';
 import { EmbeddedWorkspace } from './EmbeddedWorkspace';
 import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitPane, type SessionPane } from './paneGroups';
 import { formatBrowserAnnotation } from './browser-annotation';
 import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
-import type { AppState, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, LiveActivity, Project, Runtime, Settings, Task, TaskPass, Message, TaskAttachment } from '../types';
+import { workspaceOptionLabel } from './workspace-label';
+import type { AppState, ApprovalRequest, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, ExecutionProfile, ForgeTicket, LiveActivity, PassUsage, Project, Runtime, Settings, Task, TaskPass, Message, ReasoningTurn, TaskAttachment } from '../types';
 import { qualityCorrectionPlannerInFlight, qualityLoopCanAcceptFindings, qualityLoopResumeAction } from '../../server/quality-loop-resume.js';
+import { formatReadOnlyWorkerResults } from '../../server/read-only-results.js';
 const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
 
 const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
-const fallbackSettings:Settings={projectRoot:'',agentmemProjectId:'',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'};
+const fallbackSettings:Settings={orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request',executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},mcpServers:[]};
 const stamp=(s:string)=>new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(new Date(s));
 const auditStamp=(s:string)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(s));
-const rootLabel=(root?:string)=>root?.split(/[\\/]/).filter(Boolean).at(-1)||'Choose project root';
 const makePaneId=()=>`pane:${Date.now()}:${Math.random().toString(36).slice(2,7)}`;
 const makeFallbackTab=()=>`new:${Date.now()}:${Math.random().toString(36).slice(2,6)}`;
+function ExpandableSessionRows({expanded,children}:{expanded:boolean;children:React.ReactNode}){return <div className={`project-session-rows ${expanded?'open':'closed'}`} aria-hidden={!expanded} inert={!expanded}><div className="project-session-rows-content">{children}</div></div>;}
 async function encodeAttachments(files:FileList|null,existing:TaskAttachment[]):Promise<TaskAttachment[]>{
   if(!files?.length)return [];
   const selected=Array.from(files);
@@ -41,6 +49,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [newSessionTypes, setNewSessionTypes] = useState<Record<string, 'conversation' | 'forge'>>({});
   const [qualityModes,setQualityModes]=useState<Record<string,boolean>>({});
   const [pendingAttachments, setPendingAttachments] = useState<Record<string, TaskAttachment[]>>({});
   const [recruitmentSteerTargets, setRecruitmentSteerTargets] = useState<Record<string,string>>({});
@@ -64,14 +73,6 @@ export default function App() {
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [sessionDialogMounted, setSessionDialogMounted] = useState(false);
   const [projectEditor, setProjectEditor] = useState<Project | 'new' | null>(null);
-  const [projectName, setProjectName] = useState('');
-  const [projectRootDraft, setProjectRootDraft] = useState('');
-  const [projectAgentMemId, setProjectAgentMemId] = useState('');
-  const [projectAgentMemEnabled, setProjectAgentMemEnabled] = useState(false);
-  const [projectAgentMemAuto, setProjectAgentMemAuto] = useState(false);
-  const [projectPinned, setProjectPinned] = useState(false);
-  const [projectSaving, setProjectSaving] = useState(false);
-  const [projectError, setProjectError] = useState('');
   const [showAllProjects, setShowAllProjects] = useState<Record<string, boolean>>({});
   const [projectMoveError, setProjectMoveError] = useState('');
   const [projectDropTarget, setProjectDropTarget] = useState<string|null>(null);
@@ -83,7 +84,6 @@ export default function App() {
     const frame=requestAnimationFrame(()=>window.dispatchEvent(new Event('opnex:shell-layout')));
     return()=>cancelAnimationFrame(frame);
   },[sidebarCollapsed,sidebarWidth]);
-  const [retryingPassId, setRetryingPassId] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState('');
   const paneInputRefs = useRef<Record<string, any>>({});
@@ -131,12 +131,14 @@ export default function App() {
   const headsUpTriggerRef = (id: string) => headsUpTriggerRefs.current[id] ??= createRef<HTMLButtonElement>();
   const setPaneTabs = (paneId: string, value: string[] | ((current: string[]) => string[])) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, tabs: typeof value === 'function' ? value(pane.tabs) : value } : pane));
   const setPaneActive = (paneId: string, tab: string) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, activeTab: tab } : pane));
-  const refresh = async () => {
+  const refresh = async (): Promise<AppState | null> => {
     try {
       const value = await api('/api/v1/snapshot');
       applyKernelSnapshot(value);
+      return value.state || null;
     } catch (cause) {
       setError(String(cause));
+      return null;
     }
   };
   const queueContextSelection=(url:string,body:unknown)=>{const operation=contextSelectionQueue.current.then(()=>api(url,body));contextSelectionQueue.current=operation.then(()=>undefined,()=>undefined);return operation;};
@@ -146,12 +148,13 @@ export default function App() {
     setSettingsOpen(true);
   };
   const openProjectEditor = (project:Project|'new') => {
-    setProjectEditor(project);setProjectName(project==='new'?'':project.name);setProjectRootDraft(project==='new'?(selectedProject?.projectRoot||state?.settings.projectRoot||''):project.projectRoot);setProjectAgentMemId(project==='new'?'':project.agentmemProjectId);setProjectAgentMemEnabled(project==='new'?false:project.agentmemEnabled);setProjectAgentMemAuto(project==='new'?false:project.agentmemAutoSetup);setProjectPinned(project==='new'?false:project.pinned);setProjectError('');
+    setProjectEditor(project);
   };
-  const saveProject = async(event:React.FormEvent) => {
-    event.preventDefault();if(!projectEditor||projectSaving)return;setProjectSaving(true);setProjectError('');
-    const id=projectEditor==='new'?crypto.randomUUID():projectEditor.id;
-    try{await api('/api/projects',{id,name:projectName,projectRoot:projectRootDraft,agentmemProjectId:projectAgentMemId,agentmemEnabled:projectAgentMemEnabled,agentmemAutoSetup:projectAgentMemAuto,pinned:projectPinned});if(projectEditor==='new'){await queueContextSelection('/api/projects/select',{projectId:id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}await refresh();setProjectEditor(null);}catch(cause){setProjectError(String(cause));}finally{setProjectSaving(false);}
+  const projectSaved = async(project:Project,duplicate:boolean) => {
+    const shouldSelect=projectEditor==='new'||duplicate;
+    setProjectEditor(null);
+    if(shouldSelect){setState(current=>current?{...current,selectedProjectId:project.id}:current);await queueContextSelection('/api/projects/select',{projectId:project.id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}
+    await refresh();
   };
   const selectProject = async(id:string|null) => {setState(current=>current?{...current,selectedProjectId:id}:current);try{await queueContextSelection('/api/projects/select',{projectId:id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}catch(cause){setError(String(cause));await refresh();}};
   const toggleProjectExpanded = (id:string) => {const current=projectExpandedRef.current;const expanded=!current.includes(id);const next=expanded?[...current,id]:current.filter(value=>value!==id);projectExpandedRef.current=next;setState(value=>value?{...value,expandedProjectIds:next}:value);projectExpansionQueue.current=projectExpansionQueue.current.then(()=>api(`/api/projects/${id}/expanded`,{expanded})).then(()=>undefined).catch(cause=>setError(String(cause)));};
@@ -203,10 +206,12 @@ export default function App() {
       : contextTabId && workspaceTabKind(contextTabId) === 'session' ? contextTabId : null;
     const originTaskId = originTabId && !originTabId.startsWith('new:') ? originTabId : null;
     const originTask = originTaskId ? taskForTab(originTaskId) : null;
-    const projectRoot = currentWorkspace?.projectRoot || originTask?.userRoot || selectedProject?.projectRoot || state?.settings.projectRoot || '';
+    const projectId = currentWorkspace?.projectId || originTask?.projectId || selectedProject?.id || '';
+    const projectRoot = currentWorkspace?.projectRoot || originTask?.userRoot || selectedProject?.projectRoot || '';
     const id = createWorkspaceTabId(kind, Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9));
     const record = createWorkspaceTabRecord(kind, id, {
       originTabId,
+      projectId,
       projectRoot,
       ...(kind === 'browser' && initialUrl ? { initialUrl } : {}),
       ...(kind === 'git' && initialUrl ? { focusUrl: initialUrl } : {}),
@@ -414,6 +419,7 @@ export default function App() {
     const task = taskForTab(tab);
     const qaEnabled=qualityModes[tab]??task?.passes?.find(pass=>pass.id===task.currentPassId)?.qualityLoop?.enabled??false;
     if (sendingRef.current.has(tab) || (!files.length && submitted === null)) return;
+    if(!task&&(!selectedProject||selectedProject.needsLocation)){setTabError(tab,'Select a workspace with a working directory before starting a session.');return;}
     const message = submitted || '';
     sendingRef.current.add(tab);
     setSendingTabs(current => ({ ...current, [tab]: true }));
@@ -424,7 +430,7 @@ export default function App() {
       else if (task) await api('/api/tasks/' + task.id + '/messages', { message, attachments: files, qaEnabled, ...(recruitmentSteerTargets[task.id]?{recruitmentWorkerId:recruitmentSteerTargets[task.id]}:{}) });
       else {
         await contextSelectionQueue.current;
-        const created = await api('/api/tasks', { message, attachments: files, qaEnabled });
+        const created = await api('/api/tasks', { message, attachments: files, qaEnabled, projectId:selectedProject!.id });
         if (created?.id) {
           setPanes(current => current.map(pane => pane.tabs.includes(tab)
             ? { ...pane, tabs: pane.tabs.map(item => item === tab ? created.id : item), activeTab: pane.activeTab === tab ? created.id : pane.activeTab }
@@ -458,49 +464,41 @@ export default function App() {
     try{await api(`/api/tasks/${taskId}/qa/${action}`,{});await refresh();}
     catch(cause){setTabError(taskId,String(cause));}
   };
-  const retryAgentMemFor = async (taskId: string, passId: string) => {
-    setRetryingPassId(passId);
-    clearTabError(taskId);
-    try {
-      await api('/api/tasks/' + taskId + '/passes/' + passId + '/agentmem/retry', {});
-      await refresh();
-    } catch (cause) {
-      setTabError(taskId, String(cause));
-    } finally {
-      setRetryingPassId('');
-    }
-  };
   const approveTask = async (taskId: string, requestId: string | number, decision: 'accept' | 'decline' | 'cancel', content?:Record<string,unknown>) => {
     try {
-      await api('/api/tasks/' + taskId + '/approval', { requestId, decision, ...(content?{content}:{}) });
-      await refresh();
+      const task=state?.tasks.find(row=>row.id===taskId);
+      if(task?.sessionType==='forge'&&task.forge){
+        const ticket=await respondForgeApproval(taskId,requestId,{decision,...(content?{content}:{})});
+        setState(current=>current?{...current,tasks:current.tasks.map(row=>row.id===taskId?{...row,forge:ticket}:row)}:current);
+      }else{
+        await api('/api/tasks/' + taskId + '/approval', { requestId, decision, ...(content?{content}:{}) });
+        await refresh();
+      }
     } catch (cause) {
       setTabError(taskId, String(cause));
     }
   };
   const updateSettings = (patch: Partial<Settings>) => {
-    if (!state) return Promise.resolve();
+    if (!state) return Promise.resolve(false);
     const next = { ...(settingsDraft.current || state.settings), ...patch };
     settingsDraft.current = next;
-    settingsQueue.current = settingsQueue.current.then(async () => {
+    const operation = settingsQueue.current.then(async () => {
       try {
         await api('/api/settings', next);
         await refresh();
+        return true;
       } catch (cause) {
         setError(String(cause));
+        return false;
       } finally {
         if (settingsDraft.current === next) settingsDraft.current = null;
       }
     });
-    return settingsQueue.current;
+    settingsQueue.current = operation.then(() => undefined, () => undefined);
+    return operation;
   };
-  const setModel = async (id: string) => {
-    const found = models.find(model => model.id === id);
-    if (!found) return;
-    const currentEffort = state?.settings.orchestratorEffort || '';
-    const effort = found.efforts.includes(currentEffort) ? currentEffort : found.efforts.includes('high') ? 'high' : found.efforts[0] || '';
-    await updateSettings({ orchestratorModel: id, orchestratorEffort: effort });
-  };
+  const saveMcpServers=(servers:Settings['mcpServers'])=>updateSettings({mcpServers:servers});
+  const updateOrchestratorProfile=(profile:ExecutionProfile)=>void updateSettings({orchestratorModel:profile.model,orchestratorEffort:profile.effort});
   const renameSession = async (taskId: string, title: string) => {
     try {
       await api('/api/tasks/' + taskId + '/rename', { title });
@@ -537,10 +535,7 @@ export default function App() {
         const id = value.state.activeTaskId;
         setPanes([{ id: 'pane:root', tabs: [id], activeTab: id, weight: 1 }]);
       }
-      if (!value.state.settings.projectRoot && !value.state.selectedProjectId) {
-        setSettingsMounted(true);
-        setSettingsOpen(true);
-      }
+      if(!value.state.projects.length)openProjectEditor('new');
       setLoading(false);
     }).catch(cause => {
       if (alive) {
@@ -642,31 +637,32 @@ export default function App() {
 
   if (loading) return <div className="boot"><img className="boot-brand" src="/opnex-icon-grid-1_5-margin.svg" alt="Opnex"/><span>Starting Opnex</span></div>;
   const matchingTasks=(state?.tasks||[]).filter(task=>!query.trim()||task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0));
-  const renderSessionRows=(tasks:Task[])=>tasks.map(task=><SessionRow key={task.id} task={task} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onMoveStart={dragSession} projects={state?.projects||[]} onMove={moveSessionToProject}/>);
+  const renderSessionRows=(tasks:Task[])=>tasks.map(task=><SessionRow key={task.id} task={task} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onMoveStart={task.sessionType==='forge'?undefined:dragSession} projects={state?.projects||[]} onMove={task.sessionType==='forge'?undefined:moveSessionToProject}/>);
   const orderedProjects=[...(state?.projects||[])].sort((a,b)=>Number(b.pinned)-Number(a.pinned)||a.name.localeCompare(b.name));
   const unclassifiedTasks=matchingTasks.filter(task=>!task.projectId||!(state?.projects||[]).some(project=>project.id===task.projectId));
-  const projectSessionSection=(project:Project)=>{const tasks=matchingTasks.filter(task=>task.projectId===project.id);const expanded=(state?.expandedProjectIds||[]).includes(project.id);const shown=showAllProjects[project.id]?tasks:tasks.slice(0,5);return <section className={`project-session-group ${expanded?'expanded':''} ${projectDropTarget===project.id?'is-drop-target':''}`} key={project.id} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget(project.id);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,project.id)}><div className="project-group-heading"><button className="project-expand" aria-label={`${expanded?'Collapse':'Expand'} ${project.name}`} aria-expanded={expanded} onClick={()=>toggleProjectExpanded(project.id)}>{expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>{project.name}</span><small>{tasks.length}</small></button><button className="project-group-pin" aria-label={`${project.pinned?'Unpin':'Pin'} ${project.name}`} title={project.pinned?'Unpin project':'Pin project'} onClick={()=>void api(`/api/projects/${project.id}/pin`,{pinned:!project.pinned}).then(refresh).catch(cause=>setError(String(cause)))}><Pin size={12}/></button><button className="project-group-edit" aria-label={`Configure ${project.name}`} title={`Configure ${project.name}`} onClick={()=>openProjectEditor(project)}><Settings2 size={13}/></button></div>{expanded&&<div className="project-session-rows">{renderSessionRows(shown)}{tasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,[project.id]:!current[project.id]}))}>{showAllProjects[project.id]?'Show recent five':`Show all ${tasks.length} sessions`}</button>}{!tasks.length&&<span className="project-empty">Drop a session here</span>}</div>}</section>;};
+  const projectSessionSection=(project:Project)=>{const tasks=matchingTasks.filter(task=>task.projectId===project.id);const expanded=(state?.expandedProjectIds||[]).includes(project.id);const shown=showAllProjects[project.id]?tasks:tasks.slice(0,5);const label=workspaceOptionLabel(project,state?.projects||[]);return <section className={`project-session-group ${expanded?'expanded':''} ${projectDropTarget===project.id?'is-drop-target':''}`} key={project.id} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget(project.id);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,project.id)}><div className="project-group-heading"><button className="project-expand" aria-label={`${expanded?'Collapse':'Expand'} workspace ${label}`} title={project.projectRoot} aria-expanded={expanded} onClick={()=>toggleProjectExpanded(project.id)}>{expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>{label}</span><small>{tasks.length}</small></button><button className="project-group-pin" aria-label={`${project.pinned?'Unpin':'Pin'} workspace ${label}`} title={project.pinned?'Unpin workspace':'Pin workspace'} onClick={()=>void api(`/api/projects/${project.id}/pin`,{pinned:!project.pinned}).then(refresh).catch(cause=>setError(String(cause)))}><Pin size={12}/></button><button className="project-group-edit" aria-label={`Configure workspace ${label}`} title={project.projectRoot} onClick={()=>openProjectEditor(project)}><Settings2 size={13}/></button></div><ExpandableSessionRows expanded={expanded}>{renderSessionRows(shown)}{tasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,[project.id]:!current[project.id]}))}>{showAllProjects[project.id]?'Show recent five':`Show all ${tasks.length} sessions`}</button>}{!tasks.length&&<span className="project-empty">Drop a session here</span>}</ExpandableSessionRows></section>;};
   const unclassifiedExpanded=(state?.expandedProjectIds??['unclassified']).includes('unclassified');
 
   const paneComposer = (tab: string, task: Task | null, paneId:string) => {
     const value = drafts[tab] || '';
     const files = pendingAttachments[tab] || [];
     const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
-    const disabled = !value.trim() && !files.length || !!sendingTabs[tab] || !runtime;
+    const disabled = (!value.trim() && !files.length) || !!sendingTabs[tab] || !runtime || (!task&&(!selectedProject||selectedProject.needsLocation));
+    const selectedOrchestrator:ExecutionProfile={provider:'codex',model:state?.settings.orchestratorModel||fallbackSettings.orchestratorModel,effort:(state?.settings.orchestratorEffort||fallbackSettings.orchestratorEffort) as ExecutionProfile['effort']};
     return <Composer
       value={value}
       setValue={next => setDrafts(current => ({ ...current, [tab]: next }))}
       submit={() => void submitTab(tab)}
       disabled={disabled}
-      hint={task?.phase === 'escalated' ? 'A decision will be sent to this session’s orchestrator…' : 'Ask a question or describe work for the router to classify.'}
+      hint={task?.phase === 'escalated' ? 'A decision will be sent to this session’s orchestrator…' : !task&&!selectedProject ? 'Choose or create a workspace before starting a session.' : !task&&selectedProject?.needsLocation ? 'Choose a working directory for this workspace before starting a session.' : 'Ask a question or describe work for the router to classify.'}
       inputRef={tabInputRef(tab)}
-      model={state?.settings.orchestratorModel || 'gpt-6-sol'}
-      effort={state?.settings.orchestratorEffort || 'high'}
+      executionProfile={selectedOrchestrator}
+      projectId={task?.projectId||selectedProject?.id}
+      connectionState={runtime?.codex.state==='connected'?'connected':'offline'}
       approvalPolicy={state?.settings.approvalPolicy || 'on-request'}
       models={models}
       configDisabled={busy || !!sendingTabs[tab] || task?.phase==='escalated'}
-      onModelChange={value => void setModel(value)}
-      onEffortChange={value => void updateSettings({ orchestratorEffort: value })}
+      onExecutionProfileChange={updateOrchestratorProfile}
       onApprovalChange={value => void updateSettings({ approvalPolicy: value })}
       qaEnabled={qualityModes[tab]??task?.passes?.find(pass=>pass.id===task.currentPassId)?.qualityLoop?.enabled??false}
       onQaChange={enabled=>setQualityModes(current=>({...current,[tab]:enabled}))}
@@ -677,18 +673,25 @@ export default function App() {
       onOpenSkills={()=>openSkillsTab(paneId)}
     />;
   };
+  const renderNewSessionType = (tab:string) => {
+    const selectedType=newSessionTypes[tab]||'conversation';
+    return <div className="new-session-type" role="group" aria-label="New session type">
+      <button type="button" aria-pressed={selectedType==='conversation'} onClick={()=>setNewSessionTypes(current=>({...current,[tab]:'conversation'}))}>Conversation</button>
+      <button type="button" aria-pressed={selectedType==='forge'} onClick={()=>setNewSessionTypes(current=>({...current,[tab]:'forge'}))}>Forge</button>
+    </div>;
+  };
   const renderNewTabActions = (pane: SessionPane, tab: string) => (
     <div className="new-tab-actions">
       <button onClick={() => openNewTabInPane(pane.id)}><MessageSquarePlus size={14} />SESSION</button>
       <button onClick={() => openWorkspaceTab('browser', pane.id, tab)}><Globe size={14} />BROWSER</button>
       <button onClick={() => openWorkspaceTab('git', pane.id, tab)}><GitBranch size={14} />GIT</button>
-      <div className="new-tab-context"><Folder size={12}/><span>{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span><span>·</span><span>Codex {runtime?.codex.state==='connected'?'connected':'offline'}</span><span>·</span><span>{selectedProject?selectedProject.agentmemEnabled?'AgentMem enabled · service '+(runtime?.agentmem.connected?'connected':'offline'):'AgentMem disabled':state?.settings.agentmemProjectId?'AgentMem enabled · service '+(runtime?.agentmem.connected?'connected':'offline'):'AgentMem disabled'}</span></div>
+      <div className="new-tab-context"><Folder size={12}/><span>{selectedProject?workspaceOptionLabel(selectedProject,state?.projects||[]):'Choose a workspace'}</span></div>
     </div>
   );
   const renderSessionPaneActions = (tab: string, task: Task | null) => {
     const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
     return <div className="session-pane-actions" data-session-actions-for={tab} role="group" aria-label={(task?.title || 'New session') + ' controls'}>
-      {busy && <button className="session-pane-action session-pane-stop" aria-label="Stop" title="Stop this session" onClick={() => void stopTask(tab)}><Square size={13} fill="currentColor" /></button>}
+      {busy && task?.sessionType!=='forge' && <button className="session-pane-action session-pane-stop" aria-label="Stop" title="Stop this session" onClick={() => void stopTask(tab)}><Square size={13} fill="currentColor" /></button>}
       <button ref={headsUpTriggerRef(tab)} className="session-pane-action details-toggle heads-up-toggle" aria-label="Heads-up" title="Heads-up"
         aria-expanded={!!headsUpOpen[tab]} onClick={() => setHeadsUpOpen(current => ({ ...current, [tab]: !current[tab] }))}><PanelRight size={16} /></button>
     </div>;
@@ -741,11 +744,6 @@ export default function App() {
         </div>;
       })}
       <button className="new-tab" aria-label={split ? index === 1 ? 'New session in side pane' : 'New session in pane ' + (index + 1) : 'Open new session tab'} onClick={() => openNewTabInPane(pane.id)}><Plus size={15} /></button>
-      {windowControls && (!split || index === panes.length - 1) && <div className="window-controls" role="group" aria-label="Window controls">
-        <button aria-label="Minimize window" title="Minimize" onClick={() => void windowControls.minimize()}><Minus size={14} /></button>
-        <button aria-label={windowMaximized ? 'Restore window' : 'Maximize window'} title={windowMaximized ? 'Restore' : 'Maximize'} onClick={() => void windowControls.toggleMaximize()}>{windowMaximized ? <Copy size={12} /> : <Maximize2 size={12} />}</button>
-        <button className="window-close" aria-label="Close window" title="Close" onClick={() => void windowControls.close()}><X size={15} /></button>
-      </div>}
     </div>;
   };
   const renderWorkspaceTab = (tab: string, pane: SessionPane, index: number) => {
@@ -754,7 +752,8 @@ export default function App() {
     const task = kind === 'session' ? taskForTab(tab) : null;
     const record = workspaceTabs[tab];
     const contextTask = record?.originTaskId ? taskForTab(record.originTaskId) : null;
-    const workspaceRoot = record?.originTaskId ? (contextTask?.userRoot || record.projectRoot) : (selectedProject?.projectRoot || record?.projectRoot || state?.settings.projectRoot || '');
+    const workspaceRoot = record?.originTaskId ? (contextTask?.userRoot || record.projectRoot) : (record?.projectRoot || selectedProject?.projectRoot || '');
+    const workspaceProjectId = record?.originTaskId ? (contextTask?.projectId || record.projectId) : (record?.projectId || selectedProject?.id || '');
     const isSession = kind === 'session';
     const baseClass = (index > 0 ? 'session-pane side-session-view ' : 'task-view ') + 'pane-body ' + (!task && isSession ? 'new-tab-view ' : '') + (sessionArrival === tab ? 'session-entering ' : '') + (selected ? 'workspace-tab-active ' : '') + (dropTarget?.paneId === pane.id ? 'drop-half-' + dropTarget.half : '');
     const row = panes.length > 1 ? 2 : 1;
@@ -768,7 +767,7 @@ export default function App() {
         setDropTarget({ paneId: pane.id, half: event.clientX < rect.left + rect.width / 2 ? 'left' : 'right' });
       }
     };
-    if(kind==='skills')return <div key={tab} data-workspace-tab={tab} data-tab-kind="skills" className={baseClass+' skill-library-tab'} style={{gridColumn:column,gridRow:row}} hidden={!selected} aria-hidden={!selected} inert={!selected} onClick={()=>setFocusedPaneId(pane.id)}><Suspense fallback={<div className="skill-library-loading" role="status">Loading skills…</div>}><SkillsLibraryPage active={selected}/></Suspense></div>;
+    if(kind==='skills')return <div key={tab} data-workspace-tab={tab} data-tab-kind="skills" className={baseClass+' skill-library-tab'} style={{gridColumn:column,gridRow:row}} hidden={!selected} aria-hidden={!selected} inert={!selected} onClick={()=>setFocusedPaneId(pane.id)}><Suspense fallback={<div className="skill-library-loading" role="status">Loading library…</div>}><SkillsLibraryPage active={selected} settings={state?.settings||fallbackSettings} saveMcpServers={saveMcpServers}/></Suspense></div>;
     if (kind === 'browser' || kind === 'git') {
       return <div key={tab} data-workspace-tab={tab} data-tab-kind={kind} className={baseClass + ' peer-workspace-pane ' + (kind === 'browser' ? 'browser-peer-tab' : 'git-peer-tab')}
         style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
@@ -776,13 +775,21 @@ export default function App() {
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
         onDrop={event => dropPane(event, pane.id)}>
         <EmbeddedWorkspace mode={kind === 'browser' ? 'browser' : 'github'} task={contextTask} placement="full" docked={false}
-          workspaceId={tab} active={selected} sidebarCollapsed={sidebarCollapsed} sidebarWidth={sidebarWidth} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={workspaceRoot}
+          workspaceId={tab} active={selected} sidebarCollapsed={sidebarCollapsed} sidebarWidth={sidebarWidth} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={workspaceRoot} projectId={workspaceProjectId} workspaces={state?.projects||[]}
           onOpenBrowserTab={url => openWorkspaceTab('browser', pane.id, tab, url)}
           onSummary={() => returnToOrigin(record)}
           onAnnotation={(annotation, comment) => record && addBrowserAnnotation(record, annotation, comment)} />
       </div>;
     }
-    const taskView = task ? <div className="conversation" ref={element => { sessionScrollRefs.current[tab] = element; }}
+    const taskView = task?.sessionType==='forge' ? <div className="conversation forge-session-view" aria-label="Forge session" ref={element => { sessionScrollRefs.current[tab] = element; }}
+      onScroll={event => {
+        const element = event.currentTarget;
+        nearBottom.current[tab] = element.scrollHeight - element.scrollTop - element.clientHeight < 180;
+      }}>
+      {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
+      {task.approvalRequests?.map(request => <ForgeApprovalCard key={String(request.requestId)} ticket={task.forge} request={request} onDecision={(decision,content) => void approveTask(task.id, request.requestId, decision,content)} />)}
+      {task.forge?<ForgeBoard ticket={task.forge} task={task} onTicketChange={ticket=>setState(current=>current?{...current,tasks:current.tasks.map(row=>row.id===task.id?{...row,forge:ticket}:row)}:current)}/>:<div role="status" className="forge-empty-state">Forge ticket details are not present in this saved session snapshot. Refresh the session or restart the local service before continuing.</div>}
+    </div> : task ? <div className="conversation" ref={element => { sessionScrollRefs.current[tab] = element; }}
       onScroll={event => {
         const element = event.currentTarget;
         nearBottom.current[tab] = element.scrollHeight - element.scrollTop - element.clientHeight < 180;
@@ -793,17 +800,27 @@ export default function App() {
         active={pass.id === task.currentPassId} task={task}
         onQualityAction={action=>void qualityAction(task.id,action)}
         selectedSteerWorkerId={pass.recruitmentTeam?recruitmentSteerTargets[task.id]:undefined} onSelectSteerWorker={workerId=>setRecruitmentSteerTargets(current=>({...current,[task.id]:workerId}))}
-        assignmentExpanded={expanded['assignment:' + pass.id] ?? false} receiptExpanded={expanded['receipt:' + pass.id] ?? false}
-        workerActivityExpanded={expanded['workerActivity:' + pass.id] ?? false} agentmemAuditExpanded={expanded['agentmemAudit:' + pass.id] ?? false} retrying={retryingPassId === pass.id}
-        onRetryAgentMem={() => void retryAgentMemFor(task.id, pass.id)}
+        assignmentExpanded={expanded['assignment:' + pass.id] ?? false} receiptExpanded={expanded['receipt:' + pass.id] ?? false} recruitmentTeamExpanded={expanded['recruitmentTeam:' + pass.id] ?? false}
+        workerActivityExpanded={expanded['workerActivity:' + pass.id] ?? false} toolCallsExpanded={expanded['toolCalls:' + pass.id] ?? false} agentmemAuditExpanded={expanded['agentmemAudit:' + pass.id] ?? false}
         toggleAssignment={() => setExpanded(current => ({ ...current, ['assignment:' + pass.id]: !current['assignment:' + pass.id] }))}
         toggleReceipt={() => setExpanded(current => ({ ...current, ['receipt:' + pass.id]: !current['receipt:' + pass.id] }))}
+        toggleRecruitmentTeam={() => setExpanded(current => ({ ...current, ['recruitmentTeam:' + pass.id]: !current['recruitmentTeam:' + pass.id] }))}
         toggleWorkerActivity={() => setExpanded(current => ({ ...current, ['workerActivity:' + pass.id]: !current['workerActivity:' + pass.id] }))}
+        toggleToolCalls={() => setExpanded(current => ({ ...current, ['toolCalls:' + pass.id]: !current['toolCalls:' + pass.id] }))}
         toggleAgentMemAudit={() => setExpanded(current => ({ ...current, ['agentmemAudit:' + pass.id]: !current['agentmemAudit:' + pass.id] }))} />)}
       {task.approvalRequests?.map(request => <ApprovalCard key={String(request.requestId)} request={request} onDecision={(decision,content) => void approveTask(task.id, request.requestId, decision,content)} />)}
-    </div> : <div className="new-tab-center">
+    </div> : <div className={`new-tab-center ${newSessionTypes[tab]==='forge'?'forge-new-tab-center':''}`}>
       {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
-      <div className="composer-dock">{paneComposer(tab, null, pane.id)}</div>
+      {renderNewSessionType(tab)}
+      {newSessionTypes[tab]==='forge'?<ForgeSessionCreate project={selectedProject} settings={state?.settings||fallbackSettings} models={models} onOpenSettings={openSettings} onOpenSkills={()=>openSkillsTab(pane.id)} onOpenWorkspace={()=>openProjectEditor(selectedProject||'new')} onCreated={async ticket=>{
+        const snapshot=await refresh();
+        const created=snapshot?.tasks.find(row=>row.id===ticket.id);
+        if(!created){setTabError(tab,'The Forge draft was saved, but the session snapshot does not include it yet. Refresh the session to open its board.');return;}
+        setPanes(current=>current.map(group=>group.tabs.includes(tab)?{...group,tabs:group.tabs.map(item=>item===tab?created.id:item),activeTab:group.activeTab===tab?created.id:group.activeTab}:group));
+        updateWorkspaceOrigins(tab,created.id);makeTabArrival(created.id);
+        setNewSessionTypes(current=>({...current,[created.id]:'forge'}));
+        try{await queueContextSelection('/api/tasks/'+created.id+'/select',{});}catch(cause){setTabError(created.id,String(cause));}
+      }}/>:<div className="composer-dock">{paneComposer(tab, null, pane.id)}</div>}
       {renderNewTabActions(pane, tab)}
     </div>;
     return <div key={tab} data-workspace-tab={tab} data-tab-kind="session" className={baseClass} style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
@@ -811,9 +828,9 @@ export default function App() {
       onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
       onDrop={event => dropPane(event, pane.id)}>
       {renderSessionPaneActions(tab, task)}
-      {task && <>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task, pane.id)}</div></>}
+      {task?.sessionType==='forge'?taskView:task?<>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task, pane.id)}</div></>:null}
       {!task && taskView}
-      <HeadsUpPanel task={task} settings={task?{...(state?.settings||fallbackSettings),projectRoot:task.userRoot,agentmemProjectId:task.agentmemProjectId||''}:selectedProject?{...(state?.settings||fallbackSettings),projectRoot:selectedProject.projectRoot,agentmemProjectId:selectedProject.agentmemProjectId}:state?.settings||fallbackSettings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
+      <HeadsUpPanel task={task} project={task?state?.projects.find(project=>project.id===task.projectId)||null:selectedProject} projects={state?.projects||[]} settings={state?.settings||fallbackSettings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
         onClose={() => setHeadsUpOpen(current => ({ ...current, [tab]: false }))}
         onOpenSettings={openSettings} triggerRef={headsUpTriggerRef(tab)} />
     </div>;
@@ -821,7 +838,6 @@ export default function App() {
 
   return <div className={'app-shell ' + (windowControls ? 'has-custom-chrome ' : '') + (sidebarCollapsed ? 'sidebar-collapsed ' : '') + (sidebarResizing ? 'sidebar-resizing' : '')} style={{ '--sidebar-width': sidebarCollapsed ? '0px' : sidebarWidth + 'px' } as React.CSSProperties}>
     <nav className="activity-rail" aria-label="App navigation">
-      <img className="opnex-brand-mark" src="/opnex-icon-grid-1_5-margin.svg" alt="Opnex" />
       <button className="rail-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title="Toggle sidebar (Ctrl/Cmd+B)" aria-keyshortcuts="Control+B Meta+B" aria-expanded={!sidebarCollapsed} aria-controls="primary-sidebar" onClick={() => setSidebarCollapsed(value => !value)}><PanelLeft size={17} /></button>
       <button role="tab" aria-label="Sessions" onClick={() => {
         const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
@@ -839,7 +855,7 @@ export default function App() {
           const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
           openWorkspaceTab('git', pane.id, pane.activeTab);
         }}><GitBranch size={17} /></button>
-          <button role="tab" aria-label="Skills" title="Skills (Ctrl/Cmd+Shift+L)" aria-keyshortcuts="Control+Shift+L Meta+Shift+L" aria-current={panes.some(pane=>workspaceTabKind(pane.activeTab)==='skills')?'page':undefined} onClick={()=>openSkillsTab()}><BookOpen size={17}/></button>
+          <button role="tab" aria-label="Library" title="Library (Ctrl/Cmd+Shift+L)" aria-keyshortcuts="Control+Shift+L Meta+Shift+L" aria-current={panes.some(pane=>workspaceTabKind(pane.activeTab)==='skills')?'page':undefined} onClick={()=>openSkillsTab()}><BookOpen size={17}/></button>
       <div className="rail-spacer" />
       <button aria-label="Settings" title="Settings (Ctrl/Cmd+,)" aria-keyshortcuts="Control+, Meta+," onClick={openSettings}><Settings2 size={17} /></button>
     </nav>
@@ -847,7 +863,7 @@ export default function App() {
       <div className="sidebar-tools">
         <span className="sidebar-title">Sessions</span>
         <button className="icon-btn" aria-label="New session" title="New session (Ctrl/Cmd+N)" aria-keyshortcuts="Control+N Meta+N" onClick={openNewTab}><Plus size={16} /></button>
-        <button className="icon-btn" aria-label="Create project" title="Create project" onClick={()=>openProjectEditor('new')}><FolderPlus size={15}/></button>
+        <button className="icon-btn" aria-label="Create workspace" title="Create workspace" onClick={()=>openProjectEditor('new')}><FolderPlus size={15}/></button>
         <button className="icon-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={()=>setShortcutsOpen(true)}><Keyboard size={15}/></button>
         <button className="icon-btn" aria-label="Search sessions" onClick={() => document.querySelector<HTMLInputElement>('.session-search')?.focus()}><Search size={15} /></button>
       </div>
@@ -855,10 +871,10 @@ export default function App() {
       <nav className="task-list project-task-list" aria-label="Sessions" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}}>
         {orderedProjects.filter(project=>project.pinned).map(projectSessionSection)}
         {orderedProjects.filter(project=>!project.pinned).map(projectSessionSection)}
-        <section className={`project-session-group unclassified-group ${projectDropTarget==='unclassified'?'is-drop-target':''}`} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget('unclassified');}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,null)}><div className="project-group-heading"><button className="project-expand" aria-label={`${unclassifiedExpanded?'Collapse':'Expand'} Unclassified`} aria-expanded={unclassifiedExpanded} onClick={()=>toggleProjectExpanded('unclassified')}>{unclassifiedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>Unclassified</span><small>{unclassifiedTasks.length}</small></button></div>{unclassifiedExpanded&&<div className="project-session-rows">{renderSessionRows(showAllProjects.unclassified?unclassifiedTasks:unclassifiedTasks.slice(0,5))}{unclassifiedTasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,unclassified:!current.unclassified}))}>{showAllProjects.unclassified?'Show recent five':`Show all ${unclassifiedTasks.length} sessions`}</button>}</div>}</section>
+        <section className={`project-session-group unclassified-group ${projectDropTarget==='unclassified'?'is-drop-target':''}`} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget('unclassified');}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,null)}><div className="project-group-heading"><button className="project-expand" aria-label={`${unclassifiedExpanded?'Collapse':'Expand'} Unclassified`} aria-expanded={unclassifiedExpanded} onClick={()=>toggleProjectExpanded('unclassified')}>{unclassifiedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>Unclassified</span><small>{unclassifiedTasks.length}</small></button></div><ExpandableSessionRows expanded={unclassifiedExpanded}>{renderSessionRows(showAllProjects.unclassified?unclassifiedTasks:unclassifiedTasks.slice(0,5))}{unclassifiedTasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,unclassified:!current.unclassified}))}>{showAllProjects.unclassified?'Show recent five':`Show all ${unclassifiedTasks.length} sessions`}</button>}</ExpandableSessionRows></section>
       </nav>
       {projectMoveError&&<div className="project-move-error" role="alert">{projectMoveError}<button className="icon-btn" aria-label="Dismiss move error" onClick={()=>setProjectMoveError('')}><X size={13}/></button></div>}
-      <div className="sidebar-bottom"><button className="project-mini" aria-label={selectedProject?.name||rootLabel(state?.settings.projectRoot)+' project settings'} onClick={()=>selectedProject?openProjectEditor(selectedProject):openSettings}><Folder size={15} /><span className="project-mini-text">{selectedProject?.name||rootLabel(state?.settings.projectRoot)}</span></button></div>
+      <div className="sidebar-bottom"><button className="project-mini" aria-label={selectedProject?workspaceOptionLabel(selectedProject,state?.projects||[]):'Create or select workspace'} title={selectedProject?.projectRoot} onClick={()=>selectedProject?openProjectEditor(selectedProject):openProjectEditor('new')}><Folder size={15} /><span className="project-mini-text">{selectedProject?workspaceOptionLabel(selectedProject,state?.projects||[]):'Choose workspace'}</span></button></div>
     </aside>
     <div className="sidebar-resizer" role="separator" aria-label="Resize session explorer" aria-orientation="vertical" aria-valuemin={112} aria-valuenow={sidebarCollapsed ? 0 : sidebarWidth} tabIndex={0}
       onPointerDown={event => {
@@ -895,7 +911,7 @@ export default function App() {
     />
     <div className="workspace-area">
       <main className="main-column">
-        <header className="topbar">{panes.length===1&&renderPaneTabs(rootPane,0,false)}<div className="topbar-project-context"><label><span className="sr-only">Project for new sessions</span><select ref={projectSelectorRef} aria-label="Project for new sessions" title="Choose project (Ctrl/Cmd+Alt+P)" aria-keyshortcuts="Control+Alt+P Meta+Alt+P" value={state?.selectedProjectId||''} onChange={event=>void selectProject(event.currentTarget.value||null)}><option value="">Unclassified · legacy default</option>{(state?.projects||[]).map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label><span className={'topbar-project-connection '+(runtime?.codex.state==='connected'?'connected':'')}><i aria-hidden="true"/>{runtime?.codex.state==='connected'?'Connected':'Offline'}</span></div></header>
+        <header className="topbar">{panes.length===1&&renderPaneTabs(rootPane,0,false)}<div className="topbar-project-context"><label><span className="sr-only">Workspace for new sessions</span><select ref={projectSelectorRef} aria-label="Workspace for new sessions" title="Choose workspace (Ctrl/Cmd+Alt+P)" aria-keyshortcuts="Control+Alt+P Meta+Alt+P" value={state?.selectedProjectId||''} onChange={event=>void selectProject(event.currentTarget.value||null)}><option value="">Unclassified · legacy default</option>{(state?.projects||[]).map(project=><option key={project.id} value={project.id} title={project.projectRoot}>{workspaceOptionLabel(project,state?.projects||[])}</option>)}</select></label></div>{windowControls&&<div className="window-controls" role="group" aria-label="Window controls"><button aria-label="Minimize window" title="Minimize" onClick={()=>void windowControls.minimize()}><Minus size={14}/></button><button aria-label={windowMaximized?'Restore window':'Maximize window'} title={windowMaximized?'Restore':'Maximize'} onClick={()=>void windowControls.toggleMaximize()}>{windowMaximized?<Copy size={12}/>:<Maximize2 size={12}/>}</button><button className="window-close" aria-label="Close window" title="Close" onClick={()=>void windowControls.close()}><X size={15}/></button></div>}</header>
         <div className={'workspace-content mode-tasks ' + (panes.length > 1 ? 'has-session-panes has-side-session ' : '') + (draggedTab ? 'dragging-session' : '')}
           style={{ gridTemplateColumns: panes.flatMap((pane, index) => index < panes.length - 1 ? ['minmax(0,' + pane.weight + 'fr)', '5px'] : ['minmax(0,' + pane.weight + 'fr)']).join(' '), transition: 'grid-template-columns 180ms cubic-bezier(.2,.75,.25,1)' }}
           onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('application/x-opnex-workspace')) event.preventDefault(); }}
@@ -946,22 +962,11 @@ export default function App() {
       </main>
     </div>
     {error && <div className="toast-error" role="alert"><AlertCircle size={15} />{error}<button className="icon-btn" aria-label="Dismiss app error" onClick={() => setError('')}><X size={14} /></button></div>}
-    {projectEditor&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!projectSaving&&setProjectEditor(null)}><form className="project-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="project-editor-title" onSubmit={saveProject}>
-      <header><div><h2 id="project-editor-title">{projectEditor==='new'?'Create project':`Configure ${projectEditor.name}`}</h2><p>Project settings apply to new sessions and future passes. Saved pass roots and knowledge base audit snapshots remain unchanged.</p></div><button type="button" className="icon-btn" aria-label="Close project settings" onClick={()=>setProjectEditor(null)} disabled={projectSaving}><X size={16}/></button></header>
-      <label>Project name<input autoFocus value={projectName} maxLength={80} onChange={event=>setProjectName(event.target.value)} required/></label>
-      <label>Working directory<input value={projectRootDraft} maxLength={1024} placeholder="D:\\work\\project" onChange={event=>{const next=event.currentTarget.value;setProjectRootDraft(next);if(projectAgentMemAuto)setProjectAgentMemId('');}} required/><small>Choose an existing folder. The server resolves and validates the path when saving.</small></label>
-      <label className="project-editor-toggle"><input type="checkbox" checked={projectPinned} onChange={event=>setProjectPinned(event.target.checked)}/><span>Pin project above the rest</span></label>
-      <label className="project-editor-toggle"><input type="checkbox" checked={projectAgentMemEnabled} onChange={event=>setProjectAgentMemEnabled(event.target.checked)}/><span>Enable AgentMem for this project</span></label>
-      {projectAgentMemEnabled&&<><label>AgentMem project ID<input value={projectAgentMemId} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" onChange={event=>setProjectAgentMemId(event.target.value)} disabled={projectAgentMemAuto}/><small>Use the exact ID for a registered knowledge base. Automatic setup derives a stable ID for this folder.</small></label><label className="project-editor-toggle"><input type="checkbox" checked={projectAgentMemAuto} onChange={event=>setProjectAgentMemAuto(event.target.checked)}/><span>Set up a knowledge base for this folder automatically</span></label></>}
-      {projectError&&<p className="project-editor-error" role="alert">{projectError}</p>}
-      <footer><button type="button" className="secondary-btn" onClick={()=>setProjectEditor(null)} disabled={projectSaving}>Cancel</button><button className="primary-btn" disabled={projectSaving||!projectName.trim()||!projectRootDraft.trim()}>{projectSaving?'Saving…':'Save project'}</button></footer>
-    </form></div>}
-    {shortcutsOpen&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setShortcutsOpen(false)}><section className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"><header><div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p>Use Ctrl on Windows/Linux or Command on macOS.</p></div><button type="button" className="icon-btn" aria-label="Close shortcuts" onClick={()=>setShortcutsOpen(false)}><X size={16}/></button></header><dl><dt>New session</dt><dd>Ctrl/⌘ + N</dd><dt>Previous / next session</dt><dd>Ctrl/⌘ + Shift + ↑ / ↓</dd><dt>Choose project</dt><dd>Ctrl/⌘ + Alt + P</dd><dt>Settings</dt><dd>Ctrl/⌘ + ,</dd><dt>Git</dt><dd>Ctrl/⌘ + Shift + G</dd><dt>Skills</dt><dd>Ctrl/⌘ + Shift + L</dd><dt>Toggle sidebar</dt><dd>Ctrl/⌘ + B</dd><dt>Dismiss dialog</dt><dd>Escape</dd></dl></section></div>}
-    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={selectedProject?{...state.settings,projectRoot:selectedProject.projectRoot,agentmemProjectId:selectedProject.agentmemProjectId,agentmemAutoSetup:selectedProject.agentmemAutoSetup}:state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={refresh} saved={async settings => {
+    {projectEditor&&<ProjectEditorDialog project={projectEditor} initialRoot={selectedProject?.projectRoot||''} close={()=>setProjectEditor(null)} saved={(project,duplicate)=>void projectSaved(project,duplicate)}/>}
+    {shortcutsOpen&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setShortcutsOpen(false)}><section className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"><header><div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p>Use Ctrl on Windows/Linux or Command on macOS.</p></div><button type="button" className="icon-btn" aria-label="Close shortcuts" onClick={()=>setShortcutsOpen(false)}><X size={16}/></button></header><dl><dt>New session</dt><dd>Ctrl/⌘ + N</dd><dt>Previous / next session</dt><dd>Ctrl/⌘ + Shift + ↑ / ↓</dd><dt>Choose workspace</dt><dd>Ctrl/⌘ + Alt + P</dd><dt>Settings</dt><dd>Ctrl/⌘ + ,</dd><dt>Git</dt><dd>Ctrl/⌘ + Shift + G</dd><dt>Library</dt><dd>Ctrl/⌘ + Shift + L</dd><dt>Toggle sidebar</dt><dd>Ctrl/⌘ + B</dd><dt>Dismiss dialog</dt><dd>Escape</dd></dl></section></div>}
+    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={async()=>{await refresh();}} saved={async settings => {
       try {
-        const project=selectedProject;
-        await api('/api/settings',project?{...settings,projectRoot:state.settings.projectRoot,agentmemProjectId:state.settings.agentmemProjectId,agentmemAutoSetup:state.settings.agentmemAutoSetup}:settings);
-        if(project)await api('/api/projects',{id:project.id,name:project.name,projectRoot:settings.projectRoot,agentmemEnabled:!!settings.agentmemProjectId||!!settings.agentmemAutoSetup,agentmemProjectId:settings.agentmemProjectId,agentmemAutoSetup:!!settings.agentmemAutoSetup,pinned:project.pinned});
+        await api('/api/settings',settings);
         await refresh();
         return true;
       } catch (cause) {
@@ -974,10 +979,43 @@ export default function App() {
 }
 
 
-function ConversationMessage({message:m,execution}:{message:Message;execution?:DeepSeekExecutionProfile}){
+function executionDescriptor(profile?:ExecutionProfile,deepSeek?:DeepSeekExecutionProfile){
+  if(!profile)return 'Model details unavailable';
+  const model=executionModelName(profile.model);
+  return profile.provider==='deepseek'?`DeepSeek Harness (${deepSeek?.provider==='opencode-go'?'OpenCode Go':deepSeek?.provider||'provider'}) · ${model} · requested native effort ${profile.effort} · effective effort unknown`:`${model} · ${profile.effort}`;
+}
+function passOutputForDisplay(pass:TaskPass){
+  const output=pass.publicAnswer||pass.receipt?.result||'';
+  const team=pass.recruitmentTeam,marker='Read-only worker results (no Git worktree or integration step):';
+  const workers=team?.workers,bundle=team?.workerReceiptBundle;
+  if(team?.mode!=='read_only'||!Array.isArray(workers)||!Array.isArray(bundle)||!workers.length||workers.length!==bundle.length)return output;
+  const matches=workers.every((worker,index)=>{const record=bundle[index];return !!record&&record.workerId===worker.workerId&&record.name===worker.name&&record.status===worker.status&&record.receipt?.result===worker.receipt?.result;});
+  if(!matches)return output;
+  const markerAt=output.lastIndexOf(marker);if(markerAt<0)return output;
+  let captured:unknown;
+  try{captured=JSON.parse(output.slice(markerAt+marker.length).trim());}catch{return output;}
+  if(!Array.isArray(captured)||captured.length!==bundle.length)return output;
+  const capturedMatches=captured.every((record,index)=>{const expected=bundle[index];return !!record&&!!expected&&record.workerId===expected.workerId&&record.name===expected.name&&record.status===expected.status&&record.headCommit===null&&record.receipt?.status===expected.receipt.status&&record.receipt?.result===expected.receipt.result&&record.producer?.threadId===expected.producer?.threadId&&record.producer?.turnId===expected.producer?.turnId&&record.producer?.teamId===expected.producer?.teamId&&record.producer?.passId===expected.producer?.passId;});
+  if(!capturedMatches)return output;
+  return formatReadOnlyWorkerResults(bundle.map(record=>({name:record.name,status:record.status,receipt:record.receipt,error:workers.find(worker=>worker.workerId===record.workerId)?.error})));
+}
+function executionModelName(model:string){return model==='gpt-6-luna'?'GPT-6 Luna':model==='gpt-6.1-sol'?'GPT-6.1 Sol':model==='gpt-6.1-terra'?'GPT-6.1 Terra':model==='gpt-6-sol'?'GPT-6 Sol':model==='gpt-6-astra'?'GPT-6 Astra':model==='deepseek-v4.1-flash'?'DeepSeek V4.1 Flash':model;}
+function compactModelName(model:string){return model==='gpt-6-luna'?'Luna':executionModelName(model);}
+function executionRoleName(role:'worker'|'direct'|'simple',model?:string){
+  if(role==='worker')return model?`${compactModelName(model)} worker`:'Worker';
+  if(role==='direct')return 'Direct answer';
+  return model?`${executionModelName(model)} simple implementation`:'Simple implementation';
+}
+function ConversationMessage({message:m,executionProfile,deepSeekExecution,actualTurn}:{message:Message;executionProfile?:ExecutionProfile;deepSeekExecution?:DeepSeekExecutionProfile;actualTurn?:ReasoningTurn}){
   if(m.role==='user')return <div className="message user-message" key={m.id}><div className="user-avatar">U</div><div className="message-main"><div className="message-meta"><strong>You</strong><span>{stamp(m.createdAt)}</span>{m.submissionKind==='steering'&&<span className={`model-chip steering-chip ${m.deliveryStatus||'pending'}`}>{m.deliveryStatus==='steered'?'Steered active turn':m.deliveryStatus==='unconfirmed'?'Steering delivery unconfirmed':'Sending steering'}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
   if(m.role==='system')return <div className={`system-event ${m.text.startsWith('Worker activity:')?'progress-event':''}`} key={m.id}><span className="event-glyph">{m.text.startsWith('Worker activity:')?<Activity size={14}/>:<AlertCircle size={14}/>}</span><span>{m.text.replace(/^Worker activity: /,'')}</span></div>;
-  return <div className="message agent-message" key={m.id}><div className={`agent-avatar ${m.role}`}>{m.role==='worker'?<Terminal size={15}/>:<Command size={15}/>}</div><div className="message-main"><div className="message-meta"><strong>{execution&&m.role==='worker'?`DeepSeek Harness worker · ${execution.provider}`:m.role==='worker'?'Luna worker':m.role==='router'?'Routing agent':m.role==='direct'?'Direct answer':m.role==='simple'?'Luna simple implementation':'Orchestrator'}</strong><span>{stamp(m.createdAt)}</span>{(['worker','router','direct','simple'].includes(m.role))&&<span className="model-chip">{execution&&m.role==='worker'?`${execution.model} · requested native effort ${execution.nativeReasoningEffort} · effective effort unknown`:`gpt-6-luna · ${m.role==='worker'?'high':m.role==='simple'?'xhigh':m.role==='router'?'low · Fast':'high'}`}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
+  const actualProvider:'deepseek'|'codex'|undefined=actualTurn?.provider==='deepseek'||actualTurn?.requestedModel==='deepseek-v4.1-flash'?'deepseek':actualTurn?.provider==='codex'||actualTurn?.requestedModel.startsWith('gpt-')?'codex':undefined;
+  const turnProfile:ExecutionProfile|undefined=actualTurn&&actualProvider?{provider:actualProvider,model:actualTurn.requestedModel,effort:actualTurn.requestedEffort as ExecutionProfile['effort']}:undefined;
+  const profile=actualTurn?turnProfile:executionProfile;
+  const modelChip=m.role==='router'?'GPT-6 Luna · low · Fast':m.role==='direct'?turnProfile?executionDescriptor(turnProfile,deepSeekExecution):'Orchestrator · model unavailable':(['worker','simple'].includes(m.role)?turnProfile?executionDescriptor(turnProfile,deepSeekExecution):profile?executionDescriptor(profile,deepSeekExecution):executionDescriptor():undefined);
+  const model=actualTurn?.requestedModel||(m.role==='direct'?undefined:profile?.model);
+  const heading=m.role==='worker'?profile?.provider==='deepseek'?`DeepSeek Harness worker · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('worker',model):m.role==='router'?'Routing agent':m.role==='direct'?turnProfile?.provider==='deepseek'?`DeepSeek Harness direct answer · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('direct',model):m.role==='simple'?profile?.provider==='deepseek'?`DeepSeek Harness simple implementation · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('simple',model):'Orchestrator';
+  return <div className="message agent-message" key={m.id}><div className={`agent-avatar ${m.role}`}>{m.role==='worker'?<Terminal size={15}/>:<Command size={15}/>}</div><div className="message-main"><div className="message-meta"><strong>{heading}</strong><span>{stamp(m.createdAt)}</span>{modelChip&&<span className="model-chip">{modelChip}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
 }
 
 function ActivityRow({item}:{item:LiveActivity}){
@@ -995,53 +1033,57 @@ function ReasoningResponse({turn,summaries,activities,live,fallbackTime}:{turn:N
   const elapsedSeconds=Math.max(0,Math.floor((clock-Date.parse(turn.startedAt||fallbackTime))/1000));
   const elapsed=elapsedSeconds>=3600?`${Math.floor(elapsedSeconds/3600)}h`:elapsedSeconds>=60?`${Math.floor(elapsedSeconds/60)}m`:`${elapsedSeconds}s`;
   const durationLabel=turn.status==='interrupted'?'Interrupted after':turn.status==='failed'?'Failed after':live?'Working for':'Worked for';
-  const turnLabel=turn.provider?`DeepSeek Harness worker · ${turn.provider}`:turn.role==='worker'?'Luna worker':turn.role==='orchestrator'?'Orchestrator':'GPT-6 Luna';
-  const modelLabel=turn.provider?`${turn.provider} / ${turn.requestedModel} · requested native effort ${turn.requestedEffort} · effective effort unknown`:`${turn.requestedModel} · ${turn.requestedEffort}`;
+  const deepSeek=turn.provider==='deepseek';
+  const turnLabel=deepSeek?`DeepSeek Harness ${turn.role} · ${turn.provider}`:turn.role==='orchestrator'?'Orchestrator':executionRoleName(turn.role,turn.requestedModel);
+  const modelLabel=deepSeek?`${turn.provider} / ${turn.requestedModel} · requested native effort ${turn.requestedEffort} · effective effort unknown`:`${executionModelName(turn.requestedModel)} · ${turn.requestedEffort}`;
   return <section className={`turn-activity ${live?'is-live':''}`} aria-label={`${turn.role} model response`} data-status={turn.status}>
     <header className="turn-activity-heading"><span>{turnLabel}</span><span className="turn-activity-duration">{durationLabel} {elapsed}</span>{turn.role!=='orchestrator'&&<span className="model-chip">{modelLabel}</span>}</header>
     <div className="turn-activity-events">{events.map(event=>event.kind==='summary'?<div className="live-activity-row commentary summary" key={`summary:${event.summary.itemId}:${event.summary.summaryIndex}`}><span className="live-activity-icon"><Command size={14}/></span><div className="live-activity-main"><div className="markdown-body"><Markdown>{event.summary.text}</Markdown></div></div></div>:<ActivityRow key={`activity:${event.item.itemId}`} item={event.item}/>)}{!events.length&&<div className="reasoning-response-empty">{live?'Waiting for activity…':turn.status==='failed'?'Turn failed.':turn.status==='interrupted'?'Turn interrupted.':'No activity details were reported for this turn.'}</div>}</div>
   </section>;
 }
 
-function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpanded,workerActivityExpanded,agentmemAuditExpanded,retrying,selectedSteerWorkerId,onRetryAgentMem,onSelectSteerWorker,onQualityAction,toggleAssignment,toggleReceipt,toggleWorkerActivity,toggleAgentMemAudit}:{pass:TaskPass;messages:Message[];active:boolean;task:Task;assignmentExpanded:boolean;receiptExpanded:boolean;workerActivityExpanded:boolean;agentmemAuditExpanded:boolean;retrying:boolean;selectedSteerWorkerId?:string;onRetryAgentMem:()=>void;onSelectSteerWorker:(workerId:string)=>void;onQualityAction:(action:'accept'|'pause'|'resume')=>void;toggleAssignment:()=>void;toggleReceipt:()=>void;toggleWorkerActivity:()=>void;toggleAgentMemAudit:()=>void}){
+function PassPanel({pass:p,messages,active,task,assignmentExpanded,receiptExpanded,recruitmentTeamExpanded,workerActivityExpanded,toolCallsExpanded,agentmemAuditExpanded,selectedSteerWorkerId,onSelectSteerWorker,onQualityAction,toggleAssignment,toggleReceipt,toggleRecruitmentTeam,toggleWorkerActivity,toggleToolCalls,toggleAgentMemAudit}:{pass:TaskPass;messages:Message[];active:boolean;task:Task;assignmentExpanded:boolean;receiptExpanded:boolean;recruitmentTeamExpanded:boolean;workerActivityExpanded:boolean;toolCallsExpanded:boolean;agentmemAuditExpanded:boolean;selectedSteerWorkerId?:string;onSelectSteerWorker:(workerId:string)=>void;onQualityAction:(action:'accept'|'pause'|'resume')=>void;toggleAssignment:()=>void;toggleReceipt:()=>void;toggleRecruitmentTeam:()=>void;toggleWorkerActivity:()=>void;toggleToolCalls:()=>void;toggleAgentMemAudit:()=>void}){
   const live=active&&task.phase===p.phase&&['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(p.phase);
-  const recruitedExecution=p.recruitmentTeam?p.deepSeekExecution:undefined;
-  const recruitedWorkerLabel=recruitedExecution?`${recruitedExecution.provider} / ${recruitedExecution.model} · requested native effort ${recruitedExecution.nativeReasoningEffort} · effective effort unknown`:'gpt-6-luna · high';
-  const output=p.publicAnswer||p.receipt?.result||'';
+  const selectedExecution=p.executionProfile;
+  const recruitedWorkerLabel=executionDescriptor(selectedExecution,p.deepSeekExecution);
+  const output=passOutputForDisplay(p);
   const visibleMessages=messages.filter(m=>!(m.role==='orchestrator'&&m.text==='Prepared a complete assignment.'&&(p.reasoningTurns||[]).some(turn=>turn.role==='orchestrator'))&&!(output&&m.role!=='user'&&m.text===output)&&!(p.error&&m.role==='system'&&m.text===p.error));
-  const turns=p.reasoningTurns||[];const directTurn=turns.filter(turn=>turn.role==='direct'&&turn.threadId===p.directThreadId).at(-1);const directOutputLabel=directTurn?`${directTurn.requestedModel==='gpt-6-luna'?'GPT-6 Luna':directTurn.requestedModel}${directTurn.requestedEffort?` · ${directTurn.requestedEffort}`:''}`:p.directThreadId?'GPT-6 Luna':'Orchestrator';const timeline=[...visibleMessages.map((message,index)=>({kind:'message' as const,at:Date.parse(message.createdAt)||0,index,message})),...turns.map((turn,index)=>{const roleTurns=turns.filter(item=>item.role===turn.role);const roleMessages=visibleMessages.filter(message=>message.role===turn.role);const roleIndex=roleTurns.findIndex(item=>item.threadId===turn.threadId&&item.turnId===turn.turnId);const matchingMessage=roleMessages[roleIndex];const latestUser=visibleMessages.filter(message=>message.role==='user').at(-1);const fallbackAt=matchingMessage?(Date.parse(matchingMessage.createdAt)||0)-1:(Date.parse(latestUser?.createdAt||p.createdAt)||0)+1;return {kind:'reasoning' as const,at:Date.parse(turn.startedAt||'')||fallbackAt,index,turn};})].sort((a,b)=>a.at-b.at||(a.kind!==b.kind?(a.kind==='reasoning'?-1:1):a.index-b.index));
+  const turns=p.reasoningTurns||[];const directTurn=turns.filter(turn=>turn.role==='direct'&&turn.threadId===p.directThreadId).at(-1);const directOutputLabel=directTurn?`${directTurn.provider==='deepseek'?`DeepSeek Harness (${p.deepSeekExecution?.provider||'OpenCode Go'}) · `:''}${executionModelName(directTurn.requestedModel)}${directTurn.provider==='deepseek'?` · requested native effort ${directTurn.requestedEffort} · effective effort unknown`:directTurn.requestedEffort?` · ${directTurn.requestedEffort}`:''}`:p.directThreadId?'Orchestrator · model unavailable':'Orchestrator';const simpleOutputLabel=`${executionDescriptor(selectedExecution,p.deepSeekExecution)} · self-verified`;const isReadOnlyTeam=p.recruitmentTeam?.mode==='read_only';const finalOutputLabel=isReadOnlyTeam?(p.recruitmentTeam!.workers.length===1?'Worker response':'Worker responses'):p.resolution==='direct'?directOutputLabel:p.resolution==='simple'?simpleOutputLabel:selectedExecution?.provider==='deepseek'?`DeepSeek Harness (${p.deepSeekExecution?.provider||'OpenCode Go'}) · reviewed by orchestrator`:selectedExecution?`${compactModelName(selectedExecution.model)} · reviewed by orchestrator`:'Model details unavailable · reviewed by orchestrator';const timeline=[...visibleMessages.map((message,index)=>({kind:'message' as const,at:Date.parse(message.createdAt)||0,index,message})),...turns.map((turn,index)=>{const roleTurns=turns.filter(item=>item.role===turn.role);const roleMessages=visibleMessages.filter(message=>message.role===turn.role);const roleIndex=roleTurns.findIndex(item=>item.threadId===turn.threadId&&item.turnId===turn.turnId);const matchingMessage=roleMessages[roleIndex];const latestUser=visibleMessages.filter(message=>message.role==='user').at(-1);const fallbackAt=matchingMessage?(Date.parse(matchingMessage.createdAt)||0)-1:(Date.parse(latestUser?.createdAt||p.createdAt)||0)+1;return {kind:'reasoning' as const,at:Date.parse(turn.startedAt||'')||fallbackAt,index,turn};})].sort((a,b)=>a.at-b.at||(a.kind!==b.kind?(a.kind==='reasoning'?-1:1):a.index-b.index));
   const workerRows=timeline.filter(row=>row.kind==='reasoning'?row.turn.role==='worker':row.message.role==='worker'||row.message.role==='system'&&row.message.text.startsWith('Worker activity:'));
   const workerActivityCount=workerRows.reduce((count,row)=>count+(row.kind==='reasoning'?Math.max(1,(p.reasoningSummaries||[]).filter(item=>item.role===row.turn.role&&item.threadId===row.turn.threadId&&item.turnId===row.turn.turnId).length+(p.liveActivity||[]).filter(item=>item.role===row.turn.role&&item.threadId===row.turn.threadId&&item.turnId===row.turn.turnId).length):1),0);
   const visibleTimeline=timeline.filter(row=>row.kind==='reasoning'?row.turn.role!=='worker':row.message.role!=='worker'&&!(row.message.role==='system'&&row.message.text.startsWith('Worker activity:')));
-  const recordStatus=p.agentmemRecordStatus||(p.agentmemTaskId?undefined:task.agentmemRecordStatus);
-  const recordError=p.agentmemRecordError||(p.agentmemTaskId?undefined:task.agentmemRecordError);
+  const workerTurn=workerRows.find((row):row is Extract<(typeof workerRows)[number],{kind:'reasoning'}>=>row.kind==='reasoning');
+  const workerModel=workerTurn?.turn.requestedModel||selectedExecution?.model;
+  const workerActivityLabel=workerTurn?.turn.provider==='deepseek'||!workerTurn&&selectedExecution?.provider==='deepseek'?'DeepSeek Harness':workerModel?compactModelName(workerModel):'Worker';
+  const messageTurn=(message:Message)=>{if(message.role!=='direct'&&message.role!=='simple')return undefined;const threadId=message.role==='direct'?p.directThreadId:p.simpleThreadId,roleMessages=visibleMessages.filter(row=>row.role===message.role),roleIndex=roleMessages.findIndex(row=>row.id===message.id);return turns.filter(turn=>turn.role===message.role&&turn.threadId===threadId)[roleIndex];};
   return <section className={`pass-panel ${p.legacyUnassociated?'legacy-pass':''}`} aria-label={p.legacyUnassociated?'Legacy pass with unassociated history':`Pass ${p.index}`}>
     <header className="pass-heading"><span>{p.legacyUnassociated?'Legacy history':`Pass ${p.index}`}</span><span className={`pass-status ${p.phase}`}>{phaseText[p.phase]||p.phase}</span><time>{stamp(p.createdAt)}</time></header>
     {p.legacyUnassociated&&<div className="legacy-association-note">This older session predates per-pass records. Its messages and saved artifacts cannot be reliably matched, so they are shown as unassociated history.</div>}
     {((p.selectedSkills?.length||0)+(p.loadedSkills?.length||0)>0)&&<div className="pass-skill-provenance"><strong>Saved skills used</strong>{[...(p.selectedSkills||[]).map(skill=>({...skill,usage:'Invoked by you'})),...(p.loadedSkills||[]).map(skill=>({...skill,usage:`Loaded${skill.role?` by ${skill.role}`:''}`}))].map((skill,index)=><details key={`${skill.id}:${skill.revision}:${skill.usage}:${index}`}><summary>{skill.name} · {skill.usage} · {skill.revision.slice(0,12)}</summary><small>{skill.source}</small><pre>{skill.instructions}</pre></details>)}</div>}{(p.savedSkills?.length||0)>0&&<div className="pass-skill-provenance"><strong>Skills saved by agents</strong>{p.savedSkills!.map((skill,index)=><div key={`${skill.id}:${skill.revision}:${index}`}><span>{skill.name} · {skill.action} · {skill.revision.slice(0,12)}</span><small>{skill.source} · {skill.role}</small></div>)}</div>}
-    {visibleTimeline.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message} execution={recruitedExecution}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole===row.turn.role&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}
-    {workerRows.length>0&&<div className="worker-activity"><Disclosure title={`${recruitedExecution?'DeepSeek Harness':'Luna'} activity · ${live&&p.activeRole==='worker'?'live · ':''}${workerActivityCount} ${workerActivityCount===1?'item':'items'}`} icon={<Terminal size={15}/>} open={workerActivityExpanded} onToggle={toggleWorkerActivity}><div className="worker-activity-scroll">{workerRows.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message} execution={recruitedExecution}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole==='worker'&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}</div></Disclosure></div>}
-    {p.simpleThreadId&&<div className="worker-status" role="status">{p.phase==='simple_running'?<div className="activity-spinner"/>:<Check size={17} className="worker-activity-icon"/>}<strong>{p.phase==='simple_running'?'Simple implementation is working':'Simple implementation complete'}</strong><span className="worker-model">GPT-6 Luna · xhigh</span><span className={`worker-state ${p.phase}`}>{p.phase==='simple_running'?'Verifying · no Sol review':'Self-verified · no Sol review'}</span></div>}{(p.assignment||p.workerThreadId||p.receipt)&&p.resolution!=='direct'&&p.resolution!=='simple'&&<div className="worker-status" role="status">{p.phase==='worker_running'?<div className="activity-spinner"/>:<Activity size={17} className="worker-activity-icon"/>}<strong>{p.phase==='worker_running'?'Worker is working':p.phase==='accepted'?'Worker review':'Worker task'}</strong><span className="worker-model">{recruitedWorkerLabel}</span><span className={`worker-state ${p.phase}`}>{p.phase==='accepted'&&p.receipt?'Complete':p.phase==='worker_running'?p.workerStage==='context_plan'?'Composing scope context · orchestrator idle':p.workerStage==='context_compose'?`${p.workerContextStatus?.status==='retrieved'?'Reviewing retrieved context':p.workerContextStatus?.status==='disabled'?'AgentMem disabled · composing context':'AgentMem unavailable · composing context'} · orchestrator idle`:p.workerStage==='execute'?'Executing assignment · orchestrator idle':'Preparing worker · orchestrator idle':phaseText[p.phase]||p.phase}</span></div>}
+    {visibleTimeline.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message} executionProfile={selectedExecution} deepSeekExecution={p.deepSeekExecution} actualTurn={messageTurn(row.message)}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole===row.turn.role&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}
+    {workerRows.length>0&&<div className="worker-activity"><Disclosure title={`${workerActivityLabel} activity · ${live&&p.activeRole==='worker'?'live · ':''}${workerActivityCount} ${workerActivityCount===1?'item':'items'}`} icon={<Terminal size={15}/>} open={workerActivityExpanded} onToggle={toggleWorkerActivity}><div className="worker-activity-scroll">{workerRows.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message} executionProfile={selectedExecution} deepSeekExecution={p.deepSeekExecution}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole==='worker'&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}</div></Disclosure></div>}
+    {p.simpleThreadId&&<div className="worker-status" role="status">{p.phase==='simple_running'?<div className="activity-spinner"/>:<Check size={17} className="worker-activity-icon"/>}<strong>{p.phase==='simple_running'?'Simple implementation is working':'Simple implementation complete'}</strong><span className="worker-model">{executionDescriptor(selectedExecution,p.deepSeekExecution)}</span><span className={`worker-state ${p.phase}`}>{p.phase==='simple_running'?'Verifying · no Sol review':'Self-verified · no Sol review'}</span></div>}{(p.assignment||p.workerThreadId||p.receipt)&&p.resolution!=='direct'&&p.resolution!=='simple'&&<div className="worker-status" role="status">{p.phase==='worker_running'?<div className="activity-spinner"/>:<Activity size={17} className="worker-activity-icon"/>}<strong>{p.phase==='worker_running'?'Worker is working':p.phase==='accepted'?'Worker review':'Worker task'}</strong><span className="worker-model">{recruitedWorkerLabel}</span><span className={`worker-state ${p.phase}`}>{p.phase==='accepted'&&p.receipt?'Complete':p.phase==='worker_running'?'Executing assignment · orchestrator idle':phaseText[p.phase]||p.phase}</span></div>}
     {p.qualityLoop&&<QualityLoopPanel state={p.qualityLoop} onAction={active?onQualityAction:undefined}/>}
-    {p.recruitmentTeam&&<RecruitmentTeamPanel team={{teamId:p.recruitmentTeam.teamId,status:p.recruitmentTeam.status,workers:p.recruitmentTeam.workers.map(worker=>({workerId:worker.workerId,name:worker.name,step:worker.step,dependsOn:worker.dependsOn,status:worker.status,canSteer:!!worker.activeTurnId&&!worker.deepSeekExecution,effort:worker.effort,branch:worker.branch,worktreePath:worker.worktreeRoot,assignment:worker.assignment,receipt:worker.receipt,error:worker.error,deepSeekExecution:worker.deepSeekExecution,deepSeekRuntime:worker.deepSeekRuntime,deepSeekPhaseRuns:worker.deepSeekPhaseRuns})),integration:{status:p.recruitmentTeam.integration.status,canSteer:!!p.recruitmentTeam.integration.activeTurnId&&!p.recruitmentTeam.integration.deepSeekExecution,branch:p.recruitmentTeam.integration.branch,worktreePath:p.recruitmentTeam.integration.worktreeRoot,receipt:p.recruitmentTeam.integration.receipt,error:p.recruitmentTeam.integration.error,deepSeekExecution:p.recruitmentTeam.integration.deepSeekExecution,deepSeekRuntime:p.recruitmentTeam.integration.deepSeekRuntime,deepSeekPhaseRuns:p.recruitmentTeam.integration.deepSeekPhaseRuns}}} selectedWorkerId={selectedSteerWorkerId} onSelectSteerWorker={active?onSelectSteerWorker:undefined}/>}
+    {p.recruitmentTeam&&<Disclosure className="recruitment-team-disclosure" title={<><span className="recruitment-team-summary-title">Recruitment team · {p.recruitmentTeam.workers.length} {p.recruitmentTeam.workers.length===1?'worker':'workers'}</span><span className="recruitment-team-summary-status" role="status">{p.recruitmentTeam.status.replaceAll('_',' ')}</span></>} icon={<Users size={15}/>} open={recruitmentTeamExpanded} onToggle={toggleRecruitmentTeam}><RecruitmentTeamPanel team={{teamId:p.recruitmentTeam.teamId,status:p.recruitmentTeam.status,mode:p.recruitmentTeam.mode,canonicalProjectRoot:p.recruitmentTeam.canonicalProjectRoot,workers:p.recruitmentTeam.workers.map(worker=>({workerId:worker.workerId,name:worker.name,step:worker.step,dependsOn:worker.dependsOn,status:worker.status,canSteer:!!worker.activeTurnId&&!worker.deepSeekExecution,effort:worker.effort,...(worker.branch?{branch:worker.branch}:{}),...(worker.worktreeRoot?{worktreePath:worker.worktreeRoot}:{}),...(!worker.worktreeRoot?{executionRoot:p.recruitmentTeam!.canonicalProjectRoot}:{}),assignment:worker.assignment,receipt:worker.receipt,error:worker.error,deepSeekExecution:worker.deepSeekExecution,deepSeekRuntime:worker.deepSeekRuntime,deepSeekPhaseRuns:worker.deepSeekPhaseRuns})),...(p.recruitmentTeam.mode==='read_only'?{}:{integration:{status:p.recruitmentTeam.integration.status,canSteer:!!p.recruitmentTeam.integration.activeTurnId&&!p.recruitmentTeam.integration.deepSeekExecution,branch:p.recruitmentTeam.integration.branch,worktreePath:p.recruitmentTeam.integration.worktreeRoot,receipt:p.recruitmentTeam.integration.receipt,error:p.recruitmentTeam.integration.error,deepSeekExecution:p.recruitmentTeam.integration.deepSeekExecution,deepSeekRuntime:p.recruitmentTeam.integration.deepSeekRuntime,deepSeekPhaseRuns:p.recruitmentTeam.integration.deepSeekPhaseRuns}})}} selectedWorkerId={selectedSteerWorkerId} onSelectSteerWorker={active?onSelectSteerWorker:undefined}/></Disclosure>}
     {p.assignment&&<Disclosure title="Assignment" icon={<FileText size={15}/>} open={assignmentExpanded} onToggle={toggleAssignment}><AssignmentView assignment={p.assignment}/></Disclosure>}
-    <Disclosure title={agentMemAuditTitle(p)} icon={<Database size={15}/>} open={agentmemAuditExpanded} onToggle={toggleAgentMemAudit}><AgentMemAuditView pass={p}/></Disclosure>
+    <Disclosure title={toolCallsTitle(p)} icon={<Terminal size={15}/>} open={toolCallsExpanded} onToggle={toggleToolCalls}><ToolCallLogView log={p.toolCalls} issueCount={p.toolCallTrackingIssueCount} missingMessage="This historical pass predates universal tool-call tracking. Complete invocation coverage is unavailable."/></Disclosure>
+    {p.agentmemAudit&&<Disclosure title={agentMemAuditTitle(p)} icon={<Database size={15}/>} open={agentmemAuditExpanded} onToggle={toggleAgentMemAudit}><AgentMemAuditView pass={p}/></Disclosure>}
     {p.escalation&&<div className="escalation-card"><div className="escalation-head"><AlertCircle size={16}/><strong>Worker needs a decision</strong></div><p>{p.escalation.decision_needed}</p>{p.escalation.evidence?.map((x:string,i:number)=><div className="escalation-detail" key={i}>{x}</div>)}<div className="escalation-options">{p.escalation.options?.map((x:string,i:number)=><span key={i}>{x}</span>)}</div>{p.escalation.recommendation&&<p className="rec-line"><b>Recommendation:</b> {p.escalation.recommendation}</p>}</div>}
-    {p.reviewNote&&<div className={`review-outcome ${p.phase}`}><span>{p.phase==='accepted'?<Check size={15}/>:<AlertCircle size={15}/>}</span><div><strong>{p.phase==='accepted'?(p.resolution==='direct'?'Direct answer':p.resolution==='simple'?'Simple implementation complete':'Receipt accepted'):phaseText[p.phase]}</strong><div className="markdown-body"><Markdown>{p.reviewNote}</Markdown></div>{p.resolution==='direct'&&p.routingNote&&<small className="routing-note">Routing basis: {p.routingNote}</small>}</div></div>}
-    {p.phase==='accepted'&&task.agentmemProjectId&&recordStatus&&recordStatus!=='done'&&<div className={`agentmem-pass-status ${recordStatus==='failed'?'is-error':''}`} role="status"><span>{recordStatus==='saving'?'Saving AgentMem receipt…':recordStatus==='failed'?'AgentMem save failed':recordStatus==='in_progress'?'Receipt saved · AgentMem task still open':recordStatus==='released'?'AgentMem lease released':'Checking AgentMem receipt status…'}</span>{recordError&&<small>{recordError}</small>}{p.agentmemTaskId&&(recordStatus==='failed'||recordStatus==='in_progress')&&<button className="text-button" disabled={retrying} onClick={onRetryAgentMem}>{retrying?'Retrying…':'Retry AgentMem completion'}</button>}</div>}
+    {p.reviewNote&&!(p.phase==='accepted'&&isReadOnlyTeam)&&<div className={`review-outcome ${p.phase}`}><span>{p.phase==='accepted'?<Check size={15}/>:<AlertCircle size={15}/>}</span><div><strong>{p.phase==='accepted'?(p.resolution==='direct'?'Direct answer':p.resolution==='simple'?'Simple implementation complete':'Receipt accepted'):phaseText[p.phase]}</strong><div className="markdown-body"><Markdown>{p.reviewNote}</Markdown></div>{p.resolution==='direct'&&p.routingNote&&<small className="routing-note">Routing basis: {p.routingNote}</small>}</div></div>}
     {p.error&&<div className="error-card"><AlertCircle size={16}/><div><strong>{p.phase==='needs_attention'?'Action needed':'Workflow error'}</strong><p>{p.error}</p>{p.phase==='paused_after_restart'&&<small>Send an explicit update to reattach the saved threads and continue.</small>}</div></div>}
     <PassUsagePanel pass={p}/>
-    {output&&<section className="final-artifact" aria-label="Final output"><header><FileText size={16}/><strong>Final output</strong><span>{p.resolution==='direct'?directOutputLabel:p.resolution==='simple'?'GPT-6 Luna · xhigh · self-verified':recruitedExecution?`DeepSeek Harness (${recruitedExecution.provider}) · reviewed by orchestrator`:'Luna · reviewed by orchestrator'}</span></header><div className="final-artifact-body markdown-body"><Markdown>{output}</Markdown></div></section>}
+    {output&&<section className="final-artifact" aria-label="Final output"><header><FileText size={16}/><strong>Final output</strong><span>{finalOutputLabel}</span></header><div className="final-artifact-body markdown-body"><Markdown>{output}</Markdown></div></section>}
     <Disclosure title="Run receipt · repository and knowledge base changes" icon={<Check size={15}/>} open={receiptExpanded} onToggle={toggleReceipt}><RunReceipt pass={p} taskId={task.id}/></Disclosure>
   </section>;
 }
 
-function agentMemAuditTitle(pass:TaskPass){const audit=pass.agentmemAudit;if(!audit?.recorded)return 'AgentMem usage · historical record unavailable';const app=audit.calls.filter(call=>call.source==='application').length;const model=audit.calls.filter(call=>call.source==='model').length;return `AgentMem usage · ${model} model calls · ${app} app calls`;}
+function toolCallsTitle(pass:TaskPass){return toolCallLogTitle(pass.toolCalls);}
+function agentMemAuditTitle(pass:TaskPass){const audit=pass.agentmemAudit;if(!audit?.recorded)return 'Historical AgentMem audit · record unavailable';const app=audit.calls.filter(call=>call.source==='application').length;const model=audit.calls.filter(call=>call.source==='model').length;return `Historical AgentMem audit · ${model} model calls · ${app} app calls`;}
 function AgentMemAuditView({pass}:{pass:TaskPass}){
   const audit=pass.agentmemAudit;
   if(!audit?.recorded)return <div className="agentmem-audit-unknown" role="status">This pass predates AgentMem call auditing. Model-issued MCP calls and app-provided context were not recorded, so usage is unknown.</div>;
   const modelStatus=audit.modelMcpStatus==='observed'?'Model-issued AgentMem MCP calls were observed.':audit.modelMcpStatus==='disabled'?'AgentMem MCP was disabled for this pass.':audit.modelMcpStatus==='available'?'AgentMem MCP was available to execution roles; no call has been recorded yet.':audit.modelMcpStatus==='unavailable'?'AgentMem MCP was unavailable to the execution runtime.':audit.modelMcpStatus==='no_calls_observed'?'No AgentMem MCP call was observed for this pass.':'Model MCP availability and usage are unknown.';
-  const identity=audit.identityStatus==='verified'?`Verified: ${audit.verifiedProjectId||audit.selectedProjectId} ↔ ${audit.verifiedRoot||audit.workspaceRoot}`:audit.identityStatus==='disabled'?'No AgentMem project was selected for this pass.':audit.identityStatus==='mismatch'?`Project identity mismatch. Selected: ${audit.selectedProjectId||'none'}; workspace: ${audit.workspaceRoot}.`:`Selected: ${audit.selectedProjectId||'none'} ↔ ${audit.workspaceRoot} · ${audit.identityStatus}.`;
+  const identity=audit.identityStatus==='verified'?`Verified: ${audit.verifiedProjectId||audit.selectedProjectId} ↔ ${audit.verifiedRoot||audit.workspaceRoot}`:audit.identityStatus==='disabled'?'No AgentMem knowledge base was selected for this pass.':audit.identityStatus==='mismatch'?`Workspace identity mismatch. Selected knowledge base: ${audit.selectedProjectId||'none'}; workspace root: ${audit.workspaceRoot}.`:`Selected knowledge base: ${audit.selectedProjectId||'none'} ↔ ${audit.workspaceRoot} · ${audit.identityStatus}.`;
   return <div className="agentmem-audit" data-model-mcp-status={audit.modelMcpStatus}>
     <p className={audit.identityStatus==='mismatch'||audit.identityStatus==='unavailable'?'is-error':''}><strong>Selected knowledge base:</strong> {identity}</p>
     <p><strong>Selected repository index:</strong> {audit.verifiedRepositoryId||'Not verified for this pass'}</p>
@@ -1063,7 +1105,12 @@ function formatMicros(value:string|undefined,unit:'credits'|'USD'){
   }catch{return null;}
 }
 function PassUsagePanel({pass}:{pass:TaskPass}){
-  const usage=pass.usage||{};const allRoles:[keyof typeof usage,string][]=[['router','Router · Luna low · Fast'],['direct','Direct · Luna high'],['simple','Simple · Luna xhigh'],['orchestrator','Orchestrator'],['worker','Luna worker']];
+  const usage=pass.usage||{};const profile=pass.executionProfile;const descriptor=profile?executionDescriptor(profile,pass.deepSeekExecution):undefined;
+  const usageModel=(role:keyof PassUsage)=>{const models=[...new Set((usage[role]?.groups||[]).map(group=>group.model).filter((model):model is string=>!!model))];return models.length===1?compactModelName(models[0]):models.length>1?`${models.length} models recorded`:undefined;};
+  const workerModel=usageModel('worker');
+  const workerLabel=profile?`${profile.provider==='deepseek'?'DeepSeek Harness':compactModelName(profile.model)} worker · ${descriptor}`:workerModel?`${workerModel} worker`:'Worker · model unavailable';
+  const roleLabel=(role:'direct'|'simple')=>{const model=usageModel(role);if(role==='direct')return model?`Direct · ${model}`:'Direct · orchestrator model unavailable';if(profile)return `Simple · ${descriptor}`;return model?`Simple · ${model}`:'Simple · model unavailable';};
+  const allRoles:[keyof typeof usage,string][]=[['router','Router · Luna low · Fast'],['direct',roleLabel('direct')],['simple',roleLabel('simple')],['orchestrator','Orchestrator'],['worker',workerLabel]];
   const expected=allRoles.filter(([role])=>role==='router'?!!pass.routerThreadId:role==='direct'?!!pass.directThreadId:role==='simple'?!!pass.simpleThreadId:role==='orchestrator'?!!pass.orchestratorThreadId:!!pass.workerThreadId||pass.resolution==='delegated');
   const roles=allRoles.filter(([role])=>expected.some(([candidate])=>candidate===role)||!!usage[role]);
   const complete=['accepted','cancelled','escalated','needs_attention','paused_after_restart'].includes(pass.phase);
@@ -1102,8 +1149,36 @@ function PassUsagePanel({pass}:{pass:TaskPass}){
     </div>
   </section>;
 }
-function ApprovalCard({request,onDecision}:{request:any;onDecision:(decision:'accept'|'decline'|'cancel',content?:Record<string,unknown>)=>void}){const [contentText,setContentText]=useState('{}');const [contentError,setContentError]=useState('');const permission=request.method==='item/permissions/requestApproval';const elicitation=request.method==='mcpServer/elicitation/request';const accept=()=>{if(!elicitation||request.mode==='url'||!request.requestedSchema){onDecision('accept');return;}try{const value=JSON.parse(contentText||'{}');if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Response must be a JSON object.');onDecision('accept',value as Record<string,unknown>);setContentError('');}catch(error){setContentError(error instanceof Error?error.message:'Enter a valid JSON object.');}};return <section className="approval-card" aria-label={elicitation?'MCP server input request':'Codex approval needed'}><div className="approval-heading"><ShieldCheck size={15}/><strong>{elicitation?'MCP server needs your input':'Approval needed'}</strong><span>{elicitation?`${request.serverName||'MCP server'} · ${request.mode||'form'}`:permission?'Permission request':request.method.includes('fileChange')?'File change':'Command execution'}</span></div>{(elicitation?request.message:request.reason)&&<p>{elicitation?request.message:request.reason}</p>}{request.url&&elicitation&&<div className="approval-meta">Requested URL: {request.url}</div>}{elicitation&&request.requestedSchema&&<><div className="approval-meta">Requested fields</div><pre className="permission-preview">{JSON.stringify(request.requestedSchema,null,2)}</pre><label className="approval-form-label">Response JSON<textarea value={contentText} onChange={event=>{setContentText(event.target.value);setContentError('');}} spellCheck={false} aria-label="MCP response JSON" /></label>{contentError&&<div role="alert" className="approval-error">{contentError}</div>}</>}{request.command&&<pre>{request.command}</pre>}{request.networkHost&&<div className="approval-meta">Network destination: {request.networkHost} ({request.networkProtocol})</div>}{request.cwd&&<div className="approval-meta">Working directory: {request.cwd}</div>}{request.grantRoot&&<div className="approval-meta">Requested write root: {request.grantRoot}</div>}{permission&&<pre className="permission-preview">{JSON.stringify(request.permissionRequest,null,2)}</pre>}<div className="approval-actions"><button onClick={()=>onDecision('decline')}>Decline</button><button onClick={()=>onDecision('cancel')}>Cancel turn</button><button className="approval-accept" onClick={accept}>{elicitation?'Send response':permission?'Grant requested permissions':'Approve once'}</button></div></section>}
-function Disclosure({title,icon,open,onToggle,children}:{title:string;icon:React.ReactNode;open:boolean;onToggle:()=>void;children:React.ReactNode}){return <div className={`disclosure ${open?'open':''}`}><button className="disclosure-head" onClick={onToggle} aria-expanded={open}><span className="disclosure-icon">{icon}</span><strong>{title}</strong><ChevronDown size={14} className="disclosure-chevron"/><span className="disclosure-spacer"/></button><div className="disclosure-panel" aria-hidden={!open} inert={!open}><div className="disclosure-panel-inner"><div className="disclosure-content">{children}</div></div></div></div>}
+function ForgeApprovalCard({ticket,request,onDecision}:{ticket?:ForgeTicket;request:ApprovalRequest;onDecision:(decision:'accept'|'decline'|'cancel',content?:Record<string,unknown>)=>void}){
+  return <ApprovalCard request={request} onDecision={onDecision} disabledReason={ticket?forgeApprovalResponseReason(ticket,request):'The saved Forge ticket is unavailable. Refresh the session before responding.'}/>;
+}
+function forgeApprovalResponseReason(ticket:ForgeTicket,request:ApprovalRequest){
+  if(ticket.phase==='paused')return 'Forge is paused. Review the saved run and resume the ticket before answering; this request remains pending.';
+  if(ticket.phase==='cancelled'||ticket.phase==='complete')return 'This Forge ticket is cancelled or complete. The saved request cannot receive a response.';
+  if(ticket.phase==='blocked')return `Forge needs reconciliation before this request can be answered${ticket.attentionReason?`: ${ticket.attentionReason}`:''}. Refresh the board and reconcile the saved run.`;
+  if(!['planning','review','running','integrating'].includes(ticket.phase))return 'This request is not attached to a currently actionable Forge run.';
+  const context=request.forgeContext;
+  if(!context||context.ticketId!==ticket.id)return 'This saved request is missing its Forge run identity and cannot be answered.';
+  if(context.targetType==='planning'||context.targetType==='final_review'){
+    const run=ticket.orchestratorRuns.find(row=>row.id===context.targetId&&row.purpose===context.targetType);
+    if(run?.status==='unknown_after_restart')return 'The orchestrator run status is uncertain after restart. Refresh and reconcile the saved run before answering; the request remains pending.';
+    if(!run||ticket.activeOrchestratorRunId!==run.id||run.status!=='running'||run.ownerId!==context.ownerId||run.threadId!==request.threadId||run.turnId!==request.turnId||context.claimToken)return 'This request no longer matches the active orchestrator run and cannot be answered.';
+    return undefined;
+  }
+  if(context.targetType==='worker_attempt'){
+    const attempt=ticket.attempts.find(row=>row.id===context.targetId);
+    if(attempt?.status==='unknown_after_restart'||attempt?.status==='unknown_effect')return 'The worker attempt is uncertain or unreconciled. Refresh and reconcile the saved attempt before answering; the request remains pending.';
+    const active=ticket.workitems.some(row=>row.id===attempt?.taskId&&row.activeAttemptId===attempt.id);
+    if(!attempt||!active||attempt.status!=='claimed'||attempt.claim.ownerId!==context.ownerId||attempt.claim.token!==context.claimToken||attempt.threadId!==request.threadId||attempt.turnId!==request.turnId)return 'This request no longer matches an active worker attempt and cannot be answered.';
+    return undefined;
+  }
+  const run=ticket.integration.runs.find(row=>row.id===context.targetId);
+  if(run?.status==='unknown_after_restart')return 'The integration run status is uncertain after restart. Refresh and reconcile the saved run before answering; the request remains pending.';
+  if(!run||ticket.integration.activeRunId!==run.id||run.status!=='running'||run.ownerId!==context.ownerId||run.threadId!==request.threadId||run.turnId!==request.turnId||context.claimToken)return 'This request no longer matches the active integration run and cannot be answered.';
+  return undefined;
+}
+function ApprovalCard({request,onDecision,disabledReason}:{request:any;onDecision:(decision:'accept'|'decline'|'cancel',content?:Record<string,unknown>)=>void;disabledReason?:string}){const [contentText,setContentText]=useState('{}');const [contentError,setContentError]=useState('');const permission=request.method==='item/permissions/requestApproval';const elicitation=request.method==='mcpServer/elicitation/request';const forgeContext=request.forgeContext;const accept=()=>{if(disabledReason)return;if(!elicitation||request.mode==='url'||!request.requestedSchema){onDecision('accept');return;}try{const value=JSON.parse(contentText||'{}');if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Response must be a JSON object.');onDecision('accept',value as Record<string,unknown>);setContentError('');}catch(error){setContentError(error instanceof Error?error.message:'Enter a valid JSON object.');}};return <section className="approval-card" aria-label={elicitation?'MCP server input request':'Codex approval needed'}><div className="approval-heading"><ShieldCheck size={15}/><strong>{elicitation?'MCP server needs your input':'Approval needed'}</strong><span>{forgeContext?`Forge · ${forgeContext.targetType.replaceAll('_',' ')}`:elicitation?`${request.serverName||'MCP server'} · ${request.mode||'form'}`:permission?'Permission request':request.method.includes('fileChange')?'File change':'Command execution'}</span></div>{(elicitation?request.message:request.reason)&&<p>{elicitation?request.message:request.reason}</p>}{forgeContext&&<div className="approval-meta">Bound to {forgeContext.targetType.replaceAll('_',' ')} run {forgeContext.targetId} · {forgeContext.ownerId}</div>}{disabledReason&&<div className="forge-approval-inactive" role="status">{disabledReason}</div>}{request.url&&elicitation&&<div className="approval-meta">Requested URL: {request.url}</div>}{elicitation&&request.requestedSchema&&<><div className="approval-meta">Requested fields</div><pre className="permission-preview">{JSON.stringify(request.requestedSchema,null,2)}</pre><label className="approval-form-label">Response JSON<textarea disabled={!!disabledReason} value={contentText} onChange={event=>{setContentText(event.target.value);setContentError('');}} spellCheck={false} aria-label="MCP response JSON" /></label>{contentError&&<div role="alert" className="approval-error">{contentError}</div>}</>}{request.command&&<pre>{request.command}</pre>}{request.networkHost&&<div className="approval-meta">Network destination: {request.networkHost} ({request.networkProtocol})</div>}{request.cwd&&<div className="approval-meta">Working directory: {request.cwd}</div>}{request.grantRoot&&<div className="approval-meta">Requested write root: {request.grantRoot}</div>}{permission&&<pre className="permission-preview">{JSON.stringify(request.permissionRequest,null,2)}</pre>}<div className="approval-actions"><button disabled={!!disabledReason} onClick={()=>onDecision('decline')}>Decline</button><button disabled={!!disabledReason} onClick={()=>onDecision('cancel')}>Cancel turn</button><button className="approval-accept" disabled={!!disabledReason} onClick={accept}>{elicitation?'Send response':permission?'Grant requested permissions':'Approve once'}</button></div></section>}
+function Disclosure({title,icon,open,onToggle,children,className}:{title:React.ReactNode;icon:React.ReactNode;open:boolean;onToggle:()=>void;children:React.ReactNode;className?:string}){return <div className={`disclosure${open?' open':''}${className?` ${className}`:''}`}><button className="disclosure-head" onClick={onToggle} aria-expanded={open}><span className="disclosure-icon">{icon}</span><strong>{title}</strong><ChevronDown size={14} className="disclosure-chevron"/><span className="disclosure-spacer"/></button><div className="disclosure-panel" aria-hidden={!open} inert={!open}><div className="disclosure-panel-inner"><div className="disclosure-content">{children}</div></div></div></div>}
 function AssignmentView({assignment:a}:{assignment:Assignment}){const data:[string,string[]][]=[['Outcome',[a.outcome,a.deliverable]],['Authorized read scope',a.read_scope],['Authorized write scope',a.write_scope],['Constraints',a.constraints],['Acceptance',a.acceptance],['Verification',a.verification],['Escalate when',a.escalation_conditions],['Exclusions',a.exclusions]];return <div className="assignment-grid">{data.map(([label,items])=><div key={label} className="assignment-block"><span>{label}</span><ul>{items.map((x,i)=><li key={i}>{x}</li>)}</ul></div>)}</div>;}
 function RunReceipt({pass:p,taskId}:{pass:TaskPass;taskId:string}){
   const receipt=p.receipt;

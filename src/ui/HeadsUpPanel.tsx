@@ -2,12 +2,15 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, Copy, ExternalLink, Settings2, X } from 'lucide-react';
-import type { ReasoningTurn, Runtime, Settings, Task, TaskPass, WorkflowRole } from '../types';
+import type { Project, ReasoningTurn, Runtime, Settings, Task, TaskPass, WorkflowRole } from '../types';
 import { getCurrentTaskPass, summarizeSessionUsage, type SessionUsageBucket } from './sessionUsage';
+import { workspaceOptionLabel } from './workspace-label';
 import './HeadsUpPanel.css';
 
 export type HeadsUpPanelProps = {
   task: Task | null;
+  project:Project|null;
+  projects?:Project[];
   settings: Settings;
   runtime: Runtime | null;
   open: boolean;
@@ -183,7 +186,7 @@ function SettingRow({ label, value }: { label: string; value: string }) {
   return <div className="heads-up-setting-row"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-export function HeadsUpPanel({ task, settings, runtime, open, onClose, onOpenSettings, triggerRef }: HeadsUpPanelProps) {
+export function HeadsUpPanel({ task, project, projects=[], settings, runtime, open, onClose, onOpenSettings, triggerRef }: HeadsUpPanelProps) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
@@ -425,20 +428,18 @@ export function HeadsUpPanel({ task, settings, runtime, open, onClose, onOpenSet
           <h4>This session</h4>
           {task ? <>
             <SettingRow label="Root" value={task.userRoot || 'Not recorded'}/>
-            <SettingRow label="AgentMem" value={task.agentmemProjectId || 'Disabled'}/>
             <SettingRow label="Approval" value={pass?.approvalPolicy ? policyLabel[pass.approvalPolicy] || pass.approvalPolicy : 'Not recorded'}/>
             <SettingRow label="Orchestrator" value={actualOrchestrator ? `${actualOrchestrator.effectiveModel && actualOrchestrator.effectiveModel !== actualOrchestrator.requestedModel ? `${actualOrchestrator.effectiveModel} (requested ${actualOrchestrator.requestedModel})` : actualOrchestrator.requestedModel} · ${actualOrchestrator.requestedEffort}` : 'Not recorded'}/>
             <SettingRow label="Worker" value={actualWorker ? reasoningTurnLabel(actualWorker) : pass?.workerThreadId || task.workerThreadId ? 'Not recorded' : 'Not used'}/>
             {decision?.justification && <SettingRow label="Route reason" value={decision.justification}/>}
             {escalation && <SettingRow label="Escalation" value={`${routeName(escalation.from)} → ${routeName(escalation.to)} · ${escalation.reason}`}/>}
-            {(pass?.agentmemRecordStatus || task.agentmemRecordStatus) && <SettingRow label="AgentMem record" value={pass?.agentmemRecordStatus || task.agentmemRecordStatus || 'Not recorded'}/>}
           </> : <p className="heads-up-muted-copy">No session-specific settings are available.</p>}
         </div>
 
         <div className="heads-up-details-block">
           <h4>For new tasks</h4>
-          <SettingRow label="Root" value={settings.projectRoot || 'Not selected'}/>
-          <SettingRow label="AgentMem" value={settings.agentmemProjectId || 'Disabled'}/>
+          <SettingRow label="Workspace" value={project?workspaceOptionLabel(project,projects):'Choose a workspace'}/>
+          <SettingRow label="Working directory" value={project?.projectRoot || 'Not selected'}/>
           <SettingRow label="Approval" value={policyLabel[settings.approvalPolicy] || settings.approvalPolicy}/>
           <SettingRow label="Orchestrator" value={`${settings.orchestratorModel} · ${settings.orchestratorEffort}`}/>
           <SettingRow label="Worker" value="gpt-6-luna · high (app policy)"/>
@@ -448,7 +449,6 @@ export function HeadsUpPanel({ task, settings, runtime, open, onClose, onOpenSet
         <div className="heads-up-details-block">
           <h4>Runtime</h4>
           <SettingRow label="Codex" value={runtime?.codex.state || 'Unavailable'}/>
-          <SettingRow label="AgentMem" value={!runtime ? 'Unavailable' : runtime.agentmem.connected ? (runtime.agentmem.projectVerified ? 'Connected · verified' : 'Connected · unverified') : 'Disconnected'}/>
         </div>
       </DetailDisclosure>
     </div>

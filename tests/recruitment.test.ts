@@ -45,7 +45,6 @@ function teamFixture(workerStatuses: Array<'queued'|'running'|'complete'|'failed
     passId: 'pass',
     createdAt: '2026-10-26T00:00:00.000Z',
     canonicalProjectRoot: 'D:/project',
-    agentmemProjectId: 'pseudoharness',
     workspaceParent: 'D:/state/worktrees/task/pass',
     baseRef: 'HEAD',
     baseCommit: 'a'.repeat(40),
@@ -79,6 +78,15 @@ describe('recruited worker team contracts and recovery', () => {
   it('defaults worker effort to max when the model omits it', () => {
     const { effort: _effort, ...worker } = { name: 'Default', step: 'Implement an independent step', depends_on: [], assignment, effort: 'max', skill_refs: [] };
     expect(recruitmentWorkersSchema.parse({ workers: [worker] }).workers[0].effort).toBe('max');
+  });
+
+  it('allows only independent empty-write-scope read-only recruitment and keeps old payloads in worktree mode',()=>{
+    const answerAssignment={...assignment,write_scope:[]};
+    const worker={name:'Answer',step:'Return a read-only answer',depends_on:[],assignment:answerAssignment,effort:'max',skill_refs:[]};
+    expect(recruitmentWorkersSchema.parse({workers:[worker]}).mode).toBe('worktree');
+    expect(recruitmentWorkersSchema.parse({mode:'read_only',workers:[worker]}).mode).toBe('read_only');
+    expect(recruitmentWorkersSchema.safeParse({mode:'read_only',workers:[{...worker,assignment}]}).success).toBe(false);
+    expect(recruitmentWorkersSchema.safeParse({mode:'read_only',workers:[{...worker,depends_on:['Other']}]}).success).toBe(false);
   });
 
   it('keeps canonical project identity while rebasing only the worker filesystem scopes', () => {
@@ -130,7 +138,7 @@ describe('recruited worker team contracts and recovery', () => {
     expect(team.integration.status).toBe('paused_after_restart');
     expect(team.workers[0].headCommit).toBe('b'.repeat(40));
     expect(team.canonicalProjectRoot).toBe('D:/project');
-    expect(team.agentmemProjectId).toBe('pseudoharness');
+    expect(team.canonicalProjectRoot).toBe('D:/project');
     expect(pauseRecruitmentTeamAfterRestart(team)).toBeUndefined();
   });
 

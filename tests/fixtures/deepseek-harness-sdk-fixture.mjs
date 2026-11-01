@@ -16,7 +16,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       error(id, -32001, 'Authentication failed for a secret credential value.');
       return;
     }
-    reply(id, { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: 'fixture-0.0.1' } });
+    reply(id, { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: mode === 'init-provider' ? `fixture-provider:${params.provider}` : 'fixture-0.0.1' } });
     return;
   }
   if (method === 'session/prompt') {
@@ -27,13 +27,13 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'mcp-catalog') {
       write({ jsonrpc: '2.0', method: 'session.event', params: { sessionId: params.sessionId, event: {
         type: 'request/header', seq: 17, time: 1700000000000, data: { reason: 'turn-start', header: { tools: [
-          { name: 'mcp__agentmem__decisions' },
+          { name: 'mcp__project_notes__search' },
           { name: 'mcp__pseudoharness_skills__skills_list' },
           { name: 'read' },
         ] } },
       } } });
       write({ jsonrpc: '2.0', method: 'session.event', params: { sessionId: params.sessionId, event: {
-        type: 'tool/call', seq: 18, time: 1700000000000, data: { turn: 1, step: 1, callId: 'fixture-mcp-call', name: 'mcp__agentmem__decisions', arguments: '{"action":"list"}' },
+        type: 'tool/call', seq: 18, time: 1700000000000, data: { turn: 1, step: 1, callId: 'fixture-mcp-call', name: 'mcp__project_notes__search', arguments: '{"query":"bounded lookup"}' },
       } } });
       write({ jsonrpc: '2.0', method: 'session.event', params: { sessionId: params.sessionId, event: {
         type: 'tool/result', seq: 19, time: 1700000000000, surfaceOp: 'append', sourceEventSeqs: [18], data: { turn: 1, step: 1, message: { role: 'tool', toolCallId: 'fixture-mcp-call', source: { kind: 'tool', callId: 'fixture-mcp-call' }, isError: false, content: [{ type: 'text', text: 'fixture result' }] } },

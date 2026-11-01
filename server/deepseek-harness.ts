@@ -1,9 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
+import { lstat, mkdir, open, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ApprovalPolicy } from './contracts.js';
+import { stateDirectory } from './paths.js';
 
 type JsonRecord = Record<string, unknown>;
 type JsonRpcMessage = {
@@ -19,7 +21,7 @@ export type DeepSeekHarnessPermissionRequest = {
   approvalPolicy: ApprovalPolicy;
   /** True only when this exact pass has persisted the selected policy. */
   selectedForTask: boolean;
-  /** The task-owned worker/integrator worktree, distinct from the canonical AgentMem root. */
+  /** The task-owned worker/integrator worktree, distinct from the canonical project root. */
   workspaceRoot: string;
   /** The validated assignment write scope after rebasing into the task worktree. */
   writeScope: readonly string[];
@@ -39,7 +41,7 @@ export type DeepSeekHarnessPermissionGrant = {
 export type DeepSeekHarnessSdkLaunch = {
   command: string;
   args: readonly string[];
-  /** The task-owned DSH SDK profile selected by this launch. Defaults to `sdk`. */
+  /** The task-owned DSH SDK profile selected by this launch. Defaults to `opnex-sdk`. */
   profileName?: string;
   /** Native MCP servers configured in this profile; names only, never server env values. */
   configuredMcpServers?: readonly string[];
@@ -47,11 +49,28 @@ export type DeepSeekHarnessSdkLaunch = {
   harnessVersion?: string;
   /** Additional non-secret runtime variables. Credential values should stay in the Harness credential store. */
   env?: NodeJS.ProcessEnv;
+  /** Storage-only paths for Opnex sessions; DSH_HOME/profile/auth stay native. */
+  conversationStorage?: DeepSeekHarnessConversationStorage;
 };
+
+export type DeepSeekHarnessConversationStorage = {
+  home: string;
+  patchPath: string;
+  patchContents: string;
+};
+
+/** Replace only the storage overlay on a native DSH launch. */
+export function withDeepSeekHarnessConversationStorage(launch: DeepSeekHarnessSdkLaunch, conversationStorage?: DeepSeekHarnessConversationStorage): DeepSeekHarnessSdkLaunch {
+  const args = [...launch.args], patchIndex = args.indexOf('--patch');
+  if (patchIndex >= 0) args.splice(patchIndex, 2);
+  if (conversationStorage) args.push('--patch', conversationStorage.patchPath);
+  return { ...launch, args, ...(conversationStorage ? { conversationStorage } : { conversationStorage: undefined }) };
+}
 
 export type DeepSeekHarnessSdkOptions = {
   launch: DeepSeekHarnessSdkLaunch;
   cwd: string;
+  /** Opnex provider selection ID; mapped to the installed native DSH route. */
   provider: string;
   model: string;
   /** Pass through the native Harness value; this adapter does not translate Codex effort labels. */
@@ -74,14 +93,16 @@ export type DeepSeekHarnessMcpToolCatalog = {
 };
 export type DeepSeekHarnessRuntimeInfo = {
   provider: string;
+  /** The route ID requested in DSH initialize; this is not provider attestation. */
+  requestedProviderRoute: string;
   model: string;
   requestedReasoningEffort?: string;
-  permissionMode: DeepSeekHarnessPermissionMode;
+  permissionMode: DeepSeekHarnessPermissionMode | 'native-profile';
   selectedApprovalPolicy: ApprovalPolicy;
   workspaceRoot: string;
   writeScope: readonly string[];
-  access: 'read-only' | 'unrestricted';
-  filesystemScope: 'assignment-instruction-only' | 'read-only-preset';
+  access: 'read-only' | 'unrestricted' | 'native-profile';
+  filesystemScope: 'assignment-instruction-only' | 'read-only-preset' | 'native-profile';
   sessionId: string;
   profileName: string;
   configuredMcpServers: readonly string[];
@@ -126,6 +147,85 @@ export class DeepSeekHarnessError extends Error {
   }
 }
 
+export const OPNEX_DSH_SDK_PROFILE = 'opnex-sdk';
+
+function yamlString(value: string) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Build a storage-only overlay for one selected Opnex conversation home. */
+export function deepSeekHarnessConversationStorage(stateRoot = stateDirectory(), selectedHome?: string): DeepSeekHarnessConversationStorage {
+  const root = path.resolve(stateRoot);
+  const defaultHome = path.join(root, 'dsh-conversations');
+  if (selectedHome && !path.isAbsolute(selectedHome)) {
+    throw new DeepSeekHarnessError('configuration', 'Choose a valid absolute folder for DeepSeek conversations.');
+  }
+  const home = path.resolve(selectedHome || defaultHome);
+  if (!path.isAbsolute(home) || [...home].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
+    throw new DeepSeekHarnessError('configuration', 'Choose a valid absolute folder for DeepSeek conversations.');
+  }
+  const isDefaultHome = process.platform === 'win32' ? home.toLocaleLowerCase() === defaultHome.toLocaleLowerCase() : home === defaultHome;
+  const patchSuffix = isDefaultHome ? '' : `-${createHash('sha256').update(home).digest('hex').slice(0, 12)}`;
+  const patchPath = path.join(root, `dsh-conversations${patchSuffix}.patch.yml`);
+  const patchContents = [
+    '- id: session-persistence-jsonl',
+    "  name: '@deepseek-ai/dsh-session-persistence-jsonl'",
+    '  config:',
+    `    root: ${yamlString(path.join(home, 'sessions'))}`,
+    '- id: storage-json',
+    "  name: '@deepseek-ai/dsh-storage-json'",
+    '  config:',
+    `    root: ${yamlString(path.join(home, 'storages'))}`,
+    '- id: attachment-local',
+    "  name: '@deepseek-ai/dsh-attachment-local'",
+    '  config:',
+    `    dshHome: ${yamlString(home)}`,
+    '',
+  ].join('\n');
+  return { home, patchPath, patchContents };
+}
+
+/** Create the storage overlay once, refusing to overwrite an unexpected file. */
+export async function prepareDeepSeekHarnessConversationStorage(storage: DeepSeekHarnessConversationStorage) {
+  await mkdir(storage.home, { recursive: true, mode: 0o700 });
+  try {
+    const homeStat = await lstat(storage.home);
+    if (!homeStat.isDirectory() || homeStat.isSymbolicLink()) {
+      throw new Error('not an ordinary directory');
+    }
+  } catch {
+    throw new DeepSeekHarnessError('configuration', 'The Opnex DSH conversation home is not an ordinary local directory.');
+  }
+
+  let file;
+  try {
+    file = await open(storage.patchPath, 'wx', 0o600);
+    await file.writeFile(storage.patchContents, 'utf8');
+    await file.sync();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      try { await file?.close(); } catch { /* preserve the creation failure */ }
+      throw new DeepSeekHarnessError('configuration', 'The Opnex DSH conversation storage overlay could not be created. Check local app storage access.');
+    }
+    try {
+      const existing = await lstat(storage.patchPath);
+      if (!existing.isFile() || existing.isSymbolicLink() || await readFile(storage.patchPath, 'utf8') !== storage.patchContents) {
+        throw new Error('unexpected existing overlay');
+      }
+    } catch {
+      throw new DeepSeekHarnessError('configuration', 'The Opnex DSH conversation storage overlay already exists with unexpected contents. It was left unchanged.');
+    }
+  } finally {
+    try { await file?.close(); } catch { /* closed above or unavailable */ }
+  }
+  return storage.home;
+}
+
+export function deepSeekHarnessProviderRoute(provider: string) {
+  if (provider === 'opencode-go') return 'dsh-opencode-go';
+  throw new DeepSeekHarnessError('configuration', 'No installed native DSH route is available for the selected provider.');
+}
+
 const supportedSdkMethods = new Set([
   'initialize', 'session/prompt', 'session/resume', 'session/wait',
   'session/working-directory/get', 'session/working-directory/set', 'shutdown',
@@ -145,7 +245,7 @@ function assertProfileName(profileName: string) {
 export function createWindowsDeepSeekHarnessSdkLaunch(
   installationRoot: string,
   harnessVersion?: string,
-  profileName = 'sdk',
+  profileName = OPNEX_DSH_SDK_PROFILE,
 ): DeepSeekHarnessSdkLaunch {
   assertAbsoluteDirectory(installationRoot, 'DeepSeek Harness installation root');
   assertProfileName(profileName);
@@ -153,6 +253,7 @@ export function createWindowsDeepSeekHarnessSdkLaunch(
     throw new DeepSeekHarnessError('unsupported-capability', 'Direct desktop-app SDK launching is currently verified only on Windows. Configure the installed DSH SDK executable explicitly on this platform.');
   }
   const root = path.resolve(installationRoot);
+  const conversationStorage = deepSeekHarnessConversationStorage();
   const command = path.join(root, 'DeepSeek Harness.exe');
   const appArchive = path.join(root, 'resources', 'app.asar');
   const cli = path.join(root, DSH_HOST_CLI_RELATIVE_PATH);
@@ -163,8 +264,9 @@ export function createWindowsDeepSeekHarnessSdkLaunch(
   }
   return {
     command,
-    args: ['--expose-internals', cli, '--profile', profileName],
+    args: ['--expose-internals', cli, '--profile', profileName, '--patch', conversationStorage.patchPath],
     profileName,
+    conversationStorage,
     ...(harnessVersion ? { harnessVersion } : {}),
     env: { ELECTRON_RUN_AS_NODE: '1' },
   };
@@ -274,20 +376,19 @@ function makeMcpToolCatalog(
   observedAtSequence?: number,
   observed = false,
 ): DeepSeekHarnessMcpToolCatalog {
-  const servers = [...new Set(configuredServerNames)].sort();
-  const prefixes = new Map(servers.map(serverName => [serverName, `mcp__${serverName}__`]));
-  const tools = [...new Set(discoveredToolNames)]
-    .filter(name => [...prefixes.values()].some(prefix => name.startsWith(prefix)))
-    .sort();
-  const available = servers.filter(serverName => tools.some(name => name.startsWith(prefixes.get(serverName)!)));
-  const missing = observed ? servers.filter(serverName => !available.includes(serverName)) : [];
-  const status = servers.length === 0
-    ? 'not-configured'
-    : !observed
-      ? 'pending'
-      : missing.length === 0
-        ? 'ready'
-        : 'missing-tools';
+  const tools = [...new Set(discoveredToolNames)].filter(name => name.startsWith('mcp__')).sort();
+  const nativeServers = tools.flatMap(name => {
+    const boundary = name.indexOf('__', 5);
+    return boundary > 5 ? [name.slice(5, boundary)] : [];
+  });
+  const servers = [...new Set([...configuredServerNames, ...nativeServers])].sort();
+  const available = [...new Set(nativeServers)].sort();
+  const missing = observed ? configuredServerNames.filter(serverName => !available.includes(serverName)) : [];
+  const status = !observed
+    ? configuredServerNames.length ? 'pending' : 'not-configured'
+    : missing.length
+      ? 'missing-tools'
+      : servers.length ? 'ready' : 'not-configured';
   return Object.freeze({
     status,
     configuredServerNames: Object.freeze(servers),
@@ -312,7 +413,6 @@ function isPathWithin(root: string, candidate: string) {
 function runtimeEnvironment(
   inherited: NodeJS.ProcessEnv,
   launch: DeepSeekHarnessSdkLaunch,
-  permission: DeepSeekHarnessPermissionGrant,
 ) {
   // Do not pass unrelated application secrets to the worker process or its tools.
   // Harness authentication is resolved by the installed Harness profile/credential store.
@@ -322,14 +422,14 @@ function runtimeEnvironment(
     'PROGRAMFILES(X86)', 'PROGRAMW6432', 'SYSTEMROOT', 'TEMP', 'TMP', 'USERPROFILE', 'WINDIR',
     'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'TMPDIR', 'TZ',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
-    'DSH_HOME',
+    'DSH_HOME', 'DSH_AGENTS_HOME',
   ]);
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(inherited)) {
     if (value !== undefined && allowed.has(key.toUpperCase())) env[key] = value;
   }
-  // The DSH SDK reads its own profile state. Keep explicit runtime configuration
-  // separate from inherited secrets and then set the selected native preset.
+  // Preserve the user's native DSH profile and environment without forwarding
+  // unrelated application secrets to the runtime or its tools.
   for (const [key, value] of Object.entries(launch.env ?? {})) {
     if (value === undefined) continue;
     const normalized = key.toUpperCase();
@@ -338,7 +438,6 @@ function runtimeEnvironment(
     }
     env[key] = value;
   }
-  env.DSH_PERMISSION_MODE = permission.permissionMode;
   return env;
 }
 
@@ -441,7 +540,7 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
     if (options.permission[deepSeekPermissionGrantBrand] !== true) {
       throw new DeepSeekHarnessError('configuration', 'DeepSeek Harness permission grants must come from the fail-closed task-policy resolver.');
     }
-    const profileName = options.launch.profileName ?? 'sdk';
+    const profileName = options.launch.profileName ?? OPNEX_DSH_SDK_PROFILE;
     assertProfileName(profileName);
     const profileIndex = options.launch.args.indexOf('--profile');
     if (profileIndex < 0 || options.launch.args[profileIndex + 1] !== profileName) {
@@ -477,12 +576,15 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
   private async connectOnce(): Promise<DeepSeekHarnessRuntimeInfo> {
     this.expectedExit = false;
     this.cancelled = false;
+    if (this.options.launch.conversationStorage) {
+      await prepareDeepSeekHarnessConversationStorage(this.options.launch.conversationStorage);
+    }
     const spawnProcess = this.options.spawnProcess ?? spawn;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawnProcess(this.options.launch.command, [...this.options.launch.args], {
         cwd: this.options.cwd,
-        env: runtimeEnvironment(process.env, this.options.launch, this.options.permission),
+        env: runtimeEnvironment(process.env, this.options.launch),
         shell: false,
         windowsHide: true,
         detached: process.platform !== 'win32',
@@ -513,9 +615,10 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
       if (!wasExpected) this.emit('disconnected', reason);
     });
 
+    const providerRoute = deepSeekHarnessProviderRoute(this.options.provider);
     const initialized = await this.request('initialize', {
       cwd: this.options.cwd,
-      provider: this.options.provider,
+      provider: providerRoute,
       model: this.options.model,
       ...(this.options.reasoningEffort ? { reasoningEffort: this.options.reasoningEffort } : {}),
     }, 30000);
@@ -529,16 +632,17 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
     }
     const info: DeepSeekHarnessRuntimeInfo = {
       provider: this.options.provider,
+      requestedProviderRoute: providerRoute,
       model: this.options.model,
       ...(this.options.reasoningEffort ? { requestedReasoningEffort: this.options.reasoningEffort } : {}),
-      permissionMode: this.options.permission.permissionMode,
+      permissionMode: 'native-profile',
       selectedApprovalPolicy: this.options.permission.approvalPolicy,
       workspaceRoot: this.options.permission.workspaceRoot,
       writeScope: this.options.permission.writeScope,
-      access: this.options.permission.access,
-      filesystemScope: this.options.permission.filesystemScope,
+      access: 'native-profile',
+      filesystemScope: 'native-profile',
       sessionId: this.sessionId,
-      profileName: this.options.launch.profileName ?? 'sdk',
+      profileName: this.options.launch.profileName ?? OPNEX_DSH_SDK_PROFILE,
       configuredMcpServers: Object.freeze([...(this.options.launch.configuredMcpServers ?? [])]),
       mcpToolCatalog: this._mcpToolCatalog,
       serverInfo,
