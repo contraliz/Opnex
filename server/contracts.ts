@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { mcpServerRegistrationsSchema } from './mcp-registration.js';
 
 const text = z.string().trim().min(1).max(12000);
 export const assignmentSchema = z.object({
@@ -66,7 +67,7 @@ export const routeNameSchema = z.enum(['direct_answer','simple_implementation','
 export const routeRuleSchema = z.enum([
   'direct_explanation_or_transform','simple_bounded_correction','simple_internal_rename','simple_mechanical_dependency_upgrade','simple_established_documentation','simple_routine_git',
   'hard_new_feature','hard_multi_component_change','hard_migration','hard_major_dependency_upgrade','hard_public_contract_change','hard_lifecycle_change',
-  'hard_unknown_cause_diagnosis','hard_mixed_scope','hard_significant_uncertainty','hard_explicit_project_knowledge'
+  'hard_unknown_cause_diagnosis','hard_mixed_scope','hard_significant_uncertainty','hard_explicit_project_knowledge','hard_explicit_worker_delegation'
 ]);
 export const ROUTE_RULES={
   direct_explanation_or_transform:'direct_answer',
@@ -85,6 +86,7 @@ export const ROUTE_RULES={
   hard_mixed_scope:'hard_task',
   hard_significant_uncertainty:'hard_task',
   hard_explicit_project_knowledge:'hard_task',
+  hard_explicit_worker_delegation:'hard_task',
 } as const;
 export const routeDecisionSchema=z.object({route:routeNameSchema,rule_id:routeRuleSchema,justification:z.string().trim().min(1).max(400)}).strict().superRefine((decision,ctx)=>{
   if(ROUTE_RULES[decision.rule_id]!==decision.route)ctx.addIssue({code:'custom',path:['rule_id'],message:'Routing rule does not authorize this route.'});
@@ -118,6 +120,7 @@ export const delegationPlanSchema = z.object({
   type:z.literal('delegate'), assignment:assignmentSchema,
 }).strict();
 export const recruitmentWorkersSchema = z.object({
+  mode:z.enum(['worktree','read_only']).default('worktree'),
   workers:z.array(z.object({
     name:z.string().trim().min(1).max(80),
     step:z.string().trim().min(1).max(240),
@@ -126,7 +129,13 @@ export const recruitmentWorkersSchema = z.object({
     effort:z.literal('max').default('max'),
     skill_refs:z.array(z.string().trim().min(1).max(160)).max(12),
   }).strict()).min(1).max(9),
-}).strict();
+}).strict().superRefine((plan,ctx)=>{
+  if(plan.mode!=='read_only')return;
+  plan.workers.forEach((worker,index)=>{
+    if(worker.assignment.write_scope.length)ctx.addIssue({code:'custom',path:['workers',index,'assignment','write_scope'],message:'Read-only recruitment requires an empty write scope.'});
+    if(worker.depends_on.length)ctx.addIssue({code:'custom',path:['workers',index,'depends_on'],message:'Read-only recruitment does not support dependent steps.'});
+  });
+});
 export type RecruitmentWorkerPlan=z.infer<typeof recruitmentWorkersSchema>['workers'][number];
 export const qaAuditOutcomeSchema=z.object({
   type:z.literal('qa_audit'),
@@ -230,13 +239,16 @@ export const settingsSchema = z.object({
   orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   executionProfile:z.object({provider:z.enum(['codex','deepseek']),model:z.string().trim().min(1).max(200),effort:z.enum(['low','medium','high','xhigh','max','ultra'])}).strict().optional(),
   deepseekProvider:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('opencode-go'),deepseekModel:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('deepseek-v4.1-flash'),deepseekReasoningEffort:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('max'),
+  deepseekConversationStorageMode:z.enum(['native','isolated']).default('isolated'),
+  deepseekConversationStorageDirectory:z.string().trim().min(1).max(1024).refine(value=>![...value].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127)).optional(),
+  mcpServers:mcpServerRegistrationsSchema.default([]),
   approvalPolicy: z.enum(['on-request','untrusted','never','full-access']).default('on-request'),
 }).strict();
 
 export const assignmentJsonSchema = { type: 'object', additionalProperties: false, required: ['outcome','deliverable','read_scope','write_scope','exclusions','constraints','context_refs','skill_refs','acceptance','verification','ordinary_authority','escalation_conditions','receipt_requirements'], properties: {
   outcome: { type: 'string' }, deliverable: { type: 'string' }, read_scope: { type: 'array', items: { type: 'string' } }, write_scope: { type: 'array', items: { type: 'string' } }, exclusions: { type: 'array', items: { type: 'string' } }, constraints: { type: 'array', items: { type: 'string' } }, context_refs: { type: 'array', items: { type: 'string' } }, skill_refs: { type: 'array', items: { type: 'string' } }, acceptance: { type: 'array', items: { type: 'string' } }, verification: { type: 'array', items: { type: 'string' } }, ordinary_authority: { type: 'array', items: { type: 'string' } }, escalation_conditions: { type: 'array', items: { type: 'string' } }, receipt_requirements: { type: 'array', items: { type: 'string' } },
 }};
-export const recruitmentToolSchema={type:'object',additionalProperties:false,required:['workers'],properties:{workers:{type:'array',minItems:1,maxItems:9,items:{type:'object',additionalProperties:false,required:['name','step','depends_on','assignment','effort','skill_refs'],properties:{name:{type:'string',maxLength:80},step:{type:'string',maxLength:240},depends_on:{type:'array',maxItems:8,items:{type:'string',maxLength:80}},assignment:assignmentJsonSchema,effort:{type:'string',enum:['max']},skill_refs:{type:'array',maxItems:12,items:{type:'string',maxLength:160}}}}}}};
+export const recruitmentToolSchema={type:'object',additionalProperties:false,required:['workers'],properties:{mode:{type:'string',enum:['worktree','read_only']},workers:{type:'array',minItems:1,maxItems:9,items:{type:'object',additionalProperties:false,required:['name','step','depends_on','assignment','effort','skill_refs'],properties:{name:{type:'string',maxLength:80},step:{type:'string',maxLength:240},depends_on:{type:'array',maxItems:8,items:{type:'string',maxLength:80}},assignment:assignmentJsonSchema,effort:{type:'string',enum:['max']},skill_refs:{type:'array',maxItems:12,items:{type:'string',maxLength:160}}}}}}};
 export const qaAuditJsonSchema={type:'object',additionalProperties:false,required:['type','status','summary','findings'],properties:{type:{type:'string',enum:['qa_audit']},status:{type:'string',enum:['issues_found','no_actionable_issues']},summary:{type:'string',maxLength:4000},findings:{type:'array',maxItems:20,items:{type:'object',additionalProperties:false,required:['title','severity','issue','required_fix','evidence'],properties:{title:{type:'string',maxLength:240},severity:{type:'string',enum:['critical','high','medium','low']},issue:{type:'string',maxLength:4000},required_fix:{type:'string',maxLength:4000},evidence:{type:'array',minItems:1,maxItems:12,items:{type:'string',maxLength:1000}},file:{type:'string',maxLength:500},line:{type:'integer',minimum:1,maximum:100000}}}}}};
 // Codex structured outputs require a top-level object. Branch-exclusive fields
 // are nullable in the wire shape; initialOrchestratorSchema enforces exclusivity.

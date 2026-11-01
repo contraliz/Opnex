@@ -16,7 +16,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       error(id, -32001, 'Authentication failed for a secret credential value.');
       return;
     }
-    reply(id, { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: 'fixture-0.0.1' } });
+    reply(id, { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: mode === 'init-provider' ? `fixture-provider:${params.provider}` : 'fixture-0.0.1' } });
     return;
   }
   if (method === 'session/prompt') {

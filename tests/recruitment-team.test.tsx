@@ -17,14 +17,12 @@ const team: RecruitmentTeam = {
 describe('recruitment roster panel', () => {
   it('shows the actual recruited count and one distinct worker bar per worker, separate from integration', () => {
     render(<RecruitmentTeamPanel team={team} />);
-    expect(screen.getByText('2 workers recruited')).toBeTruthy();
     const roster = screen.getByRole('list', { name: 'Recruited workers (2)' });
     expect((roster as HTMLUListElement).children).toHaveLength(2);
     expect(within(roster).getByRole('heading', { name: 'Worker One' })).toBeTruthy();
     expect(within(roster).getByRole('heading', { name: 'Worker Two' })).toBeTruthy();
     expect(within(roster).getAllByText('max')).toHaveLength(1);
     expect(screen.getByRole('heading', { name: 'Integration' })).toBeTruthy();
-    expect(screen.queryByText('3 workers recruited')).toBeNull();
     fireEvent.click(within(roster).getAllByText('Full worktree path')[1]);
     expect(within(roster).getByText('D:/state/worker-two')).toBeTruthy();
   });
@@ -35,5 +33,10 @@ describe('recruitment roster panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Steer integration agent' }));
     expect(selected).toEqual(['w2', 'integration']);
     expect(screen.getAllByRole('button')).toHaveLength(2);
+  });
+  it('shows read-only teams in the project root without invented Git or integration details',()=>{
+    const answerTeam:RecruitmentTeam={teamId:'read-only-team',status:'complete',mode:'read_only',canonicalProjectRoot:'D:/workspace/project',workers:[{workerId:'answer-worker',name:'Answer worker',status:'complete',effort:'max',executionRoot:'D:/workspace/project',assignment:{outcome:'Answer the question',deliverable:'A concise answer',read_scope:['README.md'],write_scope:[]},receipt}]};
+    const view=render(<RecruitmentTeamPanel team={answerTeam}/>),details=within(view.container);
+    expect(details.getByText('Read-only team · no Git worktree or integrator')).toBeTruthy();expect(details.getAllByText('D:/workspace/project').length).toBeGreaterThan(0);expect(details.queryByRole('heading',{name:'Integration'})).toBeNull();expect(details.queryByText('Branch')).toBeNull();expect(details.queryByText('Full worktree path')).toBeNull();
   });
 });

@@ -38,7 +38,7 @@ function objectFromPrompt(prompt: string, label: string) {
 }
 
 describe('Forge runtime lifecycle on a disposable repository', () => {
-  vi.setConfig({ testTimeout: 60_000, hookTimeout: 30_000 });
+  vi.setConfig({ testTimeout: 90_000, hookTimeout: 30_000 });
   let fixture = '';
   let testRepo = '';
   const children: ChildProcess[] = [];

@@ -11,6 +11,7 @@ const { navigationState, navigate, attachNavigationHandlers } = require('./brows
 const { openCodexThread } = require('./codex-thread-link.cjs');
 const { createTrayController } = require('./tray-controller.cjs');
 const { stopOwnedKernel } = require('./kernel-shutdown.cjs');
+const { desktopUserDataPath, desktopUserDataPaths, desktopUserDataPathForLock, desktopStorageFallbackPaths, migrateDesktopUserData } = require('./storage-migration.cjs');
 
 function appEnv(name){return process.env[`OPNEX_${name}`]??process.env[`PSEUDOHARNESS_${name}`];}
 
@@ -38,17 +39,35 @@ let annotationTimer;
 if(appEnv('INTERACTION_TEST')==='1'&&appEnv('CDP_PORT'))app.commandLine.appendSwitch('remote-debugging-port',String(Number(appEnv('CDP_PORT'))));
 
 const isolatedUserData=appEnv('ELECTRON_DATA_DIR');
+let startupStorageError;
+let desktopDataPaths;
+let desktopLockPath;
+let desktopStorageFallback;
 if(isolatedUserData){const userData=path.resolve(isolatedUserData);mkdirSync(userData,{recursive:true});app.setPath('userData',userData);}
-else{
-  // Keep the pre-Opnex Electron profile path so upgrades retain sessions, cookies, and local settings.
-  const legacyUserData=path.join(app.getPath('appData'),'Pseudoharness');
-  mkdirSync(legacyUserData,{recursive:true});
-  app.setPath('userData',legacyUserData);
-}
-const ownsDesktopInstance=app.requestSingleInstanceLock();
+else if(process.platform==='win32'){app.setPath('userData',desktopUserDataPath(app.getPath('appData'),'win32'));}
+else{desktopDataPaths=desktopUserDataPaths(app.getPath('appData'));desktopLockPath=desktopUserDataPathForLock(desktopDataPaths);app.setPath('userData',desktopLockPath);}
+let ownsDesktopInstance=app.requestSingleInstanceLock();
 if(!ownsDesktopInstance)app.quit();
+else if(!isolatedUserData&&process.platform!=='win32'){try{
+  migrateDesktopUserData(desktopDataPaths);
+  app.setPath('userData',desktopDataPaths.current);
+  if(desktopLockPath!==desktopDataPaths.current){
+    app.releaseSingleInstanceLock();
+    ownsDesktopInstance=app.requestSingleInstanceLock();
+    if(!ownsDesktopInstance)app.quit();
+  }
+}catch(error){
+  const detail=error instanceof Error?error.message:String(error);
+  console.error('Opnex desktop storage migration failed:',detail);
+  if(error?.cleanupError)console.warn('The incomplete migration staging directory was preserved because cleanup failed:',error.cleanupError instanceof Error?error.cleanupError.message:String(error.cleanupError));
+  desktopStorageFallback=desktopStorageFallbackPaths(desktopDataPaths,error);
+  if(desktopStorageFallback){
+    app.setPath('userData',desktopStorageFallback.userData);
+    console.warn('Opnex is using its intact legacy data and browser-profile directories for this session; migration will be retried at a later launch.');
+  }else{startupStorageError=error;app.setPath('userData',desktopDataPaths.current);}
+}}
 const browserProfile=browserProfilePath({platform:process.platform,localAppData:process.env.LOCALAPPDATA,userData:app.getPath('userData'),isolated:!!isolatedUserData});
-mkdirSync(browserProfile,{recursive:true});app.setPath('sessionData',browserProfile);
+if(ownsDesktopInstance&&!startupStorageError)mkdirSync(browserProfile,{recursive:true});app.setPath('sessionData',browserProfile);
 
 function pickPort(){return new Promise((resolve,reject)=>{const server=createServer();server.once('error',reject);server.listen(0,'127.0.0.1',()=>{const port=server.address().port;server.close(error=>error?reject(error):resolve(port));});});}
 function validAppSender(event){try{return !!mainWindow&&event.sender===mainWindow.webContents&&new URL(event.senderFrame?.url).origin===origin;}catch{return false;}}
@@ -175,6 +194,7 @@ if(ownsDesktopInstance){
 }
 app.whenReady().then(async()=>{
   if(!ownsDesktopInstance)return;
+  if(startupStorageError){dialog.showErrorBox('Opnex storage needs attention',startupStorageError.message);app.quit();return;}
   try{await startBackend();createSystemTray();await session.fromPartition(partition).setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));registerIpc();await createAppWindow();if(appEnv('SMOKE_TEST')==='1'){await smokeTrayWindowLifecycle();const smokeUrl=appEnv('SMOKE_URL');if(smokeUrl){const [smokeTab]=addTab(smokeUrl,'main');tabs.get(smokeTab.id)?.view.webContents.once('did-finish-load',()=>void session.fromPartition(partition).cookies.flushStore().finally(()=>void requestAppQuit()));}else void requestAppQuit();}}
   catch(error){console.error(error);if(error instanceof Error&&error.code==='STATE_DIRECTORY_IN_USE')dialog.showErrorBox('Opnex is already running',error.message);else if(error instanceof Error&&error.code==='STATE_OWNER_UNAVAILABLE')dialog.showErrorBox('Opnex could not use local state',error.message);process.exitCode=1;app.quit();}
 });

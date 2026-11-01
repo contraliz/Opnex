@@ -30,4 +30,10 @@ describe('request routing contract',()=>{
     expect(ROUTING_RULE_PROMPT).toContain('Use the generic project skills and configured tools when available');
     expect(ROUTING_RULE_PROMPT).toContain('the application does not retrieve or attach knowledge itself');
   });
+  it('routes an explicit request to actually delegate a worker as a hard task',()=>{
+    const decision={route:'hard_task',rule_id:'hard_explicit_worker_delegation',justification:'The user explicitly asked Opnex to recruit and run one worker.'};
+    expect(routeDecisionSchema.safeParse(decision).success).toBe(true);
+    expect(ROUTING_RULE_PROMPT).toContain('hard_explicit_worker_delegation');
+    expect(ROUTING_RULE_PROMPT).toContain('even if the assignment is read-only or the requested result is simple');
+  });
 });
