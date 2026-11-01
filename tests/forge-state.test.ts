@@ -109,6 +109,18 @@ describe('Forge plan acceptance',()=>{
     expect(()=>createForgeTicket({...ticket(),scope:{read:['src'],write:['../outside'],knowledge:['knowledge/opnex']}})).toThrow(/scope|traversal/i);
   });
 
+  it('accepts a ticket input with only a task description and fills safe defaults',()=>{
+    const parsed=forgeTicketInputSchema.parse({projectId:'11111111-1111-4111-8111-111111111111',description:'# Fix the cache\nKeep existing behavior.'});
+    expect(parsed.title).toBe('Fix the cache');
+    expect(parsed.acceptanceCriteria).toEqual([]);
+    expect(parsed.scope).toEqual({read:['.'],write:['.'],knowledge:[]});
+    expect(parsed.orchestrator).toBeUndefined();
+    expect(parsed.limits).toEqual({maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3});
+    expect(parsed.knowledgeBudget).toEqual({totalOperations:64,defaultAllocationOperations:2,maxAllocationOperations:8});
+    const created=createForgeTicket({...ticket(),title:parsed.title,acceptanceCriteria:parsed.acceptanceCriteria});
+    expect(created.acceptanceCriteria).toEqual([]);
+  });
+
   it('accepts a valid single-task plan and starts the task open',()=>{
     const proposed=applyForgeCommand(ticket(),{type:'submit_manual_plan',actor:{role:'user',id:'orch-1'},planId:'plan-a',tasks:[planTask('task-a')]},at);
     const accepted=applyForgeCommand(proposed,{type:'accept_plan',actor:{role:'orchestrator',id:'orch-1'},revision:1},at);
