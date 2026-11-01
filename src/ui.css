@@ -1585,3 +1585,15 @@ body { min-width: 640px; min-height: 520px; }
 .settings-dialog h2 { font-size:18px; }
 .settings-dialog label { margin:8px 0 9px; font-size:12px; }
 .settings-dialog input,.settings-dialog select { height:36px; padding:0 10px; font-size:12px; }
+
+/* ===== Session tree guides, pin state, workspace quick actions (2026-11-01) ===== */
+.project-group-new { width:24px; height:24px; display:grid; place-items:center; padding:0; border:0; border-radius:4px; background:transparent; color:#9a9a9a; cursor:pointer; opacity:.72; transition:opacity .14s ease,background-color .13s ease,color .13s ease; }
+.project-group-new:hover { background:#383838; color:#ededed; opacity:1; }
+.project-group-new:focus-visible { outline:2px solid var(--accent-soft); outline-offset:1px; opacity:1; }
+.project-group-pin[aria-pressed="true"] { opacity:1; color:var(--accent-soft); background:color-mix(in srgb,var(--accent) 16%,transparent); }
+.project-group-pin[aria-pressed="true"]:hover { background:color-mix(in srgb,var(--accent) 26%,transparent); color:#ded3ff; }
+.project-session-rows { padding:2px 0 2px 28px; }
+.project-session-rows::before { position:absolute; z-index:0; top:3px; bottom:3px; left:14px; width:1px; border-radius:1px; background:#3a3a3a; content:''; pointer-events:none; transition:opacity .14s ease; }
+.project-session-rows.closed::before { opacity:0; }
+.project-empty { display:flex; align-items:center; min-height:24px; margin:2px 0 1px; padding:0 8px; border:1px dashed #343434; border-radius:5px; background:transparent; color:#737373; font-size:9.5px; }
+.project-session-group.is-drop-target .project-empty { border-color:#6b6390; background:#2a2735; color:#b9addf; }
