@@ -60,14 +60,19 @@
 .git-workspace .git-commit-row::before {
   position: absolute;
   z-index: 0;
-  inset: 0;
-  clip-path: inset(0 0 0 calc(var(--git-graph-width) + var(--git-commit-row-gap)));
+  top: 3px;
+  right: 4px;
+  bottom: 3px;
+  left: calc(var(--git-graph-width) + var(--git-commit-row-gap) - 2px);
+  border-radius: 7px;
   background: transparent;
   content: '';
   pointer-events: none;
   transition: background-color .12s ease;
 }
 .git-workspace .git-commit-row:hover::before { background-color: #252525; }
+.git-workspace .git-commit-copy { padding-left: 8px; }
+.git-workspace .git-commit-row > code { padding-right: 4px; }
 .git-workspace .git-commit-row > * { position: relative; z-index: 1; }
 .git-workspace .git-commit-row > .git-graph-space {
   z-index: 2;
