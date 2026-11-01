@@ -278,7 +278,7 @@ describe('routed request workflow',()=>{
   it('discovers and applies the project knowledge skill through generic skill selection',async()=>{
     const {orchestrator,state}=await setupDeepSeek();
     const skillDirectory=path.join(projectRoot,'.agents','skills','agentmem-project');await mkdir(skillDirectory,{recursive:true});
-    const skillText=await readFile(path.resolve('.agents/skills/agentmem-project/SKILL.md'),'utf8');await writeFile(path.join(skillDirectory,'SKILL.md'),skillText);
+    const skillText=(await readFile(path.resolve('.agents/skills/agentmem-project/SKILL.md'),'utf8')).replace(/\r\n?/g,'\n');await writeFile(path.join(skillDirectory,'SKILL.md'),skillText);
     const staging=await import('../server/worker-staging.js');const [skill]=await staging.searchConfiguredSkills('agentmem-project',testCodexHome,projectRoot);expect(skill).toBeTruthy();
     const task=await orchestrator.submitTask(`Research the project's documented decision about this behavior using the project knowledge skill.\n/skill ${skill.id}`);await complete('router',{route:'hard_task',rule_id:'hard_explicit_project_knowledge',justification:'The request asks for substantive project-specific research.'});const planner=await waitForRole('orchestrator');
     expect(state.getTask(task.id)?.routeDecision).toMatchObject({route:'hard_task',effectiveRoute:'hard_task',rule_id:'hard_explicit_project_knowledge'});

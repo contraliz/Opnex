@@ -65,16 +65,79 @@ function versionInput(input:{name:unknown;description:unknown;instructions:unkno
 export async function createSkill(input:{name:unknown;description:unknown;instructions:unknown;source?:unknown;files?:unknown},record?:{taskId:string;passId:string;role:string}){
   await initializeSkillLibrary();const parsed=versionInput(input),id=randomUUID(),now=new Date().toISOString(),d=database();d.exec('BEGIN IMMEDIATE');try{if(d.prepare('SELECT 1 FROM skills s JOIN skill_versions v ON v.skill_id=s.id AND v.revision=s.current_revision WHERE s.archived=0 AND v.name=? COLLATE NOCASE').get(parsed.name))throw new Error(`An active saved skill named "${parsed.name}" already exists.`);d.prepare('INSERT INTO skills(id,current_revision,created_at,updated_at,archived) VALUES(?,?,?,?,0)').run(id,parsed.revision,now,now);d.prepare('INSERT INTO skill_versions(skill_id,revision,name,description,instructions,source,created_at) VALUES(?,?,?,?,?,?,?)').run(id,parsed.revision,parsed.name,parsed.description,parsed.instructions,parsed.source,now);const ins=d.prepare('INSERT INTO skill_files(skill_id,revision,relative_path,content) VALUES(?,?,?,?)');for(const file of parsed.files)ins.run(id,parsed.revision,file.path,file.content);if(record)d.prepare('INSERT INTO skill_saves(id,skill_id,revision,task_id,pass_id,role,action,created_at) VALUES(?,?,?,?,?,?,?,?)').run(randomUUID(),id,parsed.revision,record.taskId,record.passId,record.role,'create',now);d.exec('COMMIT');}catch(error){d.exec('ROLLBACK');throw error;}return getSkill(id);
 }
+function foldYamlLines(lines:string[]){
+  let result='';let blanks=0;
+  for(const line of lines){const value=line.trim();if(!value){if(result)blanks++;continue;}if(result)result+=blanks?'\n'.repeat(blanks):' ';result+=value;blanks=0;}
+  return result;
+}
+function readBlockScalar(header:RegExpMatchArray,lines:string[]){
+  const widths=lines.filter(line=>line.trim()).map(line=>line.match(/^ */)?.[0].length||0);
+  const indent=Number(header[3]||0)||Math.min(...widths,Number.MAX_SAFE_INTEGER);
+  const content=lines.map(line=>{const width=line.length-line.trimStart().length;return line.trim()?line.slice(Math.min(indent,width)).replace(/\s+$/,''):'';});
+  while(content.length&&!content[0])content.shift();while(content.length&&!content[content.length-1])content.pop();
+  const value=header[1]==='|'?content.join('\n'):foldYamlLines(content);
+  return header[2]==='-'?value.trimEnd():value.trim();
+}
+function readQuotedScalar(quote:string,lines:string[]){
+  const folded=foldYamlLines(lines);let value='';
+  for(let index=0;index<folded.length;index++){
+    const char=folded[index];
+    if(quote==='"'&&char==='\\'){const next=folded[++index]??'';value+=next==='n'?'\n':next==='t'?'\t':next==='r'?'\r':next;continue;}
+    if(quote==="'"&&char==="'"&&folded[index+1]==="'"){value+="'";index++;continue;}
+    if(char===quote)break;value+=char;
+  }
+  return value.trim();
+}
+function readYamlScalar(rest:string,continuation:string[]){
+  const block=rest.match(/^([>|])([+-]?)(\d*)[ \t]*(?:#.*)?$/);
+  if(block)return readBlockScalar(block,continuation);
+  const text=rest.trimStart();
+  if(text.startsWith('"')||text.startsWith("'"))return readQuotedScalar(text[0],[text.slice(1),...continuation]);
+  const plain=foldYamlLines([text,...continuation]);
+  return plain.startsWith('#')?'':plain.replace(/\s+#.*$/,'').trim();
+}
+/**
+ * Read the SKILL.md frontmatter. Handles folded (`>`) and literal (`|`) block scalars,
+ * quoted values, plain multi-line values, and comments, so a description like
+ * `description: >` yields its paragraph instead of the indicator.
+ */
+export function parseSkillFrontmatter(content:string){
+  const source=content.replace(/^\uFEFF/,'').replace(/\r\n?/g,'\n');
+  const front=source.match(/^---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/);
+  if(!front)return {fields:new Map<string,string>(),body:source.trim()};
+  const lines=front[1].replace(/\t/g,'  ').split('\n');
+  const fields=new Map<string,string>();
+  for(let index=0;index<lines.length;index++){
+    const line=lines[index];
+    if(!line.trim()||line.startsWith('#'))continue;
+    const key=line.match(/^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))[ \t]*:[ \t]*(.*)$/);
+    if(!key)continue;
+    let end=index+1;
+    while(end<lines.length&&(!lines[end].trim()||/^[ \t]/.test(lines[end])))end++;
+    fields.set((key[1]||key[2]||key[3]).toLocaleLowerCase(),readYamlScalar(key[4],lines.slice(index+1,end)));
+    index=end-1;
+  }
+  return {fields,body:source.slice(front[0].length).trim()};
+}
+function firstHeading(body:string){return body.match(/^#[ \t]+([^\n#]+?)[ \t]*$/m)?.[1]?.trim()||'';}
+function derivedDescription(body:string){
+  const text=body.replace(/```[\s\S]*?```/g,' ').replace(/<!--[\s\S]*?-->/g,' ');
+  return (text.split(/\n\s*\n/).map(part=>part.replace(/^[ \t]*#{1,6}[^\n]*$/gm,'').replace(/\s+/g,' ').trim()).find(Boolean)||'').slice(0,280);
+}
+export function parseSkillDefinition(content:string,fallbackName='',preferHeading=true){
+  const {fields,body}=parseSkillFrontmatter(content);
+  const name=(fields.get('name')||(preferHeading?firstHeading(body):'')||fallbackName||'Imported skill').trim().slice(0,120);
+  const description=(fields.get('description')||derivedDescription(body)).replace(/\s+/g,' ').trim().slice(0,1000);
+  return {name,description,body};
+}
 export async function importSkillPackage(files:unknown,sourceLabel='Imported skill'){
   const normalized=normalizeFiles(files);const definition=normalized.find(file=>path.posix.basename(file.path).toLowerCase()==='skill.md');
   if(!definition)throw new Error('Choose a skill folder that contains a SKILL.md file.');
   const root=definition.path.slice(0,-'SKILL.md'.length).replace(/\/$/,'');
-  const content=definition.content.toString('utf8');const front=content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
-  const field=(key:string)=>front?.[1].match(new RegExp(`^${key}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\r\\n#]*))\\s*$`,'mi'))?.slice(1).find(Boolean)?.trim()||'';
-  const name=field('name')||path.posix.basename(root)||'Imported skill';const description=field('description');const instructions=front?content.slice(front[0].length).trim():content.trim();
+  const content=definition.content.toString('utf8');const parsed=parseSkillDefinition(content,path.posix.basename(root));const instructions=parsed.body.trim();
   if(!instructions)throw new Error('SKILL.md needs instruction content before it can be saved.');
   const extras=normalized.filter(file=>file!==definition).map(file=>({path:root&&file.path.startsWith(`${root}/`)?file.path.slice(root.length+1):file.path,content:file.content.toString('base64')}));
-  return createSkill({name,description,instructions,source:`Imported: ${String(sourceLabel).slice(0,300)}`,files:extras});
+  return createSkill({name:parsed.name,description:parsed.description,instructions,source:`Imported: ${String(sourceLabel).slice(0,300)}`,files:extras});
 }
 export async function updateSkill(id:string,input:{name:unknown;description:unknown;instructions:unknown;source?:unknown;files?:unknown},expectedRevision?:string,record?:{taskId:string;passId:string;role:string}){
   await initializeSkillLibrary();const d=database();d.exec('BEGIN IMMEDIATE');try{const current=d.prepare('SELECT current_revision FROM skills WHERE id=? AND archived=0').get(id) as {current_revision:string}|undefined;if(!current)throw new Error('Saved skill not found or archived.');if(expectedRevision&&current.current_revision!==expectedRevision)throw new Error('This skill changed since it was loaded. Reload the latest revision before saving.');const oldVersion=d.prepare('SELECT source FROM skill_versions WHERE skill_id=? AND revision=?').get(id,current.current_revision) as {source:string};

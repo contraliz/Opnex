@@ -55,6 +55,26 @@ describe('application saved skills',()=>{
     await expect(library.importSkillPackage([{path:'../SKILL.md',content:Buffer.from('instruction').toString('base64')}])).rejects.toThrow('safe relative path');
     await expect(library.importSkillPackage([{path:'SKILL.md',content:'***'}])).rejects.toThrow('base64');
   });
+  it('reads folded, literal, quoted, and missing SKILL.md descriptions',async()=>{
+    const library=await setup();
+    const folded=library.parseSkillDefinition('---\nname: ponytail-review\ndescription: >\n  Quality review of a change: is the logic right,\n  is it safe, does it hold under real load.\n---\n# Ponytail review\n\nReview the connected code.\n');
+    expect(folded).toEqual({name:'ponytail-review',description:'Quality review of a change: is the logic right, is it safe, does it hold under real load.',body:'# Ponytail review\n\nReview the connected code.'});
+    const literal=library.parseSkillFrontmatter('---\ndescription: |\n  First line.\n  Second line.\n---\nBody\n');
+    expect(literal.fields.get('description')).toBe('First line.\nSecond line.');
+    const quoted=library.parseSkillFrontmatter('---\ndescription: "Checks \\"claims\\" and limits"\nname: \'Quoted name\'\n---\nBody\n');
+    expect(quoted.fields.get('description')).toBe('Checks "claims" and limits');
+    expect(quoted.fields.get('name')).toBe('Quoted name');
+    const plain=library.parseSkillFrontmatter('---\ndescription: Short summary\n  continued here.\n---\nBody\n');
+    expect(plain.fields.get('description')).toBe('Short summary continued here.');
+    const missing=library.parseSkillDefinition('---\nname: Heading only\n---\n# Ignored heading\n\nFirst paragraph wins.\n\nSecond paragraph.\n');
+    expect(missing.description).toBe('First paragraph wins.');
+  });
+  it('imports a SKILL.md whose description is a folded block scalar',async()=>{
+    const library=await setup();
+    const imported=await library.importSkillPackage([{path:'ponytail/SKILL.md',content:Buffer.from('---\nname: ponytail-review\ndescription: >\n  Quality review of a change: is the logic right, is it safe,\n  does it hold under real load.\n---\nReview the connected code, not only the diff.\n').toString('base64')}],'ponytail');
+    expect(imported.description).toBe('Quality review of a change: is the logic right, is it safe, does it hold under real load.');
+    expect(imported.instructions).toBe('Review the connected code, not only the diff.');
+  });
   it('restores task-scoped skills_save with active role, pass, provenance, and exact revision enforcement',async()=>{
     const library=await setup();const skill=await library.createSkill({name:'Useful skill',description:'Relevant methods',instructions:'Check assumptions before editing.'});const taskId='task-runtime';const passId='pass-runtime';const active={id:taskId,currentPassId:passId,phase:'simple_running',activeRole:'simple',activeTurnId:'turn-active',passes:[{id:passId,phase:'simple_running',activeRole:'simple',activeTurnId:'turn-active'}]};await writeFile(path.join(temp,'state.json'),JSON.stringify({tasks:[active]}));
     const gateway=path.resolve('server/skills-mcp-gateway.ts');

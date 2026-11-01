@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import ModelPicker from '../src/ui/ModelPicker.js';
 
@@ -38,4 +38,25 @@ it('keeps a below-open menu anchored through its close animation',()=>{
   expect(trigger.parentElement?.getAttribute('data-open-below')).toBe('true');
   act(()=>{vi.advanceTimersByTime(110);});
   expect(trigger.parentElement?.getAttribute('data-open-below')).toBe('false');
+});
+
+it('groups models by provider and picks a reasoning level from the side panel',()=>{
+  const onChange=vi.fn();
+  const choices=[
+    {providerKey:'codex',provider:'Codex · OpenAI',id:'gpt-6.1-terra',name:'GPT-6.1 Terra',efforts:['low','high'],available:true},
+    {providerKey:'deepseek',provider:'DeepSeek Harness · OpenCode Go',id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',efforts:['max'],available:true},
+  ];
+  render(<ModelPicker label="Orchestrator model" providerKey="codex" model="gpt-6.1-terra" effort="low" choices={choices} disabled={false} onChange={onChange}/>);
+  const trigger=screen.getByRole('button',{name:'Orchestrator model'});
+  expect(trigger.textContent).toContain('GPT-6.1 Terra');expect(trigger.textContent).toContain('Low');
+  fireEvent.click(trigger);
+  const menu=screen.getByRole('dialog',{name:'Orchestrator model'});
+  expect(within(menu).getByRole('group',{name:'Codex · OpenAI'})).toBeTruthy();
+  expect(within(menu).getByRole('group',{name:'DeepSeek Harness · OpenCode Go'})).toBeTruthy();
+  const panel=within(menu).getByRole('radiogroup',{name:'Reasoning effort for GPT-6.1 Terra'});
+  expect(within(panel).getByRole('radio',{name:'Low'}).getAttribute('aria-checked')).toBe('true');
+  fireEvent.mouseEnter(within(menu).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
+  const nextPanel=within(menu).getByRole('radiogroup',{name:'Reasoning effort for DeepSeek V4.1 Flash'});
+  fireEvent.click(within(nextPanel).getByRole('radio',{name:'Max'}));
+  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({providerKey:'deepseek',id:'deepseek-v4.1-flash'}),'max');
 });

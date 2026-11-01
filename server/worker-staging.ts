@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import type { Assignment } from './contracts.js';
+import { parseSkillDefinition } from './skill-library.js';
 
 export type WorkerContextStatus={status:'retrieved'|'disabled'|'unavailable';detail:string;data?:unknown};
 export type WorkerStage='context_plan'|'context_compose'|'execute';
@@ -44,8 +45,8 @@ async function skillDirectories(codexHome:string,projectRoot?:string):Promise<Sk
 }
 
 function skillMetadata(content:string,fallback:string){
-  const front=content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);const field=(key:string)=>front?.[1].match(new RegExp(`^${key}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\r\\n#]*))\\s*$`,'mi'))?.slice(1).find(Boolean)?.trim()||'';
-  return {name:field('name')||fallback,description:field('description'),instructions:front?content.slice(front[0].length).trim():content.trim()};
+  const parsed=parseSkillDefinition(content,fallback,false);
+  return {name:parsed.name,description:parsed.description,instructions:parsed.body.trim()};
 }
 export async function searchConfiguredSkills(query:string,codexHome=process.env.CODEX_HOME||path.join(os.homedir(),'.codex'),projectRoot?:string){
   const needle=query.trim().toLocaleLowerCase().slice(0,200),matches=[] as {id:string;name:string;description:string;source:string;revision:string;createdAt:string;updatedAt:string;archived:boolean;fileCount:number}[];

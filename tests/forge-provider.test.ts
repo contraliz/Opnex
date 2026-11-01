@@ -78,7 +78,7 @@ describe('Forge Codex provider contract', () => {
     const handle = await provider.start({ ...request, approvalPolicy: 'full-access' });
     expect(client.startThread).toHaveBeenCalled();
     expect(client.startThread.mock.calls[0]).toContain('full-access');
-    handle.cancel?.();
+    (handle as unknown as { cancel?: () => void }).cancel?.();
   });
 
   it('settles only on the matching observed provider turn and retains real completion details', async () => {
