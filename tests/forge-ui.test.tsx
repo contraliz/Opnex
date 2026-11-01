@@ -205,8 +205,15 @@ describe('Forge session creation',()=>{
     serverState=baseState();
     mockApi.api.mockImplementation(async(path:string)=>path==='/api/v1/snapshot'||path==='/api/state'?snapshot():path.includes('/api/skills?source=codex')?{skills:[]}:path==='/api/skills?limit=100'?{skills:[]}:{});
     cleanup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Forge'}));
-    await waitFor(()=>expect(document.querySelector('.forge-skill-readiness')?.textContent).toMatch(/Install or import[\s\S]*agentmem-project/i));
+    await waitFor(()=>expect(document.querySelector('.forge-skill-readiness')?.textContent).toMatch(/Install the existing[\s\S]*agentmem-project[\s\S]*Opnex Skills library/i));
     expect((screen.getByRole('button',{name:'Create draft'}) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('accepts the required AgentMem skill from the Opnex skill library',async()=>{
+    serverState=baseState();
+    mockApi.api.mockImplementation(async(path:string)=>path==='/api/v1/snapshot'||path==='/api/state'?snapshot():path.includes('/api/skills?source=codex')?{skills:[]}:path==='/api/skills?limit=100'?{skills:[{id:'33333333-3333-4333-8333-333333333333',name:'agentmem-project',description:'Imported knowledge skill.',source:'Opnex library',revision:'c'.repeat(64),createdAt:'',updatedAt:'',archived:false,fileCount:0}]}:{});
+    cleanup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Forge'}));
+    await waitFor(()=>expect(document.querySelector('.forge-skill-readiness')?.textContent).toMatch(/Required AgentMem skill found[\s\S]*Opnex skill library/i));
   });
 });
 

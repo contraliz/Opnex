@@ -1,7 +1,9 @@
+import { existsSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ForgeSkillSnapshot } from './forge-contracts.js';
+import { getSkill, listSkills, skillDatabasePath } from './skill-library.js';
 import { loadConfiguredSkill, searchConfiguredSkills } from './worker-staging.js';
 
 export class ForgeKnowledgeSkillError extends Error {
@@ -13,20 +15,38 @@ export async function loadForgeKnowledgeSkill(options: { codexHome?: string; app
   let appRoot = options.appRoot;
   if (!appRoot) {
     try { appRoot = await findApplicationRoot(); }
-    catch { /* A configured user skill may still be available without packaged project sources. */ }
+    catch { /* A configured user skill or the Opnex library may still be available. */ }
   }
-  let matches: Awaited<ReturnType<typeof searchConfiguredSkills>>;
+  let configuredError: unknown;
+  let matches: Awaited<ReturnType<typeof searchConfiguredSkills>> = [];
   try { matches = await searchConfiguredSkills('agentmem-project', options.codexHome, appRoot); }
-  catch (error) { throw new ForgeKnowledgeSkillError(`Forge could not inspect the configured AgentMem skill location: ${error instanceof Error ? error.message : 'unknown filesystem error'}. Configure the agentmem-project skill before starting this ticket.`); }
+  catch (error) { configuredError = error; }
   const selected = matches.find((skill) => skill.name.toLowerCase() === 'agentmem-project' && skill.source === 'Project skill')
     || matches.find((skill) => skill.name.toLowerCase() === 'agentmem-project');
-  if (!selected) throw new ForgeKnowledgeSkillError('The required external AgentMem skill "agentmem-project" is unavailable. Install or restore it, then retry Forge.');
-  try {
-    const loaded = await loadConfiguredSkill(selected.id, options.codexHome, appRoot);
-    return { id: loaded.id, revision: loaded.revision, name: loaded.name, description: loaded.description, source: loaded.source, instructions: loaded.instructions, files: loaded.files };
-  } catch (error) {
-    throw new ForgeKnowledgeSkillError(`The selected AgentMem skill could not be snapshotted: ${error instanceof Error ? error.message : 'unknown skill error'}. Restore the exact selected revision before retrying Forge.`);
+  if (selected) {
+    try {
+      const loaded = await loadConfiguredSkill(selected.id, options.codexHome, appRoot);
+      return { id: loaded.id, revision: loaded.revision, name: loaded.name, description: loaded.description, source: loaded.source, instructions: loaded.instructions, files: loaded.files };
+    } catch (error) {
+      throw new ForgeKnowledgeSkillError(`The selected AgentMem skill could not be snapshotted: ${error instanceof Error ? error.message : 'unknown skill error'}. Restore the exact selected revision before retrying Forge.`);
+    }
   }
+  const fromLibrary = await findLibraryKnowledgeSkill();
+  if (fromLibrary) return fromLibrary;
+  if (configuredError) throw new ForgeKnowledgeSkillError(`Forge could not inspect the configured AgentMem skill location: ${configuredError instanceof Error ? configuredError.message : 'unknown filesystem error'}. Install the skill in a configured Codex location or import it into the Opnex Skills library, then retry Forge.`);
+  throw new ForgeKnowledgeSkillError('The required external AgentMem skill "agentmem-project" is unavailable. Install it in a configured Codex skill location or import it into the Opnex Skills library, then retry Forge.');
+}
+
+/** Fallback: the saved Opnex skill library, so an imported skill does not need a Codex installation. */
+async function findLibraryKnowledgeSkill(): Promise<ForgeSkillSnapshot | undefined> {
+  try {
+    if (!existsSync(skillDatabasePath())) return undefined;
+    const rows = await listSkills('', false, 500);
+    const match = rows.find((row) => row.name.trim().toLowerCase() === 'agentmem-project');
+    if (!match) return undefined;
+    const skill = await getSkill(match.id);
+    return { id: skill.id, revision: skill.revision, name: skill.name, description: skill.description, source: skill.source, instructions: skill.instructions, files: skill.files.map((file) => ({ path: file.path, size: file.size })) };
+  } catch { return undefined; }
 }
 
 async function findApplicationRoot() {

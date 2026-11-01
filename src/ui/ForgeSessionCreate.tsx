@@ -7,7 +7,7 @@ import ModelPicker from './ModelPicker.js';
 import type { SkillSummary } from './skills-types.js';
 
 type SkillSearch={skills?:SkillSummary[]};
-type Props={project:Project|null;settings:Settings;models:Runtime['codex']['models'];onCreated:(ticket:ForgeTicket)=>void|Promise<void>;onOpenSettings:()=>void;onOpenSkills:()=>void;onOpenWorkspace:()=>void};
+type Props={project:Project|null;settings:Settings;models:Runtime['codex']['models'];onCreated:(ticket:ForgeTicket)=>void|Promise<void>;onOpenSettings:()=>void;onUseUnattended:()=>void;onOpenSkills:()=>void;onOpenWorkspace:()=>void};
 type Limits={maxActiveWorkers:number;maxExecutionAttempts:number;maxCorrectionRounds:number};
 type KnowledgeBudget={totalOperations:number;defaultAllocationOperations:number;maxAllocationOperations:number};
 
@@ -18,7 +18,7 @@ const deriveTitle=(value:string)=>{
   return (first||'Untitled Forge ticket').slice(0,120);
 };
 
-export default function ForgeSessionCreate({project,settings,models,onCreated,onOpenSettings,onOpenSkills,onOpenWorkspace}:Props){
+export default function ForgeSessionCreate({project,settings,models,onCreated,onOpenSettings,onUseUnattended,onOpenSkills,onOpenWorkspace}:Props){
   const [title,setTitle]=useState('');
   const [description,setDescription]=useState('');
   const [acceptanceText,setAcceptanceText]=useState('');
@@ -44,20 +44,17 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
     const controller=new AbortController();let current=true;
     setAgentmemStatus('loading');setLibraryStatus('loading');setSkillError('');
     const agentmemUrl=`/api/skills?source=codex&q=agentmem-project&limit=50&projectId=${encodeURIComponent(project.id)}`;
-    void api<SkillSearch>(agentmemUrl,undefined,controller.signal).then(configured=>{
+    void Promise.allSettled([api<SkillSearch>(agentmemUrl,undefined,controller.signal),api<SkillSearch>('/api/skills?limit=100',undefined,controller.signal)]).then(([configured,saved])=>{
       if(!current)return;
-      const agentmem=(configured.skills||[]).find(skill=>skill.name.trim().toLocaleLowerCase()==='agentmem-project');
-      setAgentmemSource(agentmem?.source||'');setAgentmemStatus(agentmem?'found':'missing');
-    }).catch(cause=>{
-      if(!current||controller.signal.aborted)return;
-      setAgentmemStatus('unavailable');setSkillError(String(cause));
-    });
-    void api<SkillSearch>('/api/skills?limit=100',undefined,controller.signal).then(saved=>{
-      if(!current)return;
-      setLibrarySkills((saved.skills||[]).filter(skill=>!skill.archived).slice(0,100));setLibraryStatus('ready');
-    }).catch(()=>{
-      if(!current||controller.signal.aborted)return;
-      setLibraryStatus('unavailable');
+      const savedSkills=saved.status==='fulfilled'?(saved.value.skills||[]).filter(skill=>!skill.archived).slice(0,100):[];
+      setLibrarySkills(savedSkills);setLibraryStatus(saved.status==='fulfilled'?'ready':'unavailable');
+      const isAgentmem=(skill:SkillSummary)=>skill.name.trim().toLocaleLowerCase()==='agentmem-project';
+      const configuredMatch=configured.status==='fulfilled'?(configured.value.skills||[]).find(isAgentmem):undefined;
+      const libraryMatch=savedSkills.find(isAgentmem);
+      if(configuredMatch){setAgentmemSource(configuredMatch.source||'Configured Codex skill');setAgentmemStatus('found');}
+      else if(libraryMatch){setAgentmemSource('Opnex skill library');setAgentmemStatus('found');}
+      else if(configured.status==='rejected'&&!controller.signal.aborted){setAgentmemStatus('unavailable');setSkillError(String(configured.reason));}
+      else setAgentmemStatus('missing');
     });
     return()=>{current=false;controller.abort();};
   },[project?.id,project?.projectRoot,project?.needsLocation,skillRefresh]);
@@ -108,13 +105,13 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
         <BookOpen size={15} aria-hidden="true"/><div>
           {activeAgentmemStatus==='loading'?<><strong>Checking the required AgentMem skill…</strong><span>Only this workspace and the configured Codex skill locations are checked.</span></>:null}
           {activeAgentmemStatus==='found'?<><strong>Required AgentMem skill found</strong><span>{agentmemSource?`Available from ${agentmemSource}`:'Available to the configured Codex runtime.'} · Opnex snapshots it for Forge roles.</span></>:null}
-          {activeAgentmemStatus==='missing'?<><strong>Required AgentMem skill is missing</strong><span>Install or import the existing <code>agentmem-project</code> skill under this workspace’s <code>.agents/skills/</code> folder or a configured Codex skill/plugin, then check again.</span></>:null}
+          {activeAgentmemStatus==='missing'?<><strong>Required AgentMem skill is missing</strong><span>Install the existing <code>agentmem-project</code> skill under this workspace’s <code>.agents/skills/</code> folder, a configured Codex skill/plugin, or import it into the Opnex Skills library, then check again.</span></>:null}
           {activeAgentmemStatus==='unavailable'?<><strong>Required AgentMem skill availability is unknown</strong><span>{skillError||'Choose a workspace directory before checking its configured skills.'} Recheck after restoring the workspace or configured skill access.</span></>:null}
         </div>
         {(activeAgentmemStatus==='missing'||activeAgentmemStatus==='unavailable')&&<button type="button" className="forge-inline-action" onClick={refreshSkills}>Check again</button>}
       </div>
 
-      {!approvalValid&&<div className="forge-inline-alert" role="alert">Forge does not accept the current Full Access approval policy. Choose On request, Untrusted commands, or Never ask in Settings before creating this ticket.<button type="button" className="forge-inline-action" onClick={onOpenSettings}>Open Settings</button></div>}
+      {!approvalValid&&<div className="forge-inline-alert" role="alert">Forge runs unattended, so it keeps the Codex sandbox instead of the unsandboxed Full Access mode. Use <strong>Never ask</strong> to run without prompts, or choose On request / Untrusted commands in Settings to review each step.<button type="button" className="forge-inline-action" onClick={onUseUnattended}>Use Never ask</button><button type="button" className="forge-inline-action" onClick={onOpenSettings}>Open Settings</button></div>}
       {error&&<div className="forge-inline-alert" role="alert">{error}</div>}
 
       <div className="forge-create-fields">

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { configDefaults, defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
@@ -11,5 +11,10 @@ export default defineConfig({
       '/api': { target: 'http://127.0.0.1:4174', changeOrigin: false },
       '/events': { target: 'http://127.0.0.1:4174', changeOrigin: false },
     },
+  },
+  test: {
+    // Nested Git worktrees and preserved build copies live inside the checkout;
+    // running their test suites from the main tree duplicates every test.
+    exclude: [...configDefaults.exclude, '.agents/**', '.local-preserved/**', '.opnex-live-build-*/**', 'tmp/**'],
   },
 });
