@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -19,6 +19,7 @@ function git(args: string[], cwd: string) {
 
 async function unbornRepository() {
   temporary = await mkdtemp(path.join(os.tmpdir(), 'opnex-initial-commit-'));
+  temporary = await realpath(temporary);
   git(['init', '--quiet', '-b', 'main'], temporary);
   git(['config', 'user.name', 'Opnex Test'], temporary);
   git(['config', 'user.email', 'opnex-test@example.invalid'], temporary);

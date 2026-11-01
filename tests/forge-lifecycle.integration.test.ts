@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { ForgeCoordinator } from '../server/forge-coordinator.js';
 import { upgradeStoredState, saveProjectInState } from '../server/state.js';
 import type { ForgeProviderApprovalRequest, ForgeProviderEvent, ForgeProviderHandle, ForgeProviderOutcome, ForgeProviderRequest, ForgeProviderStartEvidence } from '../server/forge-provider.js';
 
-const root = 'D:/programming/opnex-forge-private/runtime-high';
+const root = path.join(os.tmpdir(), 'opx');
 const projectId = '11111111-1111-4111-8111-111111111111';
 const receipt = {
   status: 'complete', result: 'Implemented the accepted assignment.', changes: ['src/feature.ts'],
@@ -57,7 +57,7 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
 
   it('plans, claims, verifies, integrates, reviews, and reads back a guarded local main merge', async () => {
     await mkdir(root, { recursive: true });
-    fixture = await mkdtemp(path.join(root, 'h-'));
+    fixture = await realpath(await mkdtemp(path.join(root, 'h-')));
     const repo = path.join(fixture, 'r'); const worktrees = path.join(fixture, 'w');
     testRepo = repo;
     await mkdir(repo); await mkdir(path.join(repo, 'src')); await mkdir(worktrees);
@@ -174,7 +174,7 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
 
   it('serves the Forge create, read, guarded start, and cancel routes over HTTP', async () => {
     await mkdir(root, { recursive: true });
-    fixture = await mkdtemp(path.join(root, 'api-'));
+    fixture = await realpath(await mkdtemp(path.join(root, 'api-')));
     const repo = path.join(fixture, 'r'); const data = path.join(fixture, 'd');
     await mkdir(path.join(repo, 'src'), { recursive: true }); await mkdir(data);
     const codexHome = path.join(fixture, 'codex'); await mkdir(codexHome);
@@ -357,7 +357,7 @@ async function createActiveWorkerFixture(stopStatus: 'stopped' | 'uncertain', ma
 }
 
 async function createActivePlanningFixture(stopStatus: 'stopped' | 'uncertain', maxExecutionAttempts = 1) {
-  const fixture = await mkdtemp(path.join(os.tmpdir(), 'forge-runtime-lifecycle-'));
+  const fixture = await realpath(await mkdtemp(path.join(os.tmpdir(), 'forge-runtime-lifecycle-')));
   const repo = path.join(fixture, 'r'); const worktrees = path.join(fixture, 'w');
   await mkdir(path.join(repo, 'src'), { recursive: true }); await mkdir(worktrees);
   git(repo, 'init', '-b', 'main'); git(repo, 'config', 'core.longpaths', 'true'); git(repo, 'config', 'user.name', 'Forge runtime fixture'); git(repo, 'config', 'user.email', 'forge@example.invalid');
