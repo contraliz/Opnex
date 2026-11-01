@@ -244,7 +244,7 @@ describe('routed request workflow',()=>{
     expect(state.getTask(delegated.id)?.passes?.[1]?.executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});expect(worker).toMatchObject({server:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
     expect(worker.input).toContain('"outcome":');expect(worker.input).not.toContain('EXECUTE.');expect(worker.input).not.toContain('COMPLETE ASSIGNMENT');expect(worker.input).not.toContain('Verified project context');
     await complete('worker',{type:'receipt',receipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
-    await waitFor(()=>{const integration=state.getTask(delegated.id)?.passes?.[1]?.recruitmentTeam?.integration;return integration?.status==='running'&&!!integration.threadId&&fake.calls.some(row=>row.kind==='dsh-connect'&&row.sessionId===integration.threadId);});
+    await waitFor(()=>{const integration=state.getTask(delegated.id)?.passes?.[1]?.recruitmentTeam?.integration;return integration?.status==='running'&&!!integration.threadId&&fake.calls.some(row=>row.kind==='dsh-connect'&&row.sessionId===integration.threadId)&&!!fake.dshSessions.get(integration.threadId)?.current?.turnId;});
     const integration=state.getTask(delegated.id)?.passes?.[1]?.recruitmentTeam?.integration;expect(integration?.threadId).not.toBe(worker.threadId);expect(turns('integrator')).toHaveLength(0);
     const integrationSession=fake.dshSessions.get(integration?.threadId);integrationSession.complete(integrationSession.current.turnId,{type:'receipt',receipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
     await waitFor(()=>turns('orchestrator').length===2&&state.getTask(delegated.id)?.phase==='reviewing');
