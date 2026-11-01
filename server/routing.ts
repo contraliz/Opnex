@@ -20,6 +20,7 @@ Routes and rule IDs:
 - hard_task / hard_mixed_scope: any request mixing a substantive hard part with a simpler task.
 - hard_task / hard_significant_uncertainty: important requirements or facts remain uncertain for reasons other than an unknown failure cause. When the operation is diagnosis of an unknown cause, use hard_unknown_cause_diagnosis.
 - hard_task / hard_explicit_project_knowledge: the user explicitly asks for substantive project-knowledge research as part of the answer. Use the generic project skills and configured tools when available; the application does not retrieve or attach knowledge itself.
+- hard_task / hard_explicit_worker_delegation: the user explicitly asks Opnex to recruit, delegate to, or run a worker and return its result. This is an execution request even if the assignment is read-only or the requested result is simple; direct_answer would skip the requested worker.
 
 When a mixed request has any substantive hard part, route the whole operation as hard. Return only route, matching rule_id, and a brief justification.`;
 

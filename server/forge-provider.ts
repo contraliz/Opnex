@@ -15,6 +15,7 @@ export type ForgeProviderRequest = {
   outputSchema: unknown;
   writeRoots: string[];
   approvalPolicy: ApprovalPolicy;
+  registeredMcpServers?: Record<string,Record<string,unknown>>;
 };
 export type ForgeProviderStartEvidence = {
   provider: 'codex';
@@ -111,11 +112,14 @@ export class ForgeCodexProvider {
 
     let threadId: string;
     try {
-      threadId = await this.options.client.startThread(
+      const threadArgs=[
         codexRole(request.role), request.executionRoot, request.model, request.effort, request.approvalPolicy,
         request.role === 'orchestrator' ? ORCHESTRATOR_POLICY : undefined,
         undefined, undefined,
-      );
+      ] as const;
+      threadId = Object.keys(request.registeredMcpServers||{}).length
+        ? await this.options.client.startThread(...threadArgs,request.registeredMcpServers!)
+        : await this.options.client.startThread(...threadArgs);
     } catch (error) {
       throw new ForgeProviderStartError(error instanceof Error ? error.message : 'Forge provider thread setup failed.', 'not_started', { cause: error });
     }

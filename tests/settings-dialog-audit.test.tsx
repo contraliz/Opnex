@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/ui/App.js';
 
 const demoProject={id:'11111111-1111-4111-8111-111111111111',name:'Demo project',projectRoot:'D:/workspace/demo',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
-const fixture={state:{version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[demoProject],selectedProjectId:demoProject.id,expandedProjectIds:[demoProject.id,'unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6-Luna',efforts:['high']}],workerAvailable:true}}};
+const fixture={state:{version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[],activeTaskId:null,projects:[demoProject],selectedProjectId:demoProject.id,expandedProjectIds:[demoProject.id,'unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6-Luna',efforts:['high']}],workerAvailable:true},deepseekConversationStorage:{defaultHome:'D:/Opnex/local-state/dsh-conversations',nativeHome:'C:/Users/ethna/.dsh'}}};
 const isSnapshotRoute=(path:string)=>path==='/api/state'||path==='/api/v1/snapshot';
 let serverState:any;
 let eventSource:any;
@@ -114,6 +114,44 @@ describe('Settings audit regressions',()=>{
     expect(within(dialog).getByRole('button',{name:'Worker model'}).textContent).toContain('DeepSeek V4.1 Flash');
   });
 
+  it('shows the DSH home setting only for DeepSeek and saves a selected isolated folder',async()=>{
+    const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
+    const opener=screen.getByRole('button',{name:'Settings'});await user.click(opener);
+    let dialog=await screen.findByRole('dialog',{name:'Settings'});
+    expect(within(dialog).queryByRole('combobox',{name:'DeepSeek conversation storage'})).toBeNull();
+    const model=within(dialog).getByRole('button',{name:'Worker model'});await user.click(model);
+    await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
+    let storage=within(dialog).getByRole('combobox',{name:'DeepSeek conversation storage'});
+    expect((within(dialog).getByRole('textbox',{name:'Opnex DSH conversation folder'}) as HTMLInputElement).value).toBe(fixture.runtime.deepseekConversationStorage.defaultHome);
+    await user.selectOptions(storage,'native');expect(within(dialog).getByText(/C:\/Users\/ethna\/.dsh/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button',{name:'Save settings'}));await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Settings'})).toBeNull());
+    expect(serverState.settings.deepseekConversationStorageMode).toBe('native');
+    await user.click(opener);dialog=await screen.findByRole('dialog',{name:'Settings'});storage=within(dialog).getByRole('combobox',{name:'DeepSeek conversation storage'});expect((storage as HTMLSelectElement).value).toBe('native');
+    await user.selectOptions(storage,'isolated');await user.click(within(dialog).getByRole('button',{name:'Browse DSH conversation folder'}));
+    const picker=await screen.findByRole('dialog',{name:'Choose a folder'});await user.click(within(picker).getByRole('button',{name:'Use this folder'}));
+    await waitFor(()=>expect(within(dialog).getByRole('textbox',{name:'Opnex DSH conversation folder'})).toHaveProperty('value','D:/workspace/demo'));
+    await user.click(within(dialog).getByRole('button',{name:'Save settings'}));
+    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Settings'})).toBeNull());
+    expect(serverState.settings).toMatchObject({deepseekConversationStorageMode:'isolated',deepseekConversationStorageDirectory:'D:/workspace/demo'});
+    await user.click(opener);dialog=await screen.findByRole('dialog',{name:'Settings'});
+    const savedModel=within(dialog).getByRole('button',{name:'Worker model'});await user.click(savedModel);await user.click(within(dialog).getByRole('option',{name:/GPT-6 Luna/}));
+    expect(within(dialog).queryByRole('combobox',{name:'DeepSeek conversation storage'})).toBeNull();
+    await user.click(within(dialog).getByRole('button',{name:'Cancel'}));
+  });
+
+  it('keeps the DeepSeek runtime explanation out of the Codex profile and separates storage guidance',async()=>{
+    const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});await user.click(screen.getByRole('button',{name:'Settings'}));
+    let dialog=await screen.findByRole('dialog',{name:'Settings'});
+    expect(within(dialog).queryByText(/DeepSeek runs through OpenCode Go with V4\.1 Flash/)).toBeNull();
+    const model=within(dialog).getByRole('button',{name:'Worker model'});await user.click(model);await user.click(within(dialog).getByRole('option',{name:/DeepSeek V4.1 Flash/}));
+    expect(within(dialog).getByText(/DeepSeek runs through OpenCode Go with V4\.1 Flash/)).toBeTruthy();
+    await user.selectOptions(within(dialog).getByRole('combobox',{name:'DeepSeek conversation storage'}),'native');
+    expect(within(dialog).getByText(/New conversations use your DSH home/)).toBeTruthy();
+    expect(within(dialog).getByText(/This affects new conversations only/)).toBeTruthy();
+    expect(dialog.textContent).not.toContain('created.Changing');
+    await user.click(within(dialog).getByRole('button',{name:'Cancel'}));
+  });
+
   it('preserves active edits when a separate settings field changes in a live state update',async()=>{
     const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
     await user.click(screen.getByRole('button',{name:'Settings'}));
@@ -147,10 +185,10 @@ describe('Settings audit regressions',()=>{
     expect(document.activeElement).toBe(opener);
   });
 
-  it('opens Settings from Sessions, Browser, Git, and Skills workspaces',async()=>{
+  it('opens Settings from Sessions, Browser, Git, and Library workspaces',async()=>{
     const user=userEvent.setup();(window as any).pseudoharnessDesktop=nativeWorkspaceBridge();render(<App/>);
     await screen.findByRole('textbox',{name:'Task message'});
-    for(const kind of ['Sessions','Browser','Git','Skills']){
+    for(const kind of ['Sessions','Browser','Git','Library']){
       await user.click(screen.getByRole('tab',{name:kind}));
       if(kind!=='Sessions')await waitFor(()=>expect(document.querySelector(`.activity-rail [aria-label="${kind}"]`)?.getAttribute('aria-current')).toBe('page'));
       const opener=screen.getByRole('button',{name:'Settings'});await user.click(opener);

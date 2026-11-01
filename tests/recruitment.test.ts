@@ -80,6 +80,15 @@ describe('recruited worker team contracts and recovery', () => {
     expect(recruitmentWorkersSchema.parse({ workers: [worker] }).workers[0].effort).toBe('max');
   });
 
+  it('allows only independent empty-write-scope read-only recruitment and keeps old payloads in worktree mode',()=>{
+    const answerAssignment={...assignment,write_scope:[]};
+    const worker={name:'Answer',step:'Return a read-only answer',depends_on:[],assignment:answerAssignment,effort:'max',skill_refs:[]};
+    expect(recruitmentWorkersSchema.parse({workers:[worker]}).mode).toBe('worktree');
+    expect(recruitmentWorkersSchema.parse({mode:'read_only',workers:[worker]}).mode).toBe('read_only');
+    expect(recruitmentWorkersSchema.safeParse({mode:'read_only',workers:[{...worker,assignment}]}).success).toBe(false);
+    expect(recruitmentWorkersSchema.safeParse({mode:'read_only',workers:[{...worker,depends_on:['Other']}]}).success).toBe(false);
+  });
+
   it('keeps canonical project identity while rebasing only the worker filesystem scopes', () => {
     const canonical = path.resolve('D:/projects/pseudoharness');
     const worktree = path.resolve('D:/app-state/worktrees/task/worker-a');

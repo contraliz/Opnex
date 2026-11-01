@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { LocalGitWorkspace } from '../src/ui/LocalGitWorkspace';
 
 vi.mock('../src/ui/api',()=>({api:vi.fn()}));
@@ -20,6 +20,37 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 afterEach(()=>{cleanup();sessionStorage.clear();vi.resetAllMocks();});
 
 describe('native local Git workspace paging and routes',()=>{
+  it('previews the non-ignored files and requires a commit message before creating the first commit',async()=>{
+    const preview={status:'unborn',eligible:true,branch:'main',files:[{path:'src/app.ts',status:'working'},{path:'README.md',status:'staged'}],totalFiles:2,empty:false,truncated:false,previewToken:'11111111-1111-4111-8111-111111111112'};let committed=false;
+    vi.mocked(api).mockImplementation(async(url)=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github'))return github as any;
+      if(url.startsWith('/api/git-workspace/initial-commit-preview'))return (committed?{status:'committed',eligible:false,reason:'already-committed',files:[],totalFiles:0,empty:true,truncated:false}:preview) as any;
+      if(url==='/api/git-workspace/initial-commit'){committed=true;return {commit:'a'.repeat(40),branch:'main'} as any;}
+      return {...page('C:/repo'),repositoryStatus:'repository'} as any;
+    });
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/repo"/>);
+    fireEvent.click(await screen.findByRole('button',{name:'Create initial commit'}));
+    const dialog=await screen.findByRole('dialog',{name:'Create initial commit'});
+    expect(dialog.textContent).toContain('2 paths will be included');expect(dialog.textContent).toContain('src/app.ts');expect(dialog.textContent).toContain('README.md');
+    fireEvent.change(within(dialog).getByRole('textbox',{name:'Commit message'}),{target:{value:'Set the project baseline'}});
+    fireEvent.click(within(dialog).getByRole('button',{name:'Create initial commit'}));
+    await waitFor(()=>expect(vi.mocked(api)).toHaveBeenCalledWith('/api/git-workspace/initial-commit',{projectId,previewToken:preview.previewToken,message:'Set the project baseline'}));
+    await waitFor(()=>expect(screen.queryByRole('button',{name:'Create initial commit'})).toBeNull());
+  });
+
+  it('does not show the initial commit action for a repository with existing history',async()=>{
+    vi.mocked(api).mockImplementation(async(url)=>{
+      if(url==='/api/github/auth')return {state:'idle',cliAvailable:true,authenticated:false} as any;
+      if(url.endsWith('/github'))return github as any;
+      if(url.startsWith('/api/git-workspace/initial-commit-preview'))return {status:'committed',eligible:false,reason:'already-committed',files:[],totalFiles:0,empty:true,truncated:false} as any;
+      return {...page('C:/repo'),repositoryStatus:'repository'} as any;
+    });
+    render(<LocalGitWorkspace projectId={projectId} projectRoot="C:/repo"/>);
+    await screen.findByText('C:/repo');
+    expect(screen.queryByRole('button',{name:'Create initial commit'})).toBeNull();
+  });
+
   it('shows the repository creation action when the selected workspace has no Git repository',async()=>{
     const workspace={id:projectId,name:'project',projectRoot:'C:/repo/project',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};let status:'missing'|'repository'='missing';
     vi.mocked(api).mockImplementation(async(url)=>{

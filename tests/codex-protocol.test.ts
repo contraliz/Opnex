@@ -15,6 +15,17 @@ describe('Codex approval and turn configuration',()=>{
     const router=appAgentConfig('/repo','router',skills,['github']) as any;expect(router.mcp_servers).toBeUndefined();expect(router['mcp_servers.github.enabled']).toBe(false);
     const qa=appAgentConfig('/repo','qa',skills,['github']) as any;expect(qa.mcp_servers).toBeUndefined();expect(qa['mcp_servers.github.enabled']).toBe(false);
   });
+  it('adds only explicitly selected registered MCP servers to restricted Codex roles',()=>{
+    const configured={'opnex_docs':{command:'node',args:['docs.js'],cwd:'/repo',env_vars:['DOCS_TOKEN'],default_tools_approval_mode:'auto',enabled:true}};
+    const router=makeThreadParams({role:'router',root:'/repo',model:'gpt-6-luna',approvalPolicy:'on-request',registeredMcpServers:configured,disabledMcpServerNames:['github']});
+    expect(router.config).toMatchObject({mcp_servers:configured,'mcp_servers.github.enabled':false,features:{plugins:false,mcp_2026_07_28:true}});
+    expect(router.developerInstructions).toContain('Human-enabled MCP servers for this role: opnex_docs');
+    expect(router.developerInstructions).toContain('You may call only the explicitly enabled MCP servers');
+    const qa=makeThreadParams({role:'qa',root:'/repo',model:'gpt-6.1-terra',approvalPolicy:'never',registeredMcpServers:configured,disabledMcpServerNames:['github']});
+    expect(qa.config).toMatchObject({mcp_servers:configured,'mcp_servers.github.enabled':false,features:{plugins:false,mcp_2026_07_28:true}});
+    expect(qa.developerInstructions).toContain('Human-enabled MCP servers for this role: opnex_docs');
+    expect(makeThreadParams({role:'router',root:'/repo',model:'gpt-6-luna',approvalPolicy:'on-request'}).config).not.toHaveProperty('mcp_servers');
+  });
   it('resolves the normal Codex SQLite home while keeping the instruction-filtered home separate',async()=>{
     expect(normalCodexSqliteHome({CODEX_HOME:'D:/Users/test/.codex'},'C:/Users/test')).toBe('D:/Users/test/.codex');
     expect(normalCodexSqliteHome({CODEX_HOME:'D:/Users/test/.codex',CODEX_SQLITE_HOME:'E:/codex-state'},'C:/Users/test')).toBe('E:/codex-state');
@@ -34,7 +45,10 @@ describe('Codex approval and turn configuration',()=>{
   it('keeps application settings global and rejects project-owned fields',()=>{
     const base={orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low'};
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
-    expect(settingsSchema.parse(base)).toMatchObject({deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'});
+    expect(settingsSchema.parse(base)).toMatchObject({deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',deepseekConversationStorageMode:'isolated'});
+    expect(settingsSchema.parse({...base,deepseekConversationStorageMode:'native'}).deepseekConversationStorageMode).toBe('native');
+    expect(settingsSchema.safeParse({...base,deepseekConversationStorageMode:'other'}).success).toBe(false);
+    expect(settingsSchema.safeParse({...base,deepseekConversationStorageDirectory:'D:/bad\npath'}).success).toBe(false);
     expect(settingsSchema.parse(base)).not.toHaveProperty('executionProfile');
     for(const approvalPolicy of ['on-request','untrusted','never','full-access'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
     expect(settingsSchema.safeParse({...base,approvalPolicy:'custom'}).success).toBe(false);

@@ -248,7 +248,9 @@ export async function validateRecruitmentProject(projectRoot: string, baseRef: s
   if (typeof baseRef !== 'string' || !baseRef.trim() || baseRef.startsWith('-') || baseRef.length > 255) {
     throw new RecruitmentGitError('Selected base ref is missing or invalid.');
   }
-  const commit = await git(root, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${baseRef}^{commit}`]);
+  let commit:GitResult;
+  try{commit=await git(root, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${baseRef}^{commit}`]);}
+  catch(error){throw new RecruitmentGitError(`Selected base ref could not be resolved to a commit: ${baseRef}`,{cause:error});}
   if (!/^[0-9a-f]{40,64}$/i.test(commit.stdout)) throw new RecruitmentGitError(`Selected base ref does not resolve to a commit: ${baseRef}`);
   return { projectRoot: root, baseRef, baseCommit: commit.stdout };
 }
@@ -265,6 +267,10 @@ async function assertBranchAvailable(projectRoot: string, branch: string): Promi
 export async function validateRecruitmentRoot(canonicalRoot: string, baseRef: string): Promise<{ canonicalRoot: string; baseCommit: string }> {
   const validated = await validateRecruitmentProject(canonicalRoot, baseRef);
   return { canonicalRoot: validated.projectRoot, baseCommit: validated.baseCommit };
+}
+
+export async function validateRecruitmentWorkspaceRoot(projectRoot:string):Promise<{canonicalRoot:string}>{
+  return {canonicalRoot:await canonicalDirectory(projectRoot,'Project root')};
 }
 
 export async function readRecruitmentBranchHead(canonicalRoot: string, branch: string): Promise<string> {
