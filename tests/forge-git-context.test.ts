@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,11 +12,11 @@ const execFileAsync = promisify(execFile);
 const roots: string[] = [];
 const git = async (cwd: string, ...args: string[]) => execFileAsync('git', args, { cwd, windowsHide: true, encoding: 'utf8' });
 const ticketId = '11111111-1111-4111-8111-111111111111';
-const testBase = 'D:\\programming\\opnex-forge-private\\forge-runtime\\f';
+const testBase = path.join(os.tmpdir(), 'opx');
 
 async function repository() {
   await mkdir(testBase, { recursive: true });
-  const root = await mkdtemp(path.join(testBase, 'r-'));
+  const root = await realpath(await mkdtemp(path.join(testBase, 'r-')));
   roots.push(root);
   await git(root, 'init', '-b', 'main');
   await git(root, 'config', 'user.name', 'Forge Test');
@@ -37,7 +38,8 @@ describe('Forge F2 Git context recovery', () => {
     expect(await resolveLocalForgeTargetBranch(root)).toBe('main');
     expect(forgeAttemptWorkerId(attemptId)).toBe('w-aaaaaaaaaaaa4aaa8aaaaaaaaaaa');
     expect(forgeBranchName(ticketId, attemptId, 'integration')).toBe(`codex/forge/${ticketId}/${attemptId}/integration/head`);
-    expect(forgeAttemptRoot('D:/app-state', ticketId, attemptId)).toBe(path.win32.join('D:/app-state', 'forge-worktrees', ticketId, attemptId));
+    const stateRoot = path.join(testBase, 'app-state');
+    expect(forgeAttemptRoot(stateRoot, ticketId, attemptId)).toBe(path.join(stateRoot, 'forge-worktrees', ticketId, attemptId));
   });
 
   it('blocks when no local default/main branch can be resolved', async () => {

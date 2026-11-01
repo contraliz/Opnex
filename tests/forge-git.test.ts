@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createForgeIntegrationCandidate, finalizeForgeMerge, FORGE_GIT_MAX_WORKERS, prepareForgeWorktrees, prepareForgeWorkerDependencies, validateForgeWorkerCommit } from '../server/forge-git';
@@ -16,7 +16,7 @@ describe('Forge Git operations', () => {
   const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
 
   beforeEach(async () => {
-    fixture = await mkdtemp(path.join(os.tmpdir(), 'opnex-forge-git-'));
+    fixture = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-forge-git-')));
     repo = path.join(fixture, 'repo');
     worktrees = path.join(fixture, 'managed-worktrees');
     await mkdir(repo);

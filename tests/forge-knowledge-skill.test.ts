@@ -6,7 +6,7 @@ import { loadForgeKnowledgeSkill, ForgeKnowledgeSkillError } from '../server/for
 
 const roots: string[] = [];
 async function tempRoot(prefix: string) {
-  const root = await mkdtemp(path.join(os.tmpdir(), prefix));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), prefix)));
   roots.push(root);
   return root;
 }
