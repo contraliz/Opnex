@@ -6,7 +6,7 @@ Forge adds a workspace-owned ticket workflow alongside the existing Conversation
 
 ## Create and start a ticket
 
-Select a named workspace and choose **Forge** when opening a new session. Enter a title, task description, checkable acceptance criteria, and workspace-relative read/write scopes. Choose the Codex orchestrator model and effort, select the local target branch, and set any additional Opnex skills. The worker model and effort come from Settings and are copied into the ticket when it is created. The approval policy is copied too; **Full Access** is not supported for Forge.
+Select a workspace and choose **Forge** when opening a new session. Only the task description is required. The title defaults to the first line of the description, and acceptance criteria, read/write scope, orchestrator model and effort, local target branch, and additional skills are optional and sit under **Advanced options**. Worker model, worker effort, and approval policy come from Settings and are copied into the ticket when it is created; **Full Access** is not supported for Forge.
 
 Forge requires the `agentmem-project` skill to be present in the workspace or a configured Codex skill location. That only supplies instructions: Opnex does not configure or call the external AgentMem service. Without a matching external service registration, knowledge lookup is unavailable. The ticket can continue with other work when its assignment does not require that knowledge. Knowledge scope and operation limits are instruction-only unless the external skill interface enforces them.
 

@@ -145,7 +145,7 @@ export const forgeIntegrationSchema=z.object({
 export const forgeTicketPhaseSchema=z.enum(['draft','planning','planned','running','integrating','review','merge_ready','merging','blocked','paused','cancelled','complete']);
 export const forgeTicketSchema=z.object({
   schemaVersion:z.literal(1),id,projectId:z.string().uuid(),workspaceRoot:z.string().trim().min(1).max(1024),
-  title:z.string().trim().min(1).max(120),description:text,acceptanceCriteria:z.array(text).min(1).max(30),
+  title:z.string().trim().min(1).max(120),description:text,acceptanceCriteria:z.array(text).max(30),
   scope:forgeScopeSchema,orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict(),
   workerProfile:forgeExecutionProfileSchema,targetBranch:z.string().trim().min(1).max(240).default('main'),approvalPolicy:z.enum(['on-request','untrusted','never']).default('on-request'),orchestratorSkills:z.array(forgeSkillSnapshotSchema).max(MAX_FORGE_SKILL_SNAPSHOTS),limits:forgeLimitsSchema,capabilities:forgeCapabilitiesSchema,
   phase:forgeTicketPhaseSchema,planRevision:z.number().int().min(0),proposedPlan:forgePlanProposalSchema.optional(),acceptedPlan:forgeAcceptedPlanSchema.optional(),
