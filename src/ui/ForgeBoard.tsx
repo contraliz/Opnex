@@ -8,6 +8,10 @@ type Props={ticket:ForgeTicket;task:Task;onTicketChange:(ticket:ForgeTicket)=>vo
 const phaseLabel=(phase:ForgeTicketPhase)=>phase.replaceAll('_',' ');
 const effortLabel=(profile:{provider:string;model:string;effort:string})=>`${profile.provider==='codex'?'Codex':profile.provider==='deepseek'?'DeepSeek Harness':profile.provider} · ${profile.model} · ${profile.effort}`;
 const receiptStatus=(status:string)=>status.replaceAll('_',' ');
+const accessLabel=(ticket:ForgeTicket)=>{
+  if(!ticket.accessMode)return ticket.approvalPolicy.replaceAll('-',' ');
+  return ({'read-only':'Read-only','workspace-write':'Workspace write · auto-block','workspace-write-approval':'Workspace write · approval','full-access':'Full access'} as Record<string,string>)[ticket.accessMode]||ticket.accessMode;
+};
 const blockedLabel=(code:string)=>({attempt_failed:'Attempt failed',retry_limit:'Retry limit reached',unknown_after_restart:'Needs reconciliation after restart',unknown_effect:'Provider start status is uncertain',preflight_failed:'Execution preflight failed',unverified_commit:'Commit validation failed',manual:'Needs attention',correction_limit:'Correction limit reached'} as Record<string,string>)[code]||code.replaceAll('_',' ');
 const capabilityLabel=(value:string)=>value==='instruction-only'?'Instruction-only':value==='unavailable'?'Unavailable':value==='monitored'?'Monitored':'Enforced';
 const capabilityExplanation=(key:string,value:string)=>{
@@ -55,7 +59,7 @@ export function ForgeBoard({ticket,task,onTicketChange}:Props){
       <div><span>Workspace</span><strong>{ticket.workspaceRoot}</strong></div>
       <div><span>Orchestrator</span><strong>{ticket.orchestrator.model} · {ticket.orchestrator.effort}</strong></div>
       <div><span>Worker profile</span><strong>{effortLabel(ticket.workerProfile)}</strong></div>
-      <div><span>Approval policy</span><strong>{ticket.approvalPolicy.replaceAll('-',' ')}</strong></div>
+      <div><span>Ticket access</span><strong>{accessLabel(ticket)}</strong></div>
       <div><span>Task limit</span><strong>{ticket.workitems.length || 'Plan up to 16'} / 16 work items</strong></div>
       <div><span>Knowledge budget</span><strong>{ticket.knowledgeBudget.totalOperations} shared · {ticket.knowledgeBudget.defaultAllocationOperations} default / {ticket.knowledgeBudget.maxAllocationOperations} max per run</strong></div>
     </section>

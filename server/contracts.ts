@@ -15,6 +15,18 @@ export const assignmentSchema = z.object({
 export type Assignment = z.infer<typeof assignmentSchema>;
 
 export const forgeEffortSchema=z.enum(['low','medium','high','xhigh','max','ultra']);
+/** Ticket-level access. The whole ticket runs under one mode; read-only additionally drops every write root. */
+export const forgeAccessModeSchema=z.enum(['read-only','workspace-write','workspace-write-approval','full-access']);
+export type ForgeAccessMode=z.infer<typeof forgeAccessModeSchema>;
+export function forgeRuntimeApproval(mode:ForgeAccessMode):'on-request'|'never'|'full-access'{
+  return mode==='workspace-write-approval'?'on-request':mode==='full-access'?'full-access':'never';
+}
+export function forgeAccessModeOf(ticket:{accessMode?:ForgeAccessMode;approvalPolicy?:string}):ForgeAccessMode{
+  if(ticket.accessMode)return ticket.accessMode;
+  if(ticket.approvalPolicy==='full-access')return 'full-access';
+  if(ticket.approvalPolicy==='never')return 'workspace-write';
+  return 'workspace-write-approval';
+}
 export const forgeExecutionProfileSchema=z.object({provider:z.enum(['codex','deepseek']),model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict();
 const forgeScopePaths=z.array(z.string().trim().min(1).max(1024)).max(80);
 export const forgeScopeSchema=z.object({read:forgeScopePaths,write:forgeScopePaths,knowledge:forgeScopePaths}).strict();
@@ -56,6 +68,7 @@ const forgeTicketInputBaseSchema=z.object({
   scope:forgeScopeSchema.partial().default({}),
   orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict().optional(),
   workerProfile:forgeExecutionProfileSchema.optional(),
+  accessMode:forgeAccessModeSchema.default('workspace-write-approval'),
   targetBranch:z.string().trim().min(1).max(240).default('main'),
   skillIds:z.array(z.string().uuid()).max(12).default([]).superRefine((ids,ctx)=>{if(new Set(ids).size!==ids.length)ctx.addIssue({code:'custom',message:'Select each Forge skill only once.'});}),
   limits:forgeLimitsSchema.partial().default({}),

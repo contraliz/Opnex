@@ -6,7 +6,7 @@ import type { ApprovalPolicy, Assignment, Receipt } from './contracts.js';
 import type { TaskAttachment } from './attachments.js';
 import type { DeepSeekHarnessMcpToolCatalog, DeepSeekHarnessRuntimeInfo } from './deepseek-harness.js';
 import { stateDirectory } from './paths.js';
-import { assignmentSchema, receiptSchema } from './contracts.js';
+import { assignmentSchema, forgeAccessModeOf, receiptSchema } from './contracts.js';
 import { normalizeAgentWorkspaceUrl } from './workspace-tools.js';
 import { createToolCallLog, interruptRunningToolCalls, recordToolCall, type ToolCallEvent, type ToolCallLog } from './tool-call-log.js';
 import { qualityCorrectionPlannerMayHaveBeenSent, qualityLoopResumeAction, type QACorrectionPlannerDispatch } from './quality-loop-resume.js';
@@ -514,7 +514,7 @@ export function createForgeSessionInState(state:State,input:ForgeSessionCreateIn
   const id=input.id||randomUUID();
   if(state.tasks.some(row=>row.id===id))throw new Error('A session with this ID already exists.');
   const createdAt=input.createdAt||new Date().toISOString();
-  const forge=createForgeTicket({...input,id,workspaceRoot:project.projectRoot,approvalPolicy:state.settings.approvalPolicy,createdAt});
+  const forge=createForgeTicket({...input,id,workspaceRoot:project.projectRoot,accessMode:input.accessMode??forgeAccessModeOf({approvalPolicy:state.settings.approvalPolicy}),createdAt});
   const message:Message={id:randomUUID(),role:'user',text:forge.description,createdAt};
   const task:Task={id,title:forge.title,phase:'accepted',createdAt,updatedAt:createdAt,lastInteractedAt:createdAt,projectId:project.id,sessionType:'forge',forge,toolCalls:createToolCallLog(),userRoot:project.projectRoot,userMessages:[forge.description],messages:[message],correctionCount:0,processedTurns:[]};
   state.tasks.unshift(task);state.activeTaskId=id;

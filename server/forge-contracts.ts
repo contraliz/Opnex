@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import {
   assignmentSchema,
+  forgeAccessModeSchema,
   forgeCapabilitiesSchema,
   forgeEffortSchema,
   forgeExecutionProfileSchema,
   type ApprovalPolicy,
+  type ForgeAccessMode,
   forgeKnowledgeBudgetSchema,
   DEFAULT_FORGE_KNOWLEDGE_BUDGET,
   MAX_FORGE_SKILL_SNAPSHOTS,
@@ -147,7 +149,7 @@ export const forgeTicketSchema=z.object({
   schemaVersion:z.literal(1),id,projectId:z.string().uuid(),workspaceRoot:z.string().trim().min(1).max(1024),
   title:z.string().trim().min(1).max(120),description:text,acceptanceCriteria:z.array(text).max(30),
   scope:forgeScopeSchema,orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict(),
-  workerProfile:forgeExecutionProfileSchema,targetBranch:z.string().trim().min(1).max(240).default('main'),approvalPolicy:z.enum(['on-request','untrusted','never']).default('on-request'),orchestratorSkills:z.array(forgeSkillSnapshotSchema).max(MAX_FORGE_SKILL_SNAPSHOTS),limits:forgeLimitsSchema,capabilities:forgeCapabilitiesSchema,
+  workerProfile:forgeExecutionProfileSchema,targetBranch:z.string().trim().min(1).max(240).default('main'),approvalPolicy:z.enum(['on-request','untrusted','never']).default('on-request'),accessMode:forgeAccessModeSchema.optional(),orchestratorSkills:z.array(forgeSkillSnapshotSchema).max(MAX_FORGE_SKILL_SNAPSHOTS),limits:forgeLimitsSchema,capabilities:forgeCapabilitiesSchema,
   phase:forgeTicketPhaseSchema,planRevision:z.number().int().min(0),proposedPlan:forgePlanProposalSchema.optional(),acceptedPlan:forgeAcceptedPlanSchema.optional(),
   knowledgeBudget:forgeKnowledgeBudgetSchema.default(DEFAULT_FORGE_KNOWLEDGE_BUDGET),orchestratorRuns:z.array(forgeOrchestratorRunSchema).max(100).default([]),activeOrchestratorRunId:id.optional(),
   workitems:z.array(forgeWorkitemSchema).max(MAX_FORGE_WORKITEMS),attempts:z.array(forgeAttemptSchema).max(1000),receipts:z.array(forgeStoredReceiptSchema).max(1000),integration:forgeIntegrationSchema,
@@ -372,7 +374,7 @@ export type ForgeApprovalPolicy=Extract<ApprovalPolicy,'on-request'|'untrusted'|
 export type ForgeTicketCreateInput={
   id:string;projectId:string;workspaceRoot:string;title:string;description:string;acceptanceCriteria:string[];
   scope:z.infer<typeof forgeScopeSchema>;orchestrator:{model:string;effort:z.infer<typeof forgeEffortSchema>};
-  workerProfile:z.infer<typeof forgeExecutionProfileSchema>;orchestratorSkills:ForgeSkillSnapshot[];targetBranch?:string;approvalPolicy?:ApprovalPolicy;
+  workerProfile:z.infer<typeof forgeExecutionProfileSchema>;orchestratorSkills:ForgeSkillSnapshot[];targetBranch?:string;approvalPolicy?:ApprovalPolicy;accessMode?:ForgeAccessMode;
   limits?:Partial<z.infer<typeof forgeLimitsSchema>>;knowledgeBudget?:Partial<ForgeKnowledgeBudget>;
   capabilities:Omit<z.infer<typeof forgeCapabilitiesSchema>,'operationBudget'>&{operationBudget?:'enforced'|'monitored'|'instruction-only'|'unavailable'};createdAt:string;
 };

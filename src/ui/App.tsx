@@ -812,7 +812,7 @@ export default function App() {
     </div> : <div className={`new-tab-center ${newSessionTypes[tab]==='forge'?'forge-new-tab-center':''}`}>
       {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
       {renderNewSessionType(tab)}
-      {newSessionTypes[tab]==='forge'?<ForgeSessionCreate project={selectedProject} settings={state?.settings||fallbackSettings} models={models} onOpenSettings={openSettings} onUseUnattended={()=>void updateSettings({approvalPolicy:'never'})} onOpenSkills={()=>openSkillsTab(pane.id)} onOpenWorkspace={()=>openProjectEditor(selectedProject||'new')} onCreated={async ticket=>{
+      {newSessionTypes[tab]==='forge'?<ForgeSessionCreate project={selectedProject} settings={state?.settings||fallbackSettings} models={models} onOpenSkills={()=>openSkillsTab(pane.id)} onOpenWorkspace={()=>openProjectEditor(selectedProject||'new')} onCreated={async ticket=>{
         const snapshot=await refresh();
         const created=snapshot?.tasks.find(row=>row.id===ticket.id);
         if(!created){setTabError(tab,'The Forge draft was saved, but the session snapshot does not include it yet. Refresh the session to open its board.');return;}

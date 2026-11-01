@@ -106,9 +106,6 @@ export class ForgeCodexProvider {
       throw new ForgeProviderStartError(error instanceof Error ? error.message : 'Forge runtime preflight failed.', 'not_started', { cause: error });
     }
     if (!request.executionRoot || !request.canonicalRoot || !request.ticketId || !request.taskId) throw new ForgeProviderStartError('Forge provider context must include the ticket, task, and canonical execution roots.', 'not_started');
-    if (request.approvalPolicy === 'full-access') {
-      throw new ForgeProviderStartError('Forge cannot start with the current Full Access approval policy because it defeats the accepted role and filesystem boundaries. Select a restricted Codex approval policy; Opnex did not widen access.', 'not_started');
-    }
 
     let threadId: string;
     try {

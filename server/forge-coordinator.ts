@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { assignmentWriteRoots } from './policy.js';
-import { forgeEffortSchema, forgeTicketInputSchema, type Assignment, type Receipt } from './contracts.js';
+import { forgeAccessModeOf, forgeEffortSchema, forgeRuntimeApproval, forgeTicketInputSchema, type ApprovalPolicy, type Assignment, type Receipt } from './contracts.js';
 import { applyForgeCommandInState, clearForgeApprovalAfterProviderCancellationInState, createForgeSessionInState, recordForgeApprovalRequestInState, recordForgeToolCallInState, resolveForgeApprovalRequestInState, type ForgeApprovalContext, type ForgeApprovalRequest, type State } from './state.js';
 import type { ToolCallEvent } from './tool-call-log.js';
 import { executionProfileForSettings } from './state.js';
@@ -14,7 +14,7 @@ import { getSkill } from './skill-library.js';
 import { loadForgeKnowledgeSkill } from './forge-knowledge-skill.js';
 import { createForgeIntegrationCandidate, finalizeForgeMerge, prepareForgeWorktrees, prepareForgeWorkerDependencies, validateForgeWorkerCommit, type ForgeCandidateEvidence, type ForgeWorkerCommitInput, type PreparedForgeWorktrees } from './forge-git.js';
 import { forgeAttemptRoot, forgeAttemptWorkerId, forgeBranchName, restoreForgeIntegrationWorktrees, restoreForgeWorkerWorktrees, resolveLocalForgeTargetBranch } from './forge-git-context.js';
-import { mergeForgeSkillSnapshots, type ForgeActor, type ForgeApprovalPolicy, type ForgeAttempt, type ForgeSkillSnapshot, type ForgeTicket, type ForgeWorkitem } from './forge-contracts.js';
+import { mergeForgeSkillSnapshots, type ForgeActor, type ForgeAttempt, type ForgeSkillSnapshot, type ForgeTicket, type ForgeWorkitem } from './forge-contracts.js';
 import { applyForgeCommand, forgeKnowledgeBudgetBalance } from './forge-state.js';
 import { forgeIntegratorOutputJsonSchema, forgePlanOutputJsonSchema, forgeReviewOutputJsonSchema, forgeWorkerOutcomeJsonSchema, forgeReviewOutputSchema, normalizeForgeAssignmentPaths, parseForgeIntegratorOutput, parseForgePlanResult, parseForgeReviewOutput, parseForgeWorkerOutcome, forgeIntegratorPrompt, forgePlanPrompt, forgeReviewPrompt, forgeWorkerPrompt } from './forge-prompts.js';
 import { ForgeProviderStartError, type ForgeProviderApprovalDecision, type ForgeProviderApprovalRequest, type ForgeProviderCancelResult, type ForgeProviderEvent, type ForgeProviderHandle, type ForgeProviderOutcome, type ForgeProviderRequest, type ForgeProviderRole, type ForgeProviderStartEvidence } from './forge-provider.js';
@@ -26,6 +26,12 @@ import type { ForgeCommand, ForgeHostAttestation, ForgeKnowledgeAllocation, Forg
 
 const execFileAsync = promisify(execFile);
 const HOST: ForgeActor = { role: 'host', id: 'forge-runtime' };
+
+/** Translates the ticket-level access mode into the runtime approval policy. */
+function forgeRuntimeAccess(ticket: ForgeTicket) {
+  const mode = forgeAccessModeOf(ticket);
+  return { mode, approvalPolicy: forgeRuntimeApproval(mode), readOnly: mode === 'read-only' };
+}
 const MAX_GIT_DIFF = 300_000;
 const TOOL_ITEM_TYPES = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'webSearchCall', 'dynamicToolCall', 'collabAgentToolCall']);
 
@@ -50,7 +56,7 @@ type ForgeActorBinding = {
   writeRoots: string[];
   prompt: string;
   outputSchema: unknown;
-  approvalPolicy: ForgeApprovalPolicy;
+  approvalPolicy: ApprovalPolicy;
   handle?: ForgeProviderHandle;
   observedTools: Array<{ command: string; exitCode?: number; status: string }>;
 };
@@ -233,7 +239,7 @@ export class ForgeCoordinator {
     const binding: ForgeActorBinding = {
       ticketId: ticket.id, role: 'orchestrator', targetType: 'planning', targetId: runId, ownerId, model: ticket.orchestrator.model, effort: ticket.orchestrator.effort,
       executionRoot: ticket.workspaceRoot, canonicalRoot: ticket.workspaceRoot, writeRoots: [], prompt, outputSchema: forgePlanOutputJsonSchema,
-      approvalPolicy: ticket.approvalPolicy, observedTools: [],
+      approvalPolicy: forgeRuntimeAccess(ticket).approvalPolicy, observedTools: [],
     };
     await this.launch(binding, run.knowledgeAllocation?.operations);
   }
@@ -285,14 +291,15 @@ export class ForgeCoordinator {
     const claimed = this.requireTicket(ticket.id).attempts.find((row) => row.id === attemptId)!;
     const actor = actorForAttempt(ticket.id, claimed);
     actor.canonicalRoot = ticket.workspaceRoot;
-    actor.approvalPolicy = ticket.approvalPolicy;
+    const runtimeAccess = forgeRuntimeAccess(ticket);
+    actor.approvalPolicy = runtimeAccess.approvalPolicy;
     let preflightStage: 'workspace_prepare' | 'dependency_merge' = 'workspace_prepare';
     let prepared: PreparedForgeWorktrees;
     try {
       await mkdir(path.dirname(taskRoot), { recursive: true });
       prepared = await prepareForgeWorktrees({ canonicalRoot: ticket.workspaceRoot, taskRoot, baseRef: planningBaseline, ticketId: ticket.id, attemptId, workerIds: [ownerId] });
       if (profile.provider === 'deepseek') {
-        try { resolveDeepSeekHarnessPermission({ approvalPolicy: ticket.approvalPolicy, selectedForTask: true, workspaceRoot: ticket.workspaceRoot, writeScope: assignmentSnapshot.assignment.write_scope, requiresFilesystemConfinement: true }); }
+        try { resolveDeepSeekHarnessPermission({ approvalPolicy: runtimeAccess.approvalPolicy as 'on-request' | 'untrusted' | 'never' | 'full-access', selectedForTask: true, workspaceRoot: ticket.workspaceRoot, writeScope: runtimeAccess.readOnly ? [] : assignmentSnapshot.assignment.write_scope, requiresFilesystemConfinement: runtimeAccess.mode !== 'full-access' }); }
         catch (error) { throw new Error(error instanceof Error ? error.message : 'Forge requires a runtime that enforces this writable scope. DeepSeek Harness reports writable scope as assignment-instruction-only.'); }
         throw new Error('The selected DeepSeek Harness profile has no Forge role adapter in this runtime. No Codex fallback was started. Select a supported Codex worker profile or configure a confinement-capable Forge adapter.');
       }
@@ -308,7 +315,7 @@ export class ForgeCoordinator {
       const knowledgeSkill = await this.loadKnowledgeSkill(ticket);
       const worktreeWriteRoots = mapWriteRoots(assignmentSnapshot.assignment.write_scope, ticket.workspaceRoot, worktreeRoot);
       const gitRoots = await forgeGitWritableRoots({ canonicalRoot: ticket.workspaceRoot, taskRoot, ticketId: ticket.id, attemptId, role: 'worker', workerId: ownerId, worktreeRoot });
-      const writeRoots = [...new Set([...worktreeWriteRoots, ...gitRoots.slice(1)])];
+      const writeRoots = runtimeAccess.readOnly ? [] : [...new Set([...worktreeWriteRoots, ...gitRoots.slice(1)])];
       const prompt = forgeWorkerPrompt({
         ticket, workspaceName: path.basename(ticket.workspaceRoot.replace(/[\\/]+$/, '')), workItemId: item.id, attemptId, workerId: ownerId,
         assignment: assignmentForWorktree(assignmentSnapshot.assignment, ticket.workspaceRoot, worktreeRoot), skillSnapshots: assignmentSnapshot.skillSnapshots,
@@ -371,7 +378,7 @@ export class ForgeCoordinator {
         const candidateResult = await createForgeIntegrationCandidate({ prepared, targetBranch: ticket.targetBranch, workers: commits });
         if (candidateResult.status !== 'ready') throw new Error(candidateResult.status === 'stale-target' ? `Target ${ticket.targetBranch} moved from ${candidateResult.expectedMainCommit} to ${candidateResult.observedMainCommit} while preparing integration.` : candidateResult.status === 'conflict' ? `Integration preflight found conflicts: ${candidateResult.conflicts.map((row) => row.path).join(', ')}.` : candidateResult.reason);
         if (fresh.workerProfile.provider === 'deepseek') {
-          try { resolveDeepSeekHarnessPermission({ approvalPolicy: ticket.approvalPolicy, selectedForTask: true, workspaceRoot: ticket.workspaceRoot, writeScope: [], requiresFilesystemConfinement: false }); }
+          try { resolveDeepSeekHarnessPermission({ approvalPolicy: forgeRuntimeAccess(fresh).approvalPolicy, selectedForTask: true, workspaceRoot: ticket.workspaceRoot, writeScope: [], requiresFilesystemConfinement: forgeRuntimeAccess(fresh).mode !== 'full-access' }); }
           catch (error) { throw new Error(error instanceof Error ? error.message : 'The selected DeepSeek Harness profile cannot safely run Forge integration.'); }
           throw new Error('The selected DeepSeek Harness profile has no Forge integration adapter in this runtime. No Codex fallback was started.');
         }
@@ -384,8 +391,8 @@ export class ForgeCoordinator {
         });
         const actor: ForgeActorBinding = {
           ticketId: ticket.id, role: 'integrator', targetType: 'integration', targetId: runId, ownerId, model: run.requestedProfile.model, effort: run.requestedProfile.effort,
-          executionRoot: candidateResult.candidate.candidateRoot, canonicalRoot: ticket.workspaceRoot, writeRoots: gitRoots.slice(1), prompt,
-          outputSchema: forgeIntegratorOutputJsonSchema, approvalPolicy: ticket.approvalPolicy, observedTools: [],
+          executionRoot: candidateResult.candidate.candidateRoot, canonicalRoot: ticket.workspaceRoot, writeRoots: forgeRuntimeAccess(fresh).readOnly ? [] : gitRoots.slice(1), prompt,
+          outputSchema: forgeIntegratorOutputJsonSchema, approvalPolicy: forgeRuntimeAccess(fresh).approvalPolicy, observedTools: [],
         };
         actorCandidateEvidence.set(actorKey(ticket.id, 'integration', runId), { evidence: candidateResult.candidate, prepared, commits });
         await this.launch(actor, run.knowledgeAllocation?.operations);
@@ -438,7 +445,7 @@ export class ForgeCoordinator {
       await this.launch({
         ticketId: ticket.id, role: 'orchestrator', targetType: 'final_review', targetId: reviewRunId, ownerId, model: reviewInput.requestedProfile.model, effort: reviewInput.requestedProfile.effort,
         executionRoot: ticket.workspaceRoot, canonicalRoot: ticket.workspaceRoot, writeRoots: [], prompt, outputSchema: forgeReviewOutputJsonSchema,
-        approvalPolicy: ticket.approvalPolicy, observedTools: [],
+        approvalPolicy: forgeRuntimeAccess(ticket).approvalPolicy, observedTools: [],
       }, savedRun.knowledgeAllocation?.operations);
     } finally { this.stageLocks.delete(lock); }
   }

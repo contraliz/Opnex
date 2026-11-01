@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyForgeCommand, createForgeTicket, forgeKnowledgeBudgetBalance } from '../server/forge-state.js';
-import { forgeTicketInputSchema, MAX_FORGE_WORKITEMS } from '../server/contracts.js';
+import { forgeAccessModeOf, forgeRuntimeApproval, forgeTicketInputSchema, MAX_FORGE_WORKITEMS } from '../server/contracts.js';
 import { forgeAssignmentSnapshotInputSchema, forgeIntegrationRunInputSchema, forgeOrchestratorRunInputSchema, forgePlanTaskInputSchema, forgeTicketSchema, mergeForgeSkillSnapshots, type ForgeIntegrationCandidate, type ForgePlanTaskInput, type ForgeTicket } from '../server/forge-contracts.js';
 
 const at='2026-10-31T00:00:00.000Z';
@@ -119,6 +119,19 @@ describe('Forge plan acceptance',()=>{
     expect(parsed.knowledgeBudget).toEqual({totalOperations:64,defaultAllocationOperations:2,maxAllocationOperations:8});
     const created=createForgeTicket({...ticket(),title:parsed.title,acceptanceCriteria:parsed.acceptanceCriteria});
     expect(created.acceptanceCriteria).toEqual([]);
+  });
+
+  it('stores a ticket-level access mode and derives its runtime approval policy',()=>{
+    expect(forgeAccessModeOf({})).toBe('workspace-write-approval');
+    expect(forgeRuntimeApproval('read-only')).toBe('never');
+    expect(forgeRuntimeApproval('workspace-write')).toBe('never');
+    expect(forgeRuntimeApproval('workspace-write-approval')).toBe('on-request');
+    expect(forgeRuntimeApproval('full-access')).toBe('full-access');
+    expect(createForgeTicket({...ticket(),accessMode:'read-only'})).toMatchObject({accessMode:'read-only',approvalPolicy:'never'});
+    expect(createForgeTicket({...ticket(),accessMode:'full-access'})).toMatchObject({accessMode:'full-access',approvalPolicy:'never'});
+    expect(createForgeTicket({...ticket(),accessMode:'workspace-write-approval'}).approvalPolicy).toBe('on-request');
+    expect(forgeAccessModeOf({approvalPolicy:'full-access'})).toBe('full-access');
+    expect(forgeAccessModeOf({approvalPolicy:'never'})).toBe('workspace-write');
   });
 
   it('accepts a valid single-task plan and starts the task open',()=>{

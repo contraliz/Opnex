@@ -1,29 +1,36 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BookOpen, Folder } from 'lucide-react';
-import type { ForgeTicket, ForgeTicketCreateRequest, Project, Runtime, Settings } from '../types.js';
+import type { ForgeAccessMode, ForgeTicket, ForgeTicketCreateRequest, Project, Runtime, Settings } from '../types.js';
 import { createForgeTicket, api } from './api.js';
 import { codexModelChoices } from './ModelPicker.js';
 import ModelPicker from './ModelPicker.js';
 import type { SkillSummary } from './skills-types.js';
 
 type SkillSearch={skills?:SkillSummary[]};
-type Props={project:Project|null;settings:Settings;models:Runtime['codex']['models'];onCreated:(ticket:ForgeTicket)=>void|Promise<void>;onOpenSettings:()=>void;onUseUnattended:()=>void;onOpenSkills:()=>void;onOpenWorkspace:()=>void};
+type Props={project:Project|null;settings:Settings;models:Runtime['codex']['models'];onCreated:(ticket:ForgeTicket)=>void|Promise<void>;onOpenSkills:()=>void;onOpenWorkspace:()=>void};
 type Limits={maxActiveWorkers:number;maxExecutionAttempts:number;maxCorrectionRounds:number};
 type KnowledgeBudget={totalOperations:number;defaultAllocationOperations:number;maxAllocationOperations:number};
 
 const lines=(value:string)=>value.split(/\r?\n/).map(row=>row.trim()).filter(Boolean);
-const validApprovalPolicy=(value:Settings['approvalPolicy'])=>value==='on-request'||value==='untrusted'||value==='never';
+const initialAccessMode=(policy:Settings['approvalPolicy']):ForgeAccessMode=>policy==='full-access'?'full-access':policy==='never'?'workspace-write':'workspace-write-approval';
+const accessHelp:Record<ForgeAccessMode,string>={
+  'read-only':'Workers cannot write; the ticket can still plan and review.',
+  'workspace-write':'Writes stay inside the accepted scope; boundary attempts stop immediately without prompting.',
+  'workspace-write-approval':'Writes stay inside the accepted scope, and a boundary attempt waits for your approval.',
+  'full-access':'No sandbox. Anything the worker process can reach is writable.',
+};
 const deriveTitle=(value:string)=>{
   const first=value.split(/\r?\n/).map(row=>row.trim().replace(/^[#>*\-\s]+/,'').trim()).find(Boolean)||'';
   return (first||'Untitled Forge ticket').slice(0,120);
 };
 
-export default function ForgeSessionCreate({project,settings,models,onCreated,onOpenSettings,onUseUnattended,onOpenSkills,onOpenWorkspace}:Props){
+export default function ForgeSessionCreate({project,settings,models,onCreated,onOpenSkills,onOpenWorkspace}:Props){
   const [title,setTitle]=useState('');
   const [description,setDescription]=useState('');
   const [acceptanceText,setAcceptanceText]=useState('');
   const [readText,setReadText]=useState('.');
   const [writeText,setWriteText]=useState('.');
+  const [accessMode,setAccessMode]=useState<ForgeAccessMode>(()=>initialAccessMode(settings.approvalPolicy));
   const [targetBranch,setTargetBranch]=useState('main');
   const [orchestratorModel,setOrchestratorModel]=useState(settings.orchestratorModel);
   const [orchestratorEffort,setOrchestratorEffort]=useState(settings.orchestratorEffort);
@@ -66,9 +73,8 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
   const limitsValid=Number.isInteger(limits.maxActiveWorkers)&&limits.maxActiveWorkers>=1&&limits.maxActiveWorkers<=3&&Number.isInteger(limits.maxExecutionAttempts)&&limits.maxExecutionAttempts>=1&&limits.maxExecutionAttempts<=2&&Number.isInteger(limits.maxCorrectionRounds)&&limits.maxCorrectionRounds>=0&&limits.maxCorrectionRounds<=3;
   const budgetValid=Number.isInteger(knowledgeBudget.totalOperations)&&knowledgeBudget.totalOperations>=0&&knowledgeBudget.totalOperations<=100000&&Number.isInteger(knowledgeBudget.defaultAllocationOperations)&&knowledgeBudget.defaultAllocationOperations>=0&&knowledgeBudget.defaultAllocationOperations<=8&&Number.isInteger(knowledgeBudget.maxAllocationOperations)&&knowledgeBudget.maxAllocationOperations>=0&&knowledgeBudget.maxAllocationOperations<=8&&knowledgeBudget.defaultAllocationOperations<=knowledgeBudget.maxAllocationOperations;
   const workspaceUsable=!!project&&!project.needsLocation&&!!project.projectRoot.trim();
-  const approvalValid=validApprovalPolicy(settings.approvalPolicy);
   const activeAgentmemStatus=workspaceUsable?agentmemStatus:'unavailable';
-  const formReady=workspaceUsable&&approvalValid&&activeAgentmemStatus==='found'&&!!description.trim()&&limitsValid&&budgetValid&&libraryStatus!=='loading'&&selectedSkillIds.length<=12&&!!selectedModel?.available&&effortChoices.includes(orchestratorEffort);
+  const formReady=workspaceUsable&&activeAgentmemStatus==='found'&&!!description.trim()&&limitsValid&&budgetValid&&libraryStatus!=='loading'&&selectedSkillIds.length<=12&&!!selectedModel?.available&&effortChoices.includes(orchestratorEffort);
 
   const refreshSkills=()=>{setSkillRefresh(value=>value+1);};
   const changeLimit=(field:keyof Limits,value:string)=>setLimits(current=>({...current,[field]:Number(value)}));
@@ -81,7 +87,7 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
       projectId:project.id,title:title.trim()||deriveTitle(description),description:description.trim(),acceptanceCriteria,
       scope:{read:readScope.length?readScope:['.'],write:writeScope.length?writeScope:['.'],knowledge:[]},
       orchestrator:{model:orchestratorModel,effort:orchestratorEffort as ForgeTicket['orchestrator']['effort']},
-      targetBranch:targetBranch.trim()||'main',skillIds:selectedSkillIds,
+      accessMode,targetBranch:targetBranch.trim()||'main',skillIds:selectedSkillIds,
       limits,knowledgeBudget,
     };
     setWorking(true);setError('');
@@ -111,7 +117,6 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
         {(activeAgentmemStatus==='missing'||activeAgentmemStatus==='unavailable')&&<button type="button" className="forge-inline-action" onClick={refreshSkills}>Check again</button>}
       </div>
 
-      {!approvalValid&&<div className="forge-inline-alert" role="alert">Forge runs unattended, so it keeps the Codex sandbox instead of the unsandboxed Full Access mode. Use <strong>Never ask</strong> to run without prompts, or choose On request / Untrusted commands in Settings to review each step.<button type="button" className="forge-inline-action" onClick={onUseUnattended}>Use Never ask</button><button type="button" className="forge-inline-action" onClick={onOpenSettings}>Open Settings</button></div>}
       {error&&<div className="forge-inline-alert" role="alert">{error}</div>}
 
       <div className="forge-create-fields">
@@ -129,6 +134,17 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
         <label className="forge-field">
           <span className="forge-field-label">Acceptance criteria<span className="forge-field-hint">Optional · one criterion per line</span></span>
           <textarea aria-label="Acceptance criteria" rows={3} value={acceptanceText} onChange={event=>setAcceptanceText(event.currentTarget.value)} placeholder="Leave empty to let the orchestrator derive them from the description."/>
+        </label>
+
+        <label className="forge-field">
+          <span className="forge-field-label">Ticket access<span className="forge-field-hint">Applies to every role in this ticket</span></span>
+          <select aria-label="Ticket access" value={accessMode} onChange={event=>setAccessMode(event.currentTarget.value as ForgeAccessMode)}>
+            <option value="read-only">Read-only · all writes blocked</option>
+            <option value="workspace-write">Workspace write · auto-block at the scope edge</option>
+            <option value="workspace-write-approval">Workspace write · wait for approval</option>
+            <option value="full-access">Full access · unrestricted</option>
+          </select>
+          <small className="forge-field-hint">{accessHelp[accessMode]}</small>
         </label>
 
         <details className="forge-advanced">

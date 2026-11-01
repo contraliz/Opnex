@@ -27,6 +27,7 @@ import {
   type ForgeTicket,
   type ForgeTicketCreateInput,
 } from './forge-contracts.js';
+import { forgeAccessModeOf } from './contracts.js';
 import { DEFAULT_FORGE_KNOWLEDGE_BUDGET, DEFAULT_FORGE_LIMITS, MAX_FORGE_WORKITEMS } from './contracts.js';
 
 function requireActor(actor:ForgeActor,...roles:ForgeActor['role'][]){
@@ -124,10 +125,10 @@ function updateTicketPhaseAfterOutcome(ticket:ForgeTicket,now:string){
 
 export function createForgeTicket(input:ForgeTicketCreateInput):ForgeTicket{
   if(Object.values(input.scope).some(paths=>paths.some(path=>!scopePathIsSafe(path))))throw new Error('Forge ticket scopes must use safe relative or absolute paths without traversal.');
-  if(input.approvalPolicy==='full-access')throw new Error('Forge sessions cannot use the Full Access approval policy. Choose On Request, Untrusted, or Never before creating this ticket.');
+  const accessMode=input.accessMode??forgeAccessModeOf({approvalPolicy:input.approvalPolicy});
   const {limits,knowledgeBudget,...fields}=structuredClone(input);
   const ticket:ForgeTicket={
-    schemaVersion:1,...fields,targetBranch:input.targetBranch??'main',approvalPolicy:input.approvalPolicy??'on-request',orchestratorSkills:mergeForgeSkillSnapshots(input.orchestratorSkills),capabilities:{...fields.capabilities,operationBudget:fields.capabilities.operationBudget??'instruction-only'},limits:{...DEFAULT_FORGE_LIMITS,...limits},knowledgeBudget:{...DEFAULT_FORGE_KNOWLEDGE_BUDGET,...knowledgeBudget},updatedAt:input.createdAt,phase:'draft',planRevision:0,orchestratorRuns:[],workitems:[],attempts:[],receipts:[],
+    schemaVersion:1,...fields,accessMode,targetBranch:input.targetBranch??'main',approvalPolicy:input.approvalPolicy==='untrusted'?'untrusted':accessMode==='workspace-write-approval'?'on-request':'never',orchestratorSkills:mergeForgeSkillSnapshots(input.orchestratorSkills),capabilities:{...fields.capabilities,operationBudget:fields.capabilities.operationBudget??'instruction-only'},limits:{...DEFAULT_FORGE_LIMITS,...limits},knowledgeBudget:{...DEFAULT_FORGE_KNOWLEDGE_BUDGET,...knowledgeBudget},updatedAt:input.createdAt,phase:'draft',planRevision:0,orchestratorRuns:[],workitems:[],attempts:[],receipts:[],
     integration:{status:'not_started',runs:[],candidates:[],staleCandidateIds:[],supersededCandidateIds:[],correctionRounds:[],reviewDecisions:[],mergeReadbacks:[]},
   };
   return forgeTicketSchema.parse(ticket);
