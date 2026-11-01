@@ -326,7 +326,7 @@ describe('Forge state persistence',()=>{
     expect((await reloaded.loadState()).tasks.find(task=>task.id==='forge-untrusted')?.forge?.approvalPolicy).toBe('untrusted');
   });
 
-  it('rejects Full Access for strict Forge creation instead of downgrading the selected policy',async()=>{
+  it('accepts an explicit Full Access ticket access mode',async()=>{
     const directory=await makeDirectory();
     const workspaceRoot=path.join(directory,'workspace');await mkdir(workspaceRoot);
     vi.stubEnv('OPNEX_DATA_DIR',path.join(directory,'data'));vi.resetModules();
@@ -334,8 +334,10 @@ describe('Forge state persistence',()=>{
     await state.loadState();
     await state.mutate(value=>state.saveProjectInState(value,{id:projectId,name:'Forge workspace',projectRoot:workspaceRoot,needsLocation:false,pinned:false}));
     await state.mutate(value=>{value.settings.approvalPolicy='full-access';});
-    await expect(state.createForgeSession(ticketInput(workspaceRoot))).rejects.toThrow(/cannot use the Full Access approval policy/i);
-    expect(state.getState().tasks).toHaveLength(0);
+    const created=await state.createForgeSession(ticketInput(workspaceRoot));
+    expect(created.forge?.accessMode).toBe('full-access');
+    expect(created.forge?.approvalPolicy).toBe('never');
+    expect(state.getState().tasks).toHaveLength(1);
   });
 
   it('serializes concurrent Forge claims through the existing atomic state owner',async()=>{

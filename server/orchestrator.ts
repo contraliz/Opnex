@@ -1,7 +1,7 @@
 import { AppServer, AppServerRequestError, approvalResponse, extractAssistantText, normalCodexSqliteHome, type Model } from './codex.js';
 import { safeError } from './errors.js';
 import { assertTaskCanResumeInProject } from './project-identity.js';
-import { assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, qaAuditJsonSchema, qaAuditOutcomeSchema, receiptSchema, recruitmentToolSchema, recruitmentWorkersSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
+import { accessModeFromApproval, assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, qaAuditJsonSchema, qaAuditOutcomeSchema, receiptSchema, recruitmentToolSchema, runtimeApprovalForAccess, recruitmentWorkersSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
 import { addMessage, beginPass, cancelRecruitmentTeamState, claimRecruitmentCompletion, claimRecruitmentIntegration, currentPass, deepSeekConversationStorageForSettings, executionProfileForSettings, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, recruitmentTeamsForPass, sealRecruitmentTeam, terminalRecruitmentWorkerStatuses, type AgentReceiptRecord, type DeepSeekConversationStoragePreference, type DeepSeekExecutionProfile, type DeepSeekPhaseRun, type DeepSeekProviderEventSummary, type ExecutionProfile, type QAAuditRound, type QAFinding, type QualityLoop, type ReceiptProvenance, type RecruitmentIntegration, type RecruitmentTeam, type RecruitmentWorker, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
 import { assignmentWriteRoots, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
@@ -320,7 +320,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const registeredMcp=codexMcpServerConfigs(pass.mcpServers||[],role,task.userRoot);
   const client=agentCodex;
   const modelId=role==='router'?'gpt-6-luna':roleProfile.model,effort=role==='router'?stageConfig.router.effort:roleProfile.effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
-  const approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;
+  const approvalPolicy=pass.approvalPolicy??runtimeApprovalForAccess(getState().settings.accessMode??accessModeFromApproval(getState().settings.approvalPolicy));
   let threadId=task[threadKey];
   const dynamicTools=role==='simple'?workerWorkspaceTool:undefined;
   if(!threadId){const started=await awaitCurrentPassOperation(()=>client.startThread(role,task.userRoot,modelId,effort,approvalPolicy,undefined,dynamicTools,skillsConfig,registeredMcp),()=>routedPassIsCurrent(task.id,pass.id));if(!started)return;threadId=started;task[threadKey]=threadId;}
@@ -337,7 +337,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   if(!getTask(task.id)||getTask(task.id)!.phase==='cancelled'||getTask(task.id)!.currentPassId!==pass.id)return;
   const selected=role==='router'?'':pass.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (explicitly authorized for this pass; immutable snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';
   const finalPrompt=`${continuation?`${prompt}\n\nThis is an update to the same active task. Preserve relevant context and completed actions from this thread. Re-check current state and continue only what remains; do not replay completed side effects.`:prompt}${selected}`;
-  const root=task.userRoot,writeRoots=role==='simple'?simpleWriteRoots!:[];
+  const root=task.userRoot,writeRoots=pass.accessMode==='read-only'?[]:role==='simple'?simpleWriteRoots!:[];
   const serviceTier=role==='router'?'priority':undefined;
   const carried=attachmentUserInput(pass.attachments||[]);
   const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,`${finalPrompt}${carried.text}`,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier,carried.images),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
@@ -379,8 +379,8 @@ function isNativeDshTeamExecutionComplete(team:RecruitmentTeam){
 async function startDeepSeekRoutedTurn(task:Task,role:'direct'|'simple'|'worker',selection:ExecutionProfile,writeScope:string[],assignment?:Assignment){
   const pass=currentPass(task);if(!pass)throw new Error('The active pass is missing.');
   if(selection.provider!=='deepseek'||selection.model!=='deepseek-v4.1-flash'||selection.effort!=='max')throw new DeepSeekHarnessError('unsupported-capability','The selected DeepSeek Harness model and reasoning effort are not available in the verified OpenCode Go profile. No fallback was started.');
-  const approvalPolicy=pass.approvalPolicy??getState().settings.approvalPolicy;
-  const permission=resolveDeepSeekHarnessPermission({approvalPolicy,selectedForTask:true,workspaceRoot:task.userRoot,writeScope:role==='direct'?[]:writeScope,requiresFilesystemConfinement:false});
+  const approvalPolicy=pass.approvalPolicy??runtimeApprovalForAccess(getState().settings.accessMode??accessModeFromApproval(getState().settings.approvalPolicy));
+  const permission=resolveDeepSeekHarnessPermission({approvalPolicy,selectedForTask:true,workspaceRoot:task.userRoot,writeScope:role==='direct'||pass.accessMode==='read-only'?[]:writeScope,requiresFilesystemConfinement:false});
   if(pass.agentContextVersion!==1)throw new Error('This pass predates the current Opnex role configuration. Send a follow-up to start a fresh pass.');
   const carried=attachmentUserInput(pass.attachments||[]);if(carried.images.length)throw new DeepSeekHarnessError('unsupported-capability','DeepSeek Harness image attachments have not been verified by the installed SDK. No turn was started; choose a provider that supports these attachments.');
   const threadKey=role==='direct'?'directThreadId':role==='simple'?'simpleThreadId':'workerThreadId',existingThread=task[threadKey];if(existingThread)throw new DeepSeekHarnessError('interrupted','The saved DeepSeek Harness thread is not attached to this kernel and will not be resumed automatically. Start a fresh pass after checking the paused task.');
@@ -492,7 +492,7 @@ async function startWorkerStage(task:Task,assignment:Assignment){
   const selectedProfile=pass.executionProfile||executionProfileForSettings(getState().settings);if(selectedProfile.provider==='deepseek'){await startDeepSeekRoutedTurn(task,'worker',selectedProfile,writeRoots,assignment);return;}requireModel(selectedProfile.model,selectedProfile.effort);
   if(!workerPassIsCurrent(task.id,passId))return;
   const selected=pass.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (explicitly authorized for this pass; immutable snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';
-  const workerPrompt=workerExecutePrompt(assignment,selected);const stageWriteRoots=writeRoots;
+  const workerPrompt=workerExecutePrompt(assignment,selected);const stageWriteRoots=pass.accessMode==='read-only'?[]:writeRoots;
   const approvalPolicy=currentPass(task)?.approvalPolicy??getState().settings.approvalPolicy;
   await ensureAgentAuth();if(currentPass(task)?.agentContextVersion!==1)throw new Error('This pass predates the current Opnex role configuration. Send a follow-up to start a fresh pass.');
   if(!workerPassIsCurrent(task.id,passId))return;

@@ -165,14 +165,14 @@ describe('Settings audit regressions',()=>{
 
   it('lets ChoicePopover Escape close only the menu before Settings, including its Composer caller',async()=>{
     const user=userEvent.setup();render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
-    const composerChoice=screen.getByRole('button',{name:'Approval policy'});
+    const composerChoice=screen.getByRole('button',{name:'Access mode'});
     await user.click(composerChoice);await waitFor(()=>expect(composerChoice.getAttribute('aria-expanded')).toBe('true'));
     await user.keyboard('{Escape}');await waitFor(()=>expect(composerChoice.getAttribute('aria-expanded')).toBe('false'));
     expect(screen.queryByRole('dialog',{name:'Settings'})).toBeNull();
 
     const opener=screen.getByRole('button',{name:'Settings'});await user.click(opener);
     const dialog=await screen.findByRole('dialog',{name:'Settings'});
-    const settingsChoice=within(dialog).getByRole('button',{name:'Approval policy'});
+    const settingsChoice=within(dialog).getByRole('button',{name:'Access mode'});
     await user.click(settingsChoice);await waitFor(()=>expect(settingsChoice.getAttribute('aria-expanded')).toBe('true'));
     const windowEscape=vi.fn();observedWindowKeydown=windowEscape;window.addEventListener('keydown',windowEscape);
     await user.keyboard('{Escape}');

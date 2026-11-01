@@ -13,6 +13,7 @@ import { RecruitmentTeamPanel } from './RecruitmentTeamPanel';
 import { ToolCallLogView, toolCallLogTitle } from './ToolCallLogView';
 import { ForgeBoard } from './ForgeBoard';
 import ForgeSessionCreate from './ForgeSessionCreate';
+import { accessModeFromApproval, runtimeApprovalForAccess } from './access-mode.js';
 import { respondForgeApproval } from './api';
 import './Forge.css';
 import { EmbeddedWorkspace } from './EmbeddedWorkspace';
@@ -659,11 +660,11 @@ export default function App() {
       executionProfile={selectedOrchestrator}
       projectId={task?.projectId||selectedProject?.id}
       connectionState={runtime?.codex.state==='connected'?'connected':'offline'}
-      approvalPolicy={state?.settings.approvalPolicy || 'on-request'}
+      accessMode={state?.settings.accessMode || accessModeFromApproval(state?.settings.approvalPolicy || 'on-request')}
       models={models}
       configDisabled={busy || !!sendingTabs[tab] || task?.phase==='escalated'}
       onExecutionProfileChange={updateOrchestratorProfile}
-      onApprovalChange={value => void updateSettings({ approvalPolicy: value })}
+      onAccessModeChange={value => void updateSettings({ accessMode: value, approvalPolicy: runtimeApprovalForAccess(value) })}
       qaEnabled={qualityModes[tab]??task?.passes?.find(pass=>pass.id===task.currentPassId)?.qualityLoop?.enabled??false}
       onQaChange={enabled=>setQualityModes(current=>({...current,[tab]:enabled}))}
       busy={busy}

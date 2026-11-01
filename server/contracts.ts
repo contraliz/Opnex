@@ -260,6 +260,14 @@ export const userTaskSchema = z.object({ message:z.string().trim().max(12000).de
 export const sessionTitleSchema = z.object({ title: z.string().trim().min(1, 'Session name cannot be empty.').max(120, 'Session name must be 120 characters or fewer.') }).strict();
 export const approvalDecisionSchema = z.object({ requestId: z.union([z.string(), z.number()]), decision: z.enum(['accept','decline','cancel']), content:z.record(z.string(),z.unknown()).optional() }).strict();
 export type ApprovalPolicy = 'on-request' | 'untrusted' | 'never' | 'full-access';
+export const accessModeSchema=forgeAccessModeSchema;
+export type AccessMode=ForgeAccessMode;
+export function runtimeApprovalForAccess(mode:AccessMode):ApprovalPolicy{
+  return mode==='workspace-write-approval'?'on-request':mode==='full-access'?'full-access':'never';
+}
+export function accessModeFromApproval(policy:ApprovalPolicy|undefined):AccessMode{
+  return policy==='full-access'?'full-access':policy==='never'?'workspace-write':'workspace-write-approval';
+}
 export const settingsSchema = z.object({
   orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   executionProfile:z.object({provider:z.enum(['codex','deepseek']),model:z.string().trim().min(1).max(200),effort:z.enum(['low','medium','high','xhigh','max','ultra'])}).strict().optional(),
@@ -268,6 +276,7 @@ export const settingsSchema = z.object({
   deepseekConversationStorageDirectory:z.string().trim().min(1).max(1024).refine(value=>![...value].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127)).optional(),
   mcpServers:mcpServerRegistrationsSchema.default([]),
   approvalPolicy: z.enum(['on-request','untrusted','never','full-access']).default('on-request'),
+  accessMode: accessModeSchema.optional(),
 }).strict();
 
 export const assignmentJsonSchema = { type: 'object', additionalProperties: false, required: ['outcome','deliverable','read_scope','write_scope','exclusions','constraints','context_refs','skill_refs','acceptance','verification','ordinary_authority','escalation_conditions','receipt_requirements'], properties: {

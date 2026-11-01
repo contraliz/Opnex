@@ -71,13 +71,14 @@ describe('Forge Codex provider contract', () => {
     await expect(uncertainProvider.start(request)).rejects.toMatchObject({ effect: 'uncertain' });
   });
 
-  it('rejects Full Access for every Forge role before creating a thread', async () => {
+  it('starts a Full Access Forge role when the ticket selects it', async () => {
     const client = fakeCodex();
     const provider = new ForgeCodexProvider({ client: client as never, validateProfile: vi.fn(), ensureReady: vi.fn() });
 
-    await expect(provider.start({ ...request, approvalPolicy: 'full-access' })).rejects.toThrow(/defeats the accepted role and filesystem boundaries/i);
-    expect(client.startThread).not.toHaveBeenCalled();
-    expect(client.startTurn).not.toHaveBeenCalled();
+    const handle = await provider.start({ ...request, approvalPolicy: 'full-access' });
+    expect(client.startThread).toHaveBeenCalled();
+    expect(client.startThread.mock.calls[0]).toContain('full-access');
+    handle.cancel?.();
   });
 
   it('settles only on the matching observed provider turn and retains real completion details', async () => {
