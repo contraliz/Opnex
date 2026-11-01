@@ -120,7 +120,7 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
       <div className="forge-create-fields">
         <label className="forge-field forge-field-description">
           <span className="forge-field-label">Task description<span className="forge-field-badge">Required</span></span>
-          <textarea aria-label="Task description" maxLength={12000} rows={7} value={description} onChange={event=>setDescription(event.currentTarget.value)} placeholder="What should Forge build, fix, or investigate?" required autoFocus/>
+          <textarea aria-label="Task description" maxLength={12000} rows={4} value={description} onChange={event=>setDescription(event.currentTarget.value)} placeholder="What should Forge build, fix, or investigate?" required autoFocus/>
           <small className="forge-field-hint">The orchestrator plans from this description. Everything else can stay at its default.</small>
         </label>
 
@@ -131,7 +131,7 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
 
         <label className="forge-field">
           <span className="forge-field-label">Acceptance criteria<span className="forge-field-hint">Optional · one criterion per line</span></span>
-          <textarea aria-label="Acceptance criteria" rows={3} value={acceptanceText} onChange={event=>setAcceptanceText(event.currentTarget.value)} placeholder="Leave empty to let the orchestrator derive them from the description."/>
+          <textarea aria-label="Acceptance criteria" rows={2} value={acceptanceText} onChange={event=>setAcceptanceText(event.currentTarget.value)} placeholder="Leave empty to let the orchestrator derive them from the description."/>
         </label>
 
         <details className="forge-advanced">
