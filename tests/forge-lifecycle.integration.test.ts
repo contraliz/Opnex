@@ -58,6 +58,7 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
   it('plans, claims, verifies, integrates, reviews, and reads back a guarded local main merge', async () => {
     await mkdir(root, { recursive: true });
     fixture = await realpath(await mkdtemp(path.join(root, 'h-')));
+    const codexHome = path.join(fixture, 'codex'); await mkdir(codexHome); vi.stubEnv('CODEX_HOME', codexHome);
     const repo = path.join(fixture, 'r'); const worktrees = path.join(fixture, 'w');
     testRepo = repo;
     await mkdir(repo); await mkdir(path.join(repo, 'src')); await mkdir(worktrees);
@@ -358,6 +359,7 @@ async function createActiveWorkerFixture(stopStatus: 'stopped' | 'uncertain', ma
 
 async function createActivePlanningFixture(stopStatus: 'stopped' | 'uncertain', maxExecutionAttempts = 1) {
   const fixture = await realpath(await mkdtemp(path.join(os.tmpdir(), 'forge-runtime-lifecycle-')));
+  const codexHome = path.join(fixture, 'codex'); await mkdir(codexHome); vi.stubEnv('CODEX_HOME', codexHome);
   const repo = path.join(fixture, 'r'); const worktrees = path.join(fixture, 'w');
   await mkdir(path.join(repo, 'src'), { recursive: true }); await mkdir(worktrees);
   git(repo, 'init', '-b', 'main'); git(repo, 'config', 'core.longpaths', 'true'); git(repo, 'config', 'user.name', 'Forge runtime fixture'); git(repo, 'config', 'user.email', 'forge@example.invalid');
