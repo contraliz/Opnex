@@ -8,7 +8,14 @@ Forge adds a workspace-owned ticket workflow alongside the existing Conversation
 
 Select a workspace and choose **Forge** when opening a new session. Only the task description is required. The title defaults to the first line of the description, and acceptance criteria, read/write scope, orchestrator model and effort, local target branch, and additional skills are optional and sit under **Advanced options**. Worker model and worker effort come from Settings and are copied into the ticket when it is created.
 
-Forge runs unattended, so it keeps the Codex sandbox and does not accept the unsandboxed **Full Access** mode. Use **Never ask** for a run without prompts, or choose On request / Untrusted commands to review each step; the draft offers a one-click switch to Never ask.
+Each ticket carries one access mode that applies to every role in it:
+
+- **Read-only** — all writes blocked; planning, review, and integration checks still run.
+- **Workspace write · auto-block** — writes stay inside the accepted scope, and an attempt at the boundary stops immediately without prompting.
+- **Workspace write · approval** — same scope, but a boundary attempt waits for your approval.
+- **Full access** — no sandbox; anything the worker process can reach is writable.
+
+The mode is chosen on the draft; the global approval policy only seeds its default. Worker model and worker effort still come from Settings.
 
 Forge requires the `agentmem-project` skill. It is resolved from the workspace's `.agents/skills/` folder or a configured Codex skill location first, then from the saved Opnex Skills library, so an imported copy does not need a Codex installation. That only supplies instructions: Opnex does not configure or call the external AgentMem service. Without a matching external service registration, knowledge lookup is unavailable. The ticket can continue with other work when its assignment does not require that knowledge. Knowledge scope and operation limits are instruction-only unless the external skill interface enforces them.
 
