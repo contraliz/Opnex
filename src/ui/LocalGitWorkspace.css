@@ -72,7 +72,7 @@
 }
 .git-workspace .git-commit-row:hover::before { background-color: #252525; }
 .git-workspace .git-commit-copy { padding-left: 8px; }
-.git-workspace .git-commit-row > code { padding-right: 4px; }
+.git-workspace .git-commit-row > code { padding-right: 10px; }
 .git-workspace .git-commit-row > * { position: relative; z-index: 1; }
 .git-workspace .git-commit-row > .git-graph-space {
   z-index: 2;

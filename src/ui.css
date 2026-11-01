@@ -292,7 +292,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .git-history-view { padding-top: 18px; }
 .history-heading { margin: 0 0 4px; padding-top: 11px; border-top: 1px solid #2a2a2a; }
 .git-branch-list,.git-worktree-list,.github-item-list { display: grid; }
-.git-branch-row { min-width: 0; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border-bottom: 1px solid #292929; animation: git-enter .16s ease-out both; }
+.git-branch-row { min-width: 0; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; border-bottom: 1px solid #292929; animation: git-enter .16s ease-out both; }
 .git-branch-row:hover,.git-worktree-row:hover,.git-commit-row:hover,.github-item-list article:hover { background: #252525; }
 .git-branch-marker { width: 21px; height: 21px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 5px; color: #8f8f8f; }
 .git-branch-marker.current { background: #2b2935; color: #b8a9ed; }
@@ -301,7 +301,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .git-remote-tag { flex: 0 0 auto; padding: 2px 5px; border: 1px solid #454545; border-radius: 4px; color: #aaa; font-size: 8px; }
 .git-upstream { overflow: hidden; color: #888; text-overflow: ellipsis; white-space: nowrap; font: 9px var(--font-mono); }
 .git-branch-row code,.git-worktree-row code,.git-commit-row > code { margin-left: auto; color: #8f8f8f; font: 9px var(--font-mono); }
-.git-worktree-row { min-width: 0; min-height: 53px; display: flex; align-items: center; gap: 10px; padding: 6px 9px; border-bottom: 1px solid #292929; color: #9c9c9c; }
+.git-worktree-row { min-width: 0; min-height: 53px; display: flex; align-items: center; gap: 10px; padding: 6px 12px 6px 9px; border-bottom: 1px solid #292929; color: #9c9c9c; }
 .git-worktree-row > svg { flex: 0 0 auto; color: #9b8bd1; }
 .git-worktree-row > div { min-width: 0; display: grid; gap: 4px; }
 .git-worktree-row strong { overflow: hidden; color: #d4d4d4; text-overflow: ellipsis; white-space: nowrap; font: 10px var(--font-mono); }
