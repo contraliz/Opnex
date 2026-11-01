@@ -42,20 +42,32 @@ export const forgeCapabilitiesSchema=z.object({
   commitScopeValidation:forgeCapabilityLevelSchema,
   finalMergeGate:forgeCapabilityLevelSchema,
 }).strict();
+const DEFAULT_FORGE_SCOPE_PATH='.' as const;
+export function forgeTitleFromDescription(description:string){
+  const first=description.split(/\r?\n/).map(row=>row.trim().replace(/^[#>*\-\s]+/,'').trim()).find(Boolean)||'';
+  return (first||'Untitled Forge ticket').slice(0,120);
+}
+/** Only the task description is required; every other field falls back to a safe default. */
 const forgeTicketInputBaseSchema=z.object({
   projectId:z.string().uuid(),
-  title:z.string().trim().min(1).max(120),
+  title:z.string().trim().max(120).optional(),
   description:z.string().trim().min(1).max(12000),
-  acceptanceCriteria:z.array(text).min(1).max(30),
-  scope:forgeScopeSchema,
-  orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict(),
-  workerProfile:forgeExecutionProfileSchema,
+  acceptanceCriteria:z.array(text).max(30).default([]),
+  scope:forgeScopeSchema.partial().default({}),
+  orchestrator:z.object({model:z.string().trim().min(1).max(200),effort:forgeEffortSchema}).strict().optional(),
+  workerProfile:forgeExecutionProfileSchema.optional(),
   targetBranch:z.string().trim().min(1).max(240).default('main'),
   skillIds:z.array(z.string().uuid()).max(12).default([]).superRefine((ids,ctx)=>{if(new Set(ids).size!==ids.length)ctx.addIssue({code:'custom',message:'Select each Forge skill only once.'});}),
   limits:forgeLimitsSchema.partial().default({}),
   knowledgeBudget:forgeKnowledgeBudgetSchema.partial().default({}),
 }).strict();
-export const forgeTicketInputSchema=forgeTicketInputBaseSchema.transform(input=>({...input,limits:{...DEFAULT_FORGE_LIMITS,...input.limits},knowledgeBudget:{...DEFAULT_FORGE_KNOWLEDGE_BUDGET,...input.knowledgeBudget}})).superRefine((input,ctx)=>{
+export const forgeTicketInputSchema=forgeTicketInputBaseSchema.transform(input=>({
+  ...input,
+  title:input.title?.trim()||forgeTitleFromDescription(input.description),
+  scope:{read:input.scope.read?.length?input.scope.read:[DEFAULT_FORGE_SCOPE_PATH],write:input.scope.write?.length?input.scope.write:[DEFAULT_FORGE_SCOPE_PATH],knowledge:input.scope.knowledge??[]},
+  limits:{...DEFAULT_FORGE_LIMITS,...input.limits},
+  knowledgeBudget:{...DEFAULT_FORGE_KNOWLEDGE_BUDGET,...input.knowledgeBudget},
+})).superRefine((input,ctx)=>{
   if(input.knowledgeBudget.defaultAllocationOperations>input.knowledgeBudget.maxAllocationOperations)ctx.addIssue({code:'custom',path:['knowledgeBudget','defaultAllocationOperations'],message:'The default knowledge allocation cannot exceed the per-run maximum.'});
 });
 export type ForgeTicketInput=z.infer<typeof forgeTicketInputSchema>;

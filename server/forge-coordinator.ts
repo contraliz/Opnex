@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { assignmentWriteRoots } from './policy.js';
-import { forgeTicketInputSchema, type Assignment, type Receipt } from './contracts.js';
+import { forgeEffortSchema, forgeTicketInputSchema, type Assignment, type Receipt } from './contracts.js';
 import { applyForgeCommandInState, clearForgeApprovalAfterProviderCancellationInState, createForgeSessionInState, recordForgeApprovalRequestInState, recordForgeToolCallInState, resolveForgeApprovalRequestInState, type ForgeApprovalContext, type ForgeApprovalRequest, type State } from './state.js';
 import type { ToolCallEvent } from './tool-call-log.js';
 import { executionProfileForSettings } from './state.js';
@@ -94,6 +94,7 @@ export class ForgeCoordinator {
     const state = this.options.getState();
     const project = state.projects.find((row) => row.id === parsed.projectId);
     if (!project || project.needsLocation) throw new Error('Choose an existing workspace with a current working directory before creating a Forge ticket.');
+    const orchestrator = parsed.orchestrator ?? { model: state.settings.orchestratorModel, effort: forgeEffortSchema.parse(state.settings.orchestratorEffort) };
     const selected: ForgeSkillSnapshot[] = [];
     for (const skillId of parsed.skillIds) {
       const skill = await getSkill(skillId);
@@ -101,8 +102,7 @@ export class ForgeCoordinator {
     }
     const knowledgeSkill = await loadForgeKnowledgeSkill({ appRoot: appRoot() });
     const orchestratorSkills = mergeForgeSkillSnapshots(selected, [knowledgeSkill]);
-    const selectedTargetBranch = (body as { targetBranch?: string }).targetBranch;
-    const targetBranch = selectedTargetBranch || await resolveLocalForgeTargetBranch(project.projectRoot);
+    const targetBranch = parsed.targetBranch || await resolveLocalForgeTargetBranch(project.projectRoot);
     await validateRecruitmentRoot(project.projectRoot, targetBranch);
     let createdId = '';
     await this.options.mutate((current) => {
@@ -124,7 +124,7 @@ export class ForgeCoordinator {
         description: parsed.description,
         acceptanceCriteria: parsed.acceptanceCriteria,
         scope: normalizeTicketScope(parsed.scope, currentProject.projectRoot),
-        orchestrator: parsed.orchestrator,
+        orchestrator,
         workerProfile,
         targetBranch,
         orchestratorSkills,

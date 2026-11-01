@@ -114,8 +114,8 @@ function mockWorkspaceApi(){
     if(path.includes('/api/skills?source=codex'))return {skills:[{id:'codex:agentmem-project:0123456789ab',name:'agentmem-project',description:'External project knowledge instructions.',source:'Project skill',revision:'b'.repeat(64),createdAt:'',updatedAt:'',archived:false,fileCount:0}]};
     if(path==='/api/forge/tickets'){
       const input=body as ForgeTicketCreateRequest;
-      const ticket=createForgeTicket({id:'forge-ticket-1',projectId:input.projectId,workspaceRoot:project.projectRoot,title:input.title,description:input.description,acceptanceCriteria:input.acceptanceCriteria,scope:input.scope,
-        orchestrator:input.orchestrator,workerProfile:input.workerProfile,orchestratorSkills:[],approvalPolicy:serverState.settings.approvalPolicy==='full-access'?'on-request':serverState.settings.approvalPolicy,targetBranch:input.targetBranch,limits:input.limits,knowledgeBudget:input.knowledgeBudget,capabilities:{filesystemWriteScope:'instruction-only',knowledgeScope:'instruction-only',toolAuthorization:'instruction-only',cancellation:'monitored',commitScopeValidation:'enforced',finalMergeGate:'enforced'},createdAt:at});
+      const ticket=createForgeTicket({id:'forge-ticket-1',projectId:input.projectId,workspaceRoot:project.projectRoot,title:input.title||input.description.split('\n')[0]!.slice(0,120),description:input.description,acceptanceCriteria:input.acceptanceCriteria??[],scope:input.scope??{read:['.'],write:['.'],knowledge:[]},
+        orchestrator:input.orchestrator??{model:'gpt-6-luna',effort:'max'},workerProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},orchestratorSkills:[],approvalPolicy:serverState.settings.approvalPolicy==='full-access'?'on-request':serverState.settings.approvalPolicy,targetBranch:input.targetBranch,limits:input.limits,knowledgeBudget:input.knowledgeBudget,capabilities:{filesystemWriteScope:'instruction-only',knowledgeScope:'instruction-only',toolAuthorization:'instruction-only',cancellation:'monitored',commitScopeValidation:'enforced',finalMergeGate:'enforced'},createdAt:at});
       serverState={...serverState,tasks:[forgeTask(ticket),...serverState.tasks],activeTaskId:ticket.id,revision:(serverState.revision||0)+1};
       return ticket;
     }
@@ -141,33 +141,35 @@ describe('Forge session creation',()=>{
 
     screen.getByRole('button',{name:'Forge'}).focus();
     await user.keyboard('{Enter}');
-    await screen.findByRole('textbox',{name:'Ticket title'});
+    await screen.findByRole('textbox',{name:'Task description'});
     expect(screen.getByText(project.projectRoot)).toBeTruthy();
     expect(screen.getByText(/Required AgentMem skill found/)).toBeTruthy();
     expect(screen.queryByRole('button',{name:'Worker model'})).toBeNull();
-    expect(screen.getByText(/GPT-6 Luna · max/)).toBeTruthy();
+    expect(screen.queryByText(/Worker profile from Settings/)).toBeNull();
+    expect((screen.getByRole('button',{name:'Create draft'}) as HTMLButtonElement).disabled).toBe(true);
+
+    await user.type(screen.getByRole('textbox',{name:'Task description'}),'Make the cache resilient.');
+    await waitFor(()=>expect((screen.getByRole('button',{name:'Create draft'}) as HTMLButtonElement).disabled).toBe(false));
 
     await user.type(screen.getByRole('textbox',{name:'Ticket title'}),'Improve cache');
-    await user.type(screen.getByRole('textbox',{name:'Task description'}),'Make the cache resilient.');
     await user.type(screen.getByRole('textbox',{name:'Acceptance criteria'}),'Empty inputs are rejected.\nExisting cache hits remain stable.');
+    await user.click(screen.getByText('Advanced options'));
     await user.clear(screen.getByRole('textbox',{name:'Allowed read scope'}));
     await user.type(screen.getByRole('textbox',{name:'Allowed read scope'}),'src\ntests');
+    await user.clear(screen.getByRole('textbox',{name:'Allowed write scope'}));
     await user.type(screen.getByRole('textbox',{name:'Allowed write scope'}),'src');
-    await user.type(screen.getByRole('textbox',{name:'Knowledge scope'}),'knowledge/opnex');
     await user.click(screen.getByRole('button',{name:'Orchestrator model'}));
     await user.click(screen.getByRole('option',{name:/GPT-6\.1 Sol/}));
-    await user.click(screen.getByText('Advanced ticket limits'));
     await user.clear(screen.getByRole('spinbutton',{name:'Total knowledge operations'}));
     await user.type(screen.getByRole('spinbutton',{name:'Total knowledge operations'}),'48');
     await user.click(screen.getByRole('checkbox',{name:/Testing checklist/}));
-    await waitFor(()=>expect((screen.getByRole('button',{name:'Create draft'}) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole('button',{name:'Create draft'}));
 
     await screen.findByRole('heading',{name:'Improve cache'});
     expect(mockApi.api).toHaveBeenCalledWith('/api/forge/tickets',expect.objectContaining({
       projectId:project.id,title:'Improve cache',description:'Make the cache resilient.',acceptanceCriteria:['Empty inputs are rejected.','Existing cache hits remain stable.'],
-      scope:{read:['src','tests'],write:['src'],knowledge:['knowledge/opnex']},
-      orchestrator:{model:'gpt-6.1-sol',effort:'low'},workerProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},
+      scope:{read:['src','tests'],write:['src'],knowledge:[]},
+      orchestrator:{model:'gpt-6.1-sol',effort:'low'},
       targetBranch:'main',skillIds:['22222222-2222-4222-8222-222222222222'],
       limits:{maxActiveWorkers:3,maxExecutionAttempts:2,maxCorrectionRounds:3},
       knowledgeBudget:{totalOperations:48,defaultAllocationOperations:2,maxAllocationOperations:8},
@@ -176,6 +178,22 @@ describe('Forge session creation',()=>{
     expect(serverState.tasks[0]?.sessionType).toBe('forge');
     expect(serverState.tasks[0]?.forge?.workspaceRoot).toBe(project.projectRoot);
     expect(screen.getByRole('button',{name:'Start Forge'})).toBeTruthy();
+  });
+
+  it('creates a draft from the task description alone',async()=>{
+    const user=userEvent.setup();render(<App/>);
+    await screen.findByRole('textbox',{name:'Task message'});
+    fireEvent.click(screen.getByRole('button',{name:'Forge'}));
+    await screen.findByRole('textbox',{name:'Task description'});
+    expect((screen.getByRole('button',{name:'Create draft'}) as HTMLButtonElement).disabled).toBe(true);
+    await user.type(screen.getByRole('textbox',{name:'Task description'}),'Investigate flaky Forge dispatch\nand report the findings.');
+    await waitFor(()=>expect((screen.getByRole('button',{name:'Create draft'}) as HTMLButtonElement).disabled).toBe(false));
+    await user.click(screen.getByRole('button',{name:'Create draft'}));
+    await screen.findByRole('heading',{name:'Investigate flaky Forge dispatch'});
+    expect(mockApi.api).toHaveBeenCalledWith('/api/forge/tickets',expect.objectContaining({
+      description:'Investigate flaky Forge dispatch\nand report the findings.',title:'Investigate flaky Forge dispatch',acceptanceCriteria:[],
+      scope:{read:['.'],write:['.'],knowledge:[]},
+    }));
   });
 
   it('keeps the draft open with a clear workspace or required-skill action when creation is unavailable',async()=>{
