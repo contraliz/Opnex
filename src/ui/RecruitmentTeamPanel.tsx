@@ -191,7 +191,7 @@ export function RecruitmentTeamPanel({ team, selectedWorkerId, onSelectSteerWork
     <section className="recruitment-team" aria-labelledby={headingId}>
       <header className="recruitment-team__heading">
         <div>
-          <h2 id={headingId}>Team details</h2>
+          <h2 id={headingId}>Worker roster</h2>
           <p>Team <code>{team.teamId}</code></p>
           {team.mode==='read_only'&&<p>Read-only team · no Git worktree or integrator</p>}
         </div>
