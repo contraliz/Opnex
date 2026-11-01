@@ -1,5 +1,5 @@
 import { createRef, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertCircle, BookOpen, Check, ChevronDown, ChevronRight, Command, Copy, Database, FileText, Folder, FolderPlus, GitBranch, Globe, Keyboard, Maximize2, MessageSquarePlus, Minus, PanelLeft, PanelRight, Pin, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Terminal, Users, X } from 'lucide-react';
+import { Activity, AlertCircle, Archive, BookOpen, Check, ChevronDown, ChevronRight, Command, Copy, Database, FileText, Folder, FolderPlus, GitBranch, Globe, Keyboard, Maximize2, MessageSquarePlus, Minus, PanelLeft, PanelRight, Pin, Plus, Search, Settings2, ShieldCheck, Sparkles, Terminal, Users, X } from 'lucide-react';
 import { api, bootstrap, KERNEL_PROTOCOL_VERSION } from './api';
 import { Markdown } from './Markdown';
 import Composer from './Composer';
@@ -77,6 +77,7 @@ export default function App() {
   const [showAllProjects, setShowAllProjects] = useState<Record<string, boolean>>({});
   const [projectMoveError, setProjectMoveError] = useState('');
   const [projectDropTarget, setProjectDropTarget] = useState<string|null>(null);
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(296);
@@ -98,7 +99,6 @@ export default function App() {
   const tabDropTargetRef = useRef<string | null>(null);
   const projectExpandedRef = useRef<string[]>([]);
   const projectExpansionQueue = useRef(Promise.resolve());
-  const projectSelectorRef = useRef<HTMLSelectElement>(null);
   const kernelCursor = useRef<{instanceId:string;revision:number}|null>(null);
   const recentSessionNavigation = useRef<{ids:string[];activeId:string|null}|null>(null);
   const tabDragSuppressUntil = useRef<{tab:string;until:number}|null>(null);
@@ -621,7 +621,7 @@ export default function App() {
       if(event.key==='Escape'){if(projectEditor){event.preventDefault();setProjectEditor(null);return;}if(shortcutsOpen){event.preventDefault();setShortcutsOpen(false);return;}if(settingsOpen){event.preventDefault();closeSettings();return;}if(sessionDialogOpen){event.preventDefault();closeSessionDialog();return;}return;}
       if(projectEditor||shortcutsOpen||settingsOpen||sessionDialogOpen)return;
       const isMac=desktopBridge?.platform==='darwin'||navigator.platform.toLocaleLowerCase().includes('mac');const mod=isMac?event.metaKey:event.ctrlKey;if(!mod||isMac&&event.ctrlKey||!isMac&&event.metaKey)return;
-      const key=event.key.toLowerCase();const allowedAlt=event.altKey&&key==='p';if(event.altKey&&!allowedAlt)return;const target=event.target instanceof HTMLElement?event.target:null;const formControl=!!target&&/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);const editable=!!target?.isContentEditable;const composerEditor=!!target?.closest('.cm-editor');
+      const key=event.key.toLowerCase();if(event.altKey)return;const target=event.target instanceof HTMLElement?event.target:null;const formControl=!!target&&/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);const editable=!!target?.isContentEditable;const composerEditor=!!target?.closest('.cm-editor');
       if((formControl||editable)&&!composerEditor)return;
       if(composerEditor&&(key==='b'||event.shiftKey&&(event.key==='ArrowUp'||event.key==='ArrowDown')))return;
       if(key==='n'&&!event.shiftKey){event.preventDefault();openNewTab();return;}
@@ -629,7 +629,6 @@ export default function App() {
       if(key==='b'&&!event.shiftKey){event.preventDefault();setSidebarCollapsed(value=>!value);return;}
       if(key==='g'&&event.shiftKey){event.preventDefault();const pane=panes.find(item=>item.id===focusedPaneId)||rootPane;openWorkspaceTab('git',pane.id,pane.activeTab);return;}
       if(key==='l'&&event.shiftKey){event.preventDefault();openSkillsTab();return;}
-      if(key==='p'&&event.altKey){event.preventDefault();projectSelectorRef.current?.focus();return;}
       if((event.key==='ArrowUp'||event.key==='ArrowDown')&&event.shiftKey){const tasks=state?.tasks||[];if(!tasks.length)return;const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab||null;let navigation=recentSessionNavigation.current;const ids=tasks.map(task=>task.id);if(!navigation||navigation.activeId!==active||navigation.ids.length!==ids.length||navigation.ids.some(id=>!ids.includes(id))){navigation={ids:[...tasks].sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0)).map(task=>task.id),activeId:active};}const index=navigation.ids.indexOf(active||'');const next=index<0?(event.key==='ArrowDown'?0:navigation.ids.length-1):(index+(event.key==='ArrowDown'?1:-1)+navigation.ids.length)%navigation.ids.length;const nextId=navigation.ids[next];if(!nextId)return;event.preventDefault();navigation.activeId=nextId;recentSessionNavigation.current=navigation;selectTask(nextId);return;}
     };
     window.addEventListener('keydown', onShortcut);
@@ -637,8 +636,13 @@ export default function App() {
   }, [projectEditor,shortcutsOpen,settingsOpen,sessionDialogOpen,panes,focusedPaneId,state?.tasks]);
 
   if (loading) return <div className="boot"><img className="boot-brand" src="/opnex-icon-grid-1_5-margin.svg" alt="Opnex"/><span>Starting Opnex</span></div>;
-  const matchingTasks=(state?.tasks||[]).filter(task=>!query.trim()||task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0));
-  const renderSessionRows=(tasks:Task[])=>tasks.map(task=><SessionRow key={task.id} task={task} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onMoveStart={task.sessionType==='forge'?undefined:dragSession} projects={state?.projects||[]} onMove={task.sessionType==='forge'?undefined:moveSessionToProject}/>);
+  const sessionMatches=(task:Task)=>!query.trim()||task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase());
+  const sortSessions=(a:Task,b:Task)=>Number(!!b.pinned)-Number(!!a.pinned)||(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0);
+  const matchingTasks=(state?.tasks||[]).filter(task=>!task.archived&&sessionMatches(task)).sort(sortSessions);
+  const archivedTasks=(state?.tasks||[]).filter(task=>task.archived&&sessionMatches(task)).sort(sortSessions);
+  const setTaskPinned=async(task:Task,pinned:boolean)=>{try{await api(`/api/tasks/${task.id}/pin`,{pinned});await refresh();}catch(cause){setError(String(cause));}};
+  const setTaskArchived=async(task:Task,archived:boolean)=>{try{await api(`/api/tasks/${task.id}/archive`,{archived});await refresh();}catch(cause){setError(String(cause));}};
+  const renderSessionRows=(tasks:Task[],archived=false)=>tasks.map(task=><SessionRow key={task.id} task={task} archived={archived} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onPin={setTaskPinned} onArchive={setTaskArchived} onMoveStart={task.sessionType==='forge'?undefined:dragSession} projects={state?.projects||[]} onMove={task.sessionType==='forge'?undefined:moveSessionToProject}/>);
   const orderedProjects=[...(state?.projects||[])].sort((a,b)=>Number(b.pinned)-Number(a.pinned)||a.name.localeCompare(b.name));
   const unclassifiedTasks=matchingTasks.filter(task=>!task.projectId||!(state?.projects||[]).some(project=>project.id===task.projectId));
   const projectSessionSection=(project:Project)=>{const tasks=matchingTasks.filter(task=>task.projectId===project.id);const expanded=(state?.expandedProjectIds||[]).includes(project.id);const shown=showAllProjects[project.id]?tasks:tasks.slice(0,5);const label=workspaceOptionLabel(project,state?.projects||[]);return <section className={`project-session-group ${expanded?'expanded':''} ${projectDropTarget===project.id?'is-drop-target':''}`} key={project.id} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget(project.id);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,project.id)}><div className="project-group-heading"><button className="project-expand" aria-label={`${expanded?'Collapse':'Expand'} workspace ${label}`} title={project.projectRoot} aria-expanded={expanded} onClick={()=>toggleProjectExpanded(project.id)}>{expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>{label}</span><small>{tasks.length}</small></button><button className="project-group-new" aria-label={`New session in ${label}`} title="New session in this workspace" onClick={()=>{void selectProject(project.id);openNewTab();}}><Plus size={13}/></button><button className="project-group-pin" aria-pressed={project.pinned} aria-label={`${project.pinned?'Unpin':'Pin'} workspace ${label}`} title={project.pinned?'Unpin workspace':'Pin workspace'} onClick={()=>void api(`/api/projects/${project.id}/pin`,{pinned:!project.pinned}).then(refresh).catch(cause=>setError(String(cause)))}><Pin size={12}/></button><button className="project-group-edit" aria-label={`Configure workspace ${label}`} title={project.projectRoot} onClick={()=>openProjectEditor(project)}><Settings2 size={13}/></button></div><ExpandableSessionRows expanded={expanded}>{renderSessionRows(shown)}{tasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,[project.id]:!current[project.id]}))}>{showAllProjects[project.id]?'Show recent five':`Show all ${tasks.length} sessions`}</button>}{!tasks.length&&<span className="project-empty">Drop a session here</span>}</ExpandableSessionRows></section>;};
@@ -647,7 +651,7 @@ export default function App() {
   const paneComposer = (tab: string, task: Task | null, paneId:string) => {
     const value = drafts[tab] || '';
     const files = pendingAttachments[tab] || [];
-    const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
+    const busy = !!task && ['intake', 'routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
     const disabled = (!value.trim() && !files.length) || !!sendingTabs[tab] || !runtime || (!task&&(!selectedProject||selectedProject.needsLocation));
     const selectedOrchestrator:ExecutionProfile={provider:'codex',model:state?.settings.orchestratorModel||fallbackSettings.orchestratorModel,effort:(state?.settings.orchestratorEffort||fallbackSettings.orchestratorEffort) as ExecutionProfile['effort']};
     return <Composer
@@ -663,6 +667,7 @@ export default function App() {
       accessMode={state?.settings.accessMode || accessModeFromApproval(state?.settings.approvalPolicy || 'on-request')}
       models={models}
       configDisabled={busy || !!sendingTabs[tab] || task?.phase==='escalated'}
+      onStop={task?()=>void stopTask(task.id):undefined}
       onExecutionProfileChange={updateOrchestratorProfile}
       onAccessModeChange={value => void updateSettings({ accessMode: value, approvalPolicy: runtimeApprovalForAccess(value) })}
       qaEnabled={qualityModes[tab]??task?.passes?.find(pass=>pass.id===task.currentPassId)?.qualityLoop?.enabled??false}
@@ -690,9 +695,7 @@ export default function App() {
     </div>
   );
   const renderSessionPaneActions = (tab: string, task: Task | null) => {
-    const busy = !!task && ['routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
     return <div className="session-pane-actions" data-session-actions-for={tab} role="group" aria-label={(task?.title || 'New session') + ' controls'}>
-      {busy && task?.sessionType!=='forge' && <button className="session-pane-action session-pane-stop" aria-label="Stop" title="Stop this session" onClick={() => void stopTask(tab)}><Square size={13} fill="currentColor" /></button>}
       <button ref={headsUpTriggerRef(tab)} className="session-pane-action details-toggle heads-up-toggle" aria-label="Heads-up" title="Heads-up"
         aria-expanded={!!headsUpOpen[tab]} onClick={() => setHeadsUpOpen(current => ({ ...current, [tab]: !current[tab] }))}><PanelRight size={16} /></button>
     </div>;
@@ -873,6 +876,7 @@ export default function App() {
         {orderedProjects.filter(project=>project.pinned).map(projectSessionSection)}
         {orderedProjects.filter(project=>!project.pinned).map(projectSessionSection)}
         <section className={`project-session-group unclassified-group ${projectDropTarget==='unclassified'?'is-drop-target':''}`} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget('unclassified');}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,null)}><div className="project-group-heading"><button className="project-expand" aria-label={`${unclassifiedExpanded?'Collapse':'Expand'} Unclassified`} aria-expanded={unclassifiedExpanded} onClick={()=>toggleProjectExpanded('unclassified')}>{unclassifiedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>Unclassified</span><small>{unclassifiedTasks.length}</small></button></div><ExpandableSessionRows expanded={unclassifiedExpanded}>{renderSessionRows(showAllProjects.unclassified?unclassifiedTasks:unclassifiedTasks.slice(0,5))}{unclassifiedTasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,unclassified:!current.unclassified}))}>{showAllProjects.unclassified?'Show recent five':`Show all ${unclassifiedTasks.length} sessions`}</button>}</ExpandableSessionRows></section>
+        {archivedTasks.length>0&&<section className="project-session-group archived-session-group"><div className="project-group-heading"><button className="project-expand" aria-label={`${archivedExpanded?'Collapse':'Expand'} Archived sessions`} aria-expanded={archivedExpanded} onClick={()=>setArchivedExpanded(value=>!value)}>{archivedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Archive size={13}/><span>Archived</span><small>{archivedTasks.length}</small></button></div><ExpandableSessionRows expanded={archivedExpanded}>{renderSessionRows(archivedTasks,true)}</ExpandableSessionRows></section>}
       </nav>
       {projectMoveError&&<div className="project-move-error" role="alert">{projectMoveError}<button className="icon-btn" aria-label="Dismiss move error" onClick={()=>setProjectMoveError('')}><X size={13}/></button></div>}
       <div className="sidebar-bottom"><button className="project-mini" aria-label={selectedProject?workspaceOptionLabel(selectedProject,state?.projects||[]):'Create or select workspace'} title={selectedProject?.projectRoot} onClick={()=>selectedProject?openProjectEditor(selectedProject):openProjectEditor('new')}><Folder size={15} /><span className="project-mini-text">{selectedProject?workspaceOptionLabel(selectedProject,state?.projects||[]):'Choose workspace'}</span></button></div>
@@ -912,7 +916,7 @@ export default function App() {
     />
     <div className="workspace-area">
       <main className="main-column">
-        <header className="topbar">{panes.length===1&&renderPaneTabs(rootPane,0,false)}<div className="topbar-project-context"><label><span className="sr-only">Workspace for new sessions</span><select ref={projectSelectorRef} aria-label="Workspace for new sessions" title="Choose workspace (Ctrl/Cmd+Alt+P)" aria-keyshortcuts="Control+Alt+P Meta+Alt+P" value={state?.selectedProjectId||''} onChange={event=>void selectProject(event.currentTarget.value||null)}><option value="">Unclassified · legacy default</option>{(state?.projects||[]).map(project=><option key={project.id} value={project.id} title={project.projectRoot}>{workspaceOptionLabel(project,state?.projects||[])}</option>)}</select></label></div>{windowControls&&<div className="window-controls" role="group" aria-label="Window controls"><button aria-label="Minimize window" title="Minimize" onClick={()=>void windowControls.minimize()}><Minus size={14}/></button><button aria-label={windowMaximized?'Restore window':'Maximize window'} title={windowMaximized?'Restore':'Maximize'} onClick={()=>void windowControls.toggleMaximize()}>{windowMaximized?<Copy size={12}/>:<Maximize2 size={12}/>}</button><button className="window-close" aria-label="Close window" title="Close" onClick={()=>void windowControls.close()}><X size={15}/></button></div>}</header>
+        <header className="topbar">{panes.length===1&&renderPaneTabs(rootPane,0,false)}{windowControls&&<div className="window-controls" role="group" aria-label="Window controls"><button aria-label="Minimize window" title="Minimize" onClick={()=>void windowControls.minimize()}><Minus size={14}/></button><button aria-label={windowMaximized?'Restore window':'Maximize window'} title={windowMaximized?'Restore':'Maximize'} onClick={()=>void windowControls.toggleMaximize()}>{windowMaximized?<Copy size={12}/>:<Maximize2 size={12}/>}</button><button className="window-close" aria-label="Close window" title="Close" onClick={()=>void windowControls.close()}><X size={15}/></button></div>}</header>
         <div className={'workspace-content mode-tasks ' + (panes.length > 1 ? 'has-session-panes has-side-session ' : '') + (draggedTab ? 'dragging-session' : '')}
           style={{ gridTemplateColumns: panes.flatMap((pane, index) => index < panes.length - 1 ? ['minmax(0,' + pane.weight + 'fr)', '5px'] : ['minmax(0,' + pane.weight + 'fr)']).join(' '), transition: 'grid-template-columns 180ms cubic-bezier(.2,.75,.25,1)' }}
           onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('application/x-opnex-workspace')) event.preventDefault(); }}
@@ -964,7 +968,7 @@ export default function App() {
     </div>
     {error && <div className="toast-error" role="alert"><AlertCircle size={15} />{error}<button className="icon-btn" aria-label="Dismiss app error" onClick={() => setError('')}><X size={14} /></button></div>}
     {projectEditor&&<ProjectEditorDialog project={projectEditor} initialRoot={selectedProject?.projectRoot||''} close={()=>setProjectEditor(null)} saved={(project,duplicate)=>void projectSaved(project,duplicate)}/>}
-    {shortcutsOpen&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setShortcutsOpen(false)}><section className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"><header><div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p>Use Ctrl on Windows/Linux or Command on macOS.</p></div><button type="button" className="icon-btn" aria-label="Close shortcuts" onClick={()=>setShortcutsOpen(false)}><X size={16}/></button></header><dl><dt>New session</dt><dd>Ctrl/⌘ + N</dd><dt>Previous / next session</dt><dd>Ctrl/⌘ + Shift + ↑ / ↓</dd><dt>Choose workspace</dt><dd>Ctrl/⌘ + Alt + P</dd><dt>Settings</dt><dd>Ctrl/⌘ + ,</dd><dt>Git</dt><dd>Ctrl/⌘ + Shift + G</dd><dt>Library</dt><dd>Ctrl/⌘ + Shift + L</dd><dt>Toggle sidebar</dt><dd>Ctrl/⌘ + B</dd><dt>Dismiss dialog</dt><dd>Escape</dd></dl></section></div>}
+    {shortcutsOpen&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setShortcutsOpen(false)}><section className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"><header><div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p>Use Ctrl on Windows/Linux or Command on macOS.</p></div><button type="button" className="icon-btn" aria-label="Close shortcuts" onClick={()=>setShortcutsOpen(false)}><X size={16}/></button></header><dl><dt>New session</dt><dd>Ctrl/⌘ + N</dd><dt>Previous / next session</dt><dd>Ctrl/⌘ + Shift + ↑ / ↓</dd><dt>Settings</dt><dd>Ctrl/⌘ + ,</dd><dt>Git</dt><dd>Ctrl/⌘ + Shift + G</dd><dt>Library</dt><dd>Ctrl/⌘ + Shift + L</dd><dt>Toggle sidebar</dt><dd>Ctrl/⌘ + B</dd><dt>Dismiss dialog</dt><dd>Escape</dd></dl></section></div>}
     {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={async()=>{await refresh();}} saved={async settings => {
       try {
         await api('/api/settings',settings);

@@ -41,13 +41,16 @@ export default function ModelPicker({label,providerKey,model,effort,choices,disa
     if(!open){if(!mounted){container.style.removeProperty('--model-menu-max-height');setOpenBelow(false);}return;}
     const menu=container.querySelector<HTMLElement>('.execution-model-menu');if(!menu)return;
     const position=()=>{
-      const triggerBox=trigger.current?.getBoundingClientRect();if(!triggerBox)return;
-      const menuHeight=menu.getBoundingClientRect().height,spaceAbove=triggerBox.top,spaceBelow=window.innerHeight-triggerBox.bottom;
-      const below=spaceAbove<menuHeight+12&&spaceBelow>spaceAbove,availableSpace=(below?spaceBelow:spaceAbove)-12;
+      const triggerEl=trigger.current;if(!triggerEl)return;
+      const triggerBox=triggerEl.getBoundingClientRect();
+      const menuHeight=Math.max(menu.getBoundingClientRect().height,240),spaceAbove=triggerBox.top,spaceBelow=window.innerHeight-triggerBox.bottom;
+      // The settings dialog has room below the field; opening below keeps the modal header clear.
+      const preferBelow=!!triggerEl.closest('.settings-dialog');
+      const below=preferBelow?spaceBelow>=160||spaceBelow>=spaceAbove:spaceAbove<menuHeight+12&&spaceBelow>spaceAbove,availableSpace=(below?spaceBelow:spaceAbove)-12;
       container.style.setProperty('--model-menu-max-height',`${Math.max(120,Math.min(380,window.innerHeight*.6,availableSpace))}px`);
       setOpenBelow(below);
     };
-    position();window.addEventListener('resize',position);return()=>window.removeEventListener('resize',position);
+    position();const frame=requestAnimationFrame(position);window.addEventListener('resize',position);return()=>{cancelAnimationFrame(frame);window.removeEventListener('resize',position);};
   },[open,rows.length,mounted]);
   useEffect(()=>{if(!open)return;const onPointer=(event:PointerEvent)=>{if(root.current&&!root.current.contains(event.target as Node))close();};const onKey=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();close();trigger.current?.focus();}};document.addEventListener('pointerdown',onPointer);document.addEventListener('keydown',onKey);return()=>{document.removeEventListener('pointerdown',onPointer);document.removeEventListener('keydown',onKey);};},[open]);
   const pick=(choice:ModelChoice)=>{if(!choice.available)return;onChange(choice,preferredEffort(effort,choice.efforts));close();trigger.current?.focus();};

@@ -20,12 +20,10 @@ function WorkerExecutionSettings({value,set,models,disabled}:{value:Settings;set
     {providerKey:'deepseek',provider:'DeepSeek Harness · OpenCode Go',id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',efforts:['max'],available:true,availabilityNote:'Runtime and authentication are checked before launch; no fallback is used.'},
   ];
   if(!choices.some(choice=>choice.providerKey===profile.provider&&choice.id===profile.model))choices.push({providerKey:profile.provider,provider:`Saved ${profile.provider} profile`,id:profile.model,name:profile.model,efforts:[profile.effort],available:false,availabilityNote:'This saved profile is not one of the currently configured worker choices.'});
-  const active=choices.find(choice=>choice.providerKey===profile.provider&&choice.id===profile.model),efforts=active?.efforts||[];
   const updateProfile=(next:ExecutionProfile)=>set({...value,executionProfile:next,...(next.provider==='deepseek'?{deepseekProvider:'opencode-go',deepseekModel:next.model,deepseekReasoningEffort:next.effort}:{})});
   return <fieldset className="settings-help settings-provider-group"><legend>Worker execution profile</legend>
     <div className="settings-select-row"><span>Worker model</span><ModelPicker label="Worker model" providerKey={profile.provider} model={profile.model} effort={profile.effort} choices={choices} disabled={disabled} onChange={(choice,effort)=>updateProfile({provider:choice.providerKey as ExecutionProfile['provider'],model:choice.id,effort:effort as ExecutionProfile['effort']})}/></div>
-    <div className="settings-select-row"><span>Worker effort</span><ChoicePopover label="Worker effort" caption="" value={profile.effort} disabled={disabled||!efforts.length} options={efforts.map(effort=>({value:effort,label:effort}))} onChange={effort=>updateProfile({...profile,effort:effort as ExecutionProfile['effort']})}/></div>
-    <small>New passes use this model and effort for workers, integration, corrections, and simple implementation. Direct answers use the composer’s orchestrator selection. Existing passes keep their saved profile.</small>
+    <small>New passes use this model and effort for workers, integration, corrections, and simple implementation. Choose the reasoning level in the model picker. Direct answers use the composer’s orchestrator selection. Existing passes keep their saved profile.</small>
     {profile.provider==='deepseek'&&<small>DeepSeek runs through OpenCode Go with V4.1 Flash. Opnex requests max effort and checks provider availability before launch; DSH may not report the effective effort.</small>}
   </fieldset>;
 }

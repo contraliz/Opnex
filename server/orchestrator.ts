@@ -1627,7 +1627,7 @@ async function submitExistingTaskMessage(taskId:string,message:string,attachment
   if(task.phase==='worker_running'&&currentPass(task)?.recruitmentTeam?.sealed)throw new Error('The recruited team is between execution stages. Wait for the worker turn to resume before sending a steering update.');
   return startComposerFollowupPass(taskId,message,attachments,settings,selectedSkills,undefined,qaEnabled);
 }
-export async function submitTask(message:string,existingTaskId?:string,rawAttachments:unknown=[],_legacySkillIds:string[]=[],projectId?:string|null,recruitmentWorkerId?:string,qaEnabled=false){
+export async function submitTask(message:string,existingTaskId?:string,rawAttachments:unknown=[],_legacySkillIds:string[]=[],projectId?:string|null,recruitmentWorkerId?:string,qaEnabled=false,onCreated?:(task:Task)=>void){
   const attachments=validateAttachments(rawAttachments);if(!message.trim()&&!attachments.length)throw new Error('Add a message or attach at least one supported file.');
   const state=getState();
   if(codexState!=='connected')throw new Error(`Codex app-server is ${codexState}. ${codexError}`);
@@ -1636,6 +1636,7 @@ export async function submitTask(message:string,existingTaskId?:string,rawAttach
   const selectedSkills=await snapshotSelectedSkills(parseExplicitSkillCommands(message),skillProject);
   if(existingTaskId)return serializeComposerSubmission(existingTaskId,()=>submitExistingTaskMessage(existingTaskId,message,attachments,state.settings,selectedSkills,recruitmentWorkerId,qaEnabled));
   const created=await (await import('./state.js')).createTaskForProject(message,projectId,attachments,selectedSkills,qaEnabled);
+  onCreated?.(getTask(created.id)||created);
   const createdPassId=currentPass(getTask(created.id)!)?.id;
   await startRoutingSafely(()=>beginRouting(getTask(created.id)!),async e=>{await mutate(s=>{const x=s.tasks.find(a=>a.id===created.id);if(!x||x.phase==='cancelled'||x.currentPassId!==createdPassId)return;x.phase='needs_attention';x.error=`Routing could not start: ${safeError(e)}`;addMessage(x,'system',x.error);});});
   return getTask(created.id)!;
