@@ -1,16 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
+import type { ExecutionProfile } from '../types';
 
-export type ModelChoice={providerKey:string;provider:string;id:string;name:string;efforts:string[];available:boolean;availabilityNote?:string};
+export type ModelChoice={providerKey:string;provider:string;id:string;name:string;efforts:string[];available:boolean;availabilityNote?:string;serviceTier?:'priority'};
 
 const effortLabels:Record<string,string>={low:'Low',medium:'Medium',high:'High',xhigh:'Extra high',max:'Max',ultra:'Ultra'};
 export function effortLabel(effort:string){return effortLabels[effort]||effort;}
 
-export function codexModelChoices(models:{id:string;displayName?:string;efforts:string[]}[]):ModelChoice[]{
-  const supportedEfforts=new Set(['low','medium','high','xhigh','max','ultra']);
-  return models.map(model=>{const efforts=model.efforts.filter(effort=>supportedEfforts.has(effort));return {providerKey:'codex',provider:'Codex · OpenAI',id:model.id,name:modelChoiceName(model.id,model.displayName),efforts,available:efforts.length>0,availabilityNote:efforts.length?undefined:'No supported reasoning effort is advertised by the runtime.'};});
+const supportedEfforts=new Set(['low','medium','high','xhigh','max','ultra']);
+/**
+ * One catalog for every selector: each Codex model, plus a `· Fast` entry when the runtime
+ * advertises the priority service tier. DeepSeek is appended so worker selectors share it.
+ */
+export function codexModelChoices(models:{id:string;displayName?:string;efforts:string[];serviceTiers?:string[]}[]):ModelChoice[]{
+  return models.flatMap(model=>{const efforts=model.efforts.filter(effort=>supportedEfforts.has(effort));const base:ModelChoice={providerKey:'codex',provider:'Codex · OpenAI',id:model.id,name:modelChoiceName(model.id,model.displayName),efforts,available:efforts.length>0,availabilityNote:efforts.length?undefined:'No supported reasoning effort is advertised by the runtime.'};return (model.serviceTiers||[]).includes('priority')?[base,{...base,name:`${base.name} · Fast`,serviceTier:'priority'}]:[base];});
 }
-type Props={label:string;providerKey:string;model:string;effort:string;choices:ModelChoice[];disabled:boolean;onChange:(choice:ModelChoice,effort:string)=>void};
+export const deepSeekModelChoice:ModelChoice={providerKey:'deepseek',provider:'DeepSeek Harness · OpenCode Go',id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',efforts:['max'],available:true,availabilityNote:'Runtime and authentication are checked before launch; no fallback is used.'};
+export function workerModelChoices(models:{id:string;displayName?:string;efforts:string[];serviceTiers?:string[]}[]){return [...codexModelChoices(models),deepSeekModelChoice];}
+export function profileFromChoice(choice:ModelChoice,effort:string):ExecutionProfile{return {provider:choice.providerKey as ExecutionProfile['provider'],model:choice.id,effort:effort as ExecutionProfile['effort'],...(choice.serviceTier?{serviceTier:choice.serviceTier}:{})};}
+type Props={label:string;providerKey:string;model:string;effort:string;serviceTier?:string;choices:ModelChoice[];disabled:boolean;onChange:(choice:ModelChoice,effort:string)=>void};
 
 export function modelChoiceName(id:string,displayName?:string){return id==='gpt-6-luna'?'GPT-6 Luna':(displayName||id).replace(/-(?=[A-Z])/g,' ');}
 
@@ -23,16 +31,16 @@ function preferredEffort(current:string,efforts:string[]){
  * Compact model trigger plus the provider-grouped chooser. Highlighting a model opens a
  * side panel with its reasoning levels so the model and effort are picked in one gesture.
  */
-export default function ModelPicker({label,providerKey,model,effort,choices,disabled,onChange}:Props){
+export default function ModelPicker({label,providerKey,model,effort,serviceTier,choices,disabled,onChange}:Props){
   const [open,setOpen]=useState(false),[mounted,setMounted]=useState(false),[query,setQuery]=useState(''),[openBelow,setOpenBelow]=useState(false),[highlighted,setHighlighted]=useState<string|null>(null);
   const root=useRef<HTMLDivElement>(null),trigger=useRef<HTMLButtonElement>(null);
-  const selected=choices.find(choice=>choice.providerKey===providerKey&&choice.id===model);
+  const selected=choices.find(choice=>choice.providerKey===providerKey&&choice.id===model&&choice.serviceTier===serviceTier);
   const rows=choices.filter(choice=>`${choice.provider} ${choice.name} ${choice.id} ${choice.efforts.join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const groups=[...rows.reduce((result,choice)=>{const key=`${choice.providerKey}:${choice.provider}`;const group=result.get(key)||{key,provider:choice.provider,choices:[] as ModelChoice[]};group.choices.push(choice);result.set(key,group);return result;},new Map<string,{key:string;provider:string;choices:ModelChoice[]}>()).values()];
-  const keyOf=(choice:ModelChoice)=>`${choice.providerKey}:${choice.id}`;
-  const selectedKey=`${providerKey}:${model}`;
+  const keyOf=(choice:ModelChoice)=>`${choice.providerKey}:${choice.id}:${choice.serviceTier||''}`;
+  const selectedKey=`${providerKey}:${model}:${serviceTier||''}`;
   const panelChoice=rows.find(choice=>keyOf(choice)===highlighted)||rows.find(choice=>keyOf(choice)===selectedKey)||rows[0];
-  const panelIsSelected=!!panelChoice&&panelChoice.providerKey===providerKey&&panelChoice.id===model;
+  const panelIsSelected=!!panelChoice&&panelChoice.providerKey===providerKey&&panelChoice.id===model&&panelChoice.serviceTier===serviceTier;
   const close=()=>{setOpen(false);setQuery('');setHighlighted(null);};
   useEffect(()=>{if(open)setMounted(true);else if(mounted){const timer=window.setTimeout(()=>setMounted(false),105);return()=>window.clearTimeout(timer);}},[open,mounted]);
   useLayoutEffect(()=>{
@@ -74,7 +82,7 @@ export default function ModelPicker({label,providerKey,model,effort,choices,disa
         <div className="execution-model-list" role="listbox" aria-label={`Available ${label.toLocaleLowerCase()} choices`}>
           {groups.map(group=><div className="execution-model-group" role="group" aria-label={group.provider} key={group.key}>
             <span className="execution-model-provider">{group.provider}</span>
-            {group.choices.map(choice=>{const active=providerKey===choice.providerKey&&model===choice.id;return <button type="button" role="option" aria-selected={active} disabled={!choice.available} key={`${choice.providerKey}:${choice.id}`} className={`execution-model-option ${active?'selected':''}`} data-panel={panelChoice&&keyOf(panelChoice)===keyOf(choice)} onMouseEnter={()=>setHighlighted(keyOf(choice))} onFocus={()=>setHighlighted(keyOf(choice))} onClick={()=>pick(choice)}>
+            {group.choices.map(choice=>{const active=providerKey===choice.providerKey&&model===choice.id&&serviceTier===choice.serviceTier;return <button type="button" role="option" aria-selected={active} disabled={!choice.available} key={keyOf(choice)} className={`execution-model-option ${active?'selected':''}`} data-panel={panelChoice&&keyOf(panelChoice)===keyOf(choice)} onMouseEnter={()=>setHighlighted(keyOf(choice))} onFocus={()=>setHighlighted(keyOf(choice))} onClick={()=>pick(choice)}>
               <span className="execution-model-name">{choice.name}{!choice.available&&<span className="execution-model-badge">Unavailable</span>}</span>
               <span className="execution-model-effort">{active?effortLabel(effort):''}</span>
               <span className="execution-model-check">{active&&<Check size={13} aria-hidden="true"/>}</span>

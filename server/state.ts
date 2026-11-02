@@ -23,7 +23,7 @@ export type Message = { id: string; role: 'user'|'router'|'direct'|'simple'|'orc
 export type ActivityRole='direct'|'simple'|'orchestrator'|'worker';
 export type DeepSeekExecutionProfile={kind:'deepseek-harness-sdk';provider:string;model:string;nativeReasoningEffort:string};
 export type DeepSeekConversationStoragePreference={mode:'native'|'isolated';directory?:string};
-export type ExecutionProfile={provider:'codex'|'deepseek';model:string;effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra'};
+export type ExecutionProfile={provider:'codex'|'deepseek';model:string;effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra';serviceTier?:'priority'};
 export type DeepSeekProviderEventSummary={type:string;sequence?:number;turn?:number;step?:number;status?:string;messageRole?:string;contentBlockTypes?:string[];textCharacters?:number;toolName?:string;toolCallId?:string;sourceEventSequences?:number[];toolError?:boolean;hasError?:boolean;errorCode?:string;dataKeys?:string[];reasonKeys?:string[];reasonKind?:string;reasonErrorName?:string;reasonErrorCode?:string;reasonErrorMessagePresent?:boolean};
 export type DeepSeekPhaseRun={stage:'execute';sessionId:string;turnId:string;provider:string;model:string;requestedProviderRoute?:string;requestedReasoningEffort?:string;permissionMode:DeepSeekHarnessRuntimeInfo['permissionMode'];approvalPolicy:ApprovalPolicy;workspaceRoot:string;writeScope:string[];access:DeepSeekHarnessRuntimeInfo['access'];filesystemScope:DeepSeekHarnessRuntimeInfo['filesystemScope'];status:'running'|'completed'|'interrupted'|'failed';startedAt:string;updatedAt:string;profileName?:string;configuredMcpServers?:string[];mcpToolCatalog?:DeepSeekHarnessMcpToolCatalog;providerEvents?:DeepSeekProviderEventSummary[];serverInfo?:{name:string;version:string};harnessVersion?:string;capabilities?:DeepSeekHarnessRuntimeInfo['capabilities'];error?:string};
 export type ReasoningSummary = { role:ActivityRole; threadId:string; turnId:string; itemId:string; summaryIndex:number; text:string; passId?:string; provider?:string; requestedModel?:string; requestedEffort?:string; effectiveModel?:string; updatedAt?:string };
@@ -73,7 +73,7 @@ export type TaskPass = { id:string; index:number; createdAt:string; userInput:st
 export type GitHubTaskLink={repository:string;branch:string;baseBranch?:string;pullRequestUrl?:string;updatedAt:string};
 export type Task = { sessionType:'conversation'|'forge';forge?:ForgeTicket;toolCalls?:ToolCallLog; projectId?:string; lastInteractedAt?:string; pinned?:boolean; archived?:boolean; requiresFreshSession?:boolean; legacyAgentMem?:Record<string,unknown>; githubLink?:GitHubTaskLink; workspaceCommand?:{id:string;mode:'browser'|'github';placement:'side'|'full';url?:string;createdAt:string}; id: string; title: string; phase: TaskPhase; createdAt: string; updatedAt: string; userRoot: string; userMessages: string[]; messages: Message[]; passes?:TaskPass[]; currentPassId?:string; routeDecision?:RouteDecision; executionEscalation?:ExecutionEscalation; assignment?: Assignment; receipt?: Receipt; reviewNote?: string; resolution?:'direct'|'simple'|'delegated'; allowDirectResponse?:boolean;routingNote?:string;reasoningSummaries?:ReasoningSummary[];reasoningTurns?:ReasoningTurn[];liveActivity?:LiveActivity[];gitDiff?:PassGitDiff;activeModelId?:string;activeEffort?:string;correctionCount:number;workerStage?:'execute';routerThreadId?:string;directThreadId?:string;simpleThreadId?:string;orchestratorThreadId?:string;workerThreadId?:string;activeTurnId?:string;activeRole?:WorkflowRole;processedTurns:string[];error?:string;escalation?:unknown;approvalRequests?:ApprovalRequest[];pendingRevision?:boolean };
 export type Project = { id:string; name:string; projectRoot:string; needsLocation:boolean; pinned:boolean; createdAt:string; updatedAt:string; legacyAgentMem?:Record<string,unknown> };
-export type Settings = { orchestratorModel: string; orchestratorEffort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'; approvalPolicy: ApprovalPolicy; accessMode?:AccessMode; executionProfile?:ExecutionProfile; deepseekProvider?:string; deepseekModel?:string; deepseekReasoningEffort?:string; deepseekConversationStorageMode?:'native'|'isolated'; deepseekConversationStorageDirectory?:string; mcpServers?:McpServerRegistration[] };
+export type Settings = { orchestratorModel: string; orchestratorEffort: 'low'|'medium'|'high'|'xhigh'|'max'|'ultra'; orchestratorServiceTier?:'priority'; routerProfile?:ExecutionProfile; fontFamily?:'sans'|'mono'; approvalPolicy: ApprovalPolicy; accessMode?:AccessMode; executionProfile?:ExecutionProfile; deepseekProvider?:string; deepseekModel?:string; deepseekReasoningEffort?:string; deepseekConversationStorageMode?:'native'|'isolated'; deepseekConversationStorageDirectory?:string; mcpServers?:McpServerRegistration[] };
 export type State = { version: 7; revision:number; settings: Settings; tasks: Task[]; activeTaskId: string|null; projects:Project[]; selectedProjectId:string|null; expandedProjectIds:string[] };
 if(process.env.NODE_ENV!=='test'){
   const migration=migrateLegacyStateDirectory();
@@ -81,8 +81,9 @@ if(process.env.NODE_ENV!=='test'){
 }
 const dataDir = stateDirectory();
 const statePath = path.join(dataDir, 'state.json');
-const defaults: State = { version: 7, revision:0, settings: { orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', approvalPolicy: 'on-request', executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'}, deepseekProvider:'opencode-go', deepseekModel:'deepseek-v4.1-flash', deepseekReasoningEffort:'max', deepseekConversationStorageMode:'isolated', mcpServers:[] }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:['unclassified'] };
+const defaults: State = { version: 7, revision:0, settings: { orchestratorModel: 'gpt-6-sol', orchestratorEffort: 'high', routerProfile:{provider:'codex',model:'gpt-6-luna',effort:'low',serviceTier:'priority'}, fontFamily:'sans', approvalPolicy: 'on-request', executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'}, deepseekProvider:'opencode-go', deepseekModel:'deepseek-v4.1-flash', deepseekReasoningEffort:'max', deepseekConversationStorageMode:'isolated', mcpServers:[] }, tasks: [], activeTaskId: null, projects:[], selectedProjectId:null, expandedProjectIds:['unclassified'] };
 export function deepSeekExecutionProfileForSettings(settings:Partial<Settings>):DeepSeekExecutionProfile{return {kind:'deepseek-harness-sdk',provider:settings.deepseekProvider||'opencode-go',model:settings.deepseekModel||'deepseek-v4.1-flash',nativeReasoningEffort:settings.deepseekReasoningEffort||'max'};}
+export function routerProfileForSettings(settings:Partial<Settings>):ExecutionProfile{return isExecutionProfile(settings.routerProfile)?structuredClone(settings.routerProfile):{provider:'codex',model:'gpt-6-luna',effort:'low',serviceTier:'priority'};}
 export function executionProfileForSettings(settings:Partial<Settings>):ExecutionProfile{return settings.executionProfile?structuredClone(settings.executionProfile):{provider:'codex',model:'gpt-6-luna',effort:'max'};}
 export function deepSeekConversationStorageForSettings(settings:Partial<Settings>):DeepSeekConversationStoragePreference{
   const mode=settings.deepseekConversationStorageMode||'isolated';
@@ -117,6 +118,9 @@ function hasSupportedSettingsShape(value:unknown,version:number){
     (value.deepseekConversationStorageMode===undefined||value.deepseekConversationStorageMode==='native'||value.deepseekConversationStorageMode==='isolated')&&
     optionalString('deepseekConversationStorageDirectory',1024,false)&&(value.deepseekConversationStorageDirectory===undefined||isAbsoluteProjectPath(value.deepseekConversationStorageDirectory)&&![...value.deepseekConversationStorageDirectory].some((character:string)=>character.charCodeAt(0)<32||character.charCodeAt(0)===127))&&
     (value.executionProfile===undefined||isExecutionProfile(value.executionProfile))&&
+    (value.routerProfile===undefined||isExecutionProfile(value.routerProfile))&&
+    (value.orchestratorServiceTier===undefined||value.orchestratorServiceTier==='priority')&&
+    (value.fontFamily===undefined||value.fontFamily==='sans'||value.fontFamily==='mono')&&
     (value.mcpServers===undefined||mcpServerRegistrationsSchema.safeParse(value.mcpServers).success)&&
     (value.orchestratorEffort===undefined||['low','medium','high','xhigh','max','ultra'].includes(value.orchestratorEffort))&&
     (value.approvalPolicy===undefined||approvalPolicies.includes(value.approvalPolicy));
@@ -125,7 +129,7 @@ const taskPhases:TaskPhase[]=['intake','routing','direct_running','simple_runnin
 const workflowRoles:WorkflowRole[]=['router','direct','simple','orchestrator','worker'];
 const activityRoles:ActivityRole[]=['direct','simple','orchestrator','worker'];
 function isString(value:unknown){return typeof value==='string';}
-function isExecutionProfile(value:unknown):value is ExecutionProfile{return isStoredRecord(value)&&['codex','deepseek'].includes(value.provider as string)&&isString(value.model)&&value.model.length>0&&value.model.length<=200&&['low','medium','high','xhigh','max','ultra'].includes(value.effort as string);}
+function isExecutionProfile(value:unknown):value is ExecutionProfile{return isStoredRecord(value)&&['codex','deepseek'].includes(value.provider as string)&&isString(value.model)&&value.model.length>0&&value.model.length<=200&&['low','medium','high','xhigh','max','ultra'].includes(value.effort as string)&&(value.serviceTier===undefined||value.serviceTier==='priority');}
 function legacyPassExecutionProfile(task:Task,pass:TaskPass):ExecutionProfile|undefined{
   if(isExecutionProfile(pass.executionProfile))return structuredClone(pass.executionProfile);
   const teams=[...(pass.recruitmentTeam?[pass.recruitmentTeam]:[]),...(pass.recruitmentHistory||[])];
@@ -498,6 +502,8 @@ export function upgradeStoredState(value:any):State{
   const {projectRoot:_oldRoot,agentmemProjectId:_oldAgentMemId,agentmemAutoSetup:_oldAutoSetup,...savedSettings}=legacySettings;
   const settings={...defaults.settings,...savedSettings,approvalPolicy:savedApprovalPolicy(legacySettings.approvalPolicy)};settings.accessMode=savedSettings.accessMode??accessModeFromApproval(settings.approvalPolicy);
   if(!isExecutionProfile(savedSettings.executionProfile))settings.executionProfile=structuredClone(defaults.settings.executionProfile!);
+  if(!isExecutionProfile(savedSettings.routerProfile))settings.routerProfile=structuredClone(defaults.settings.routerProfile!);
+  if(savedSettings.fontFamily!=='mono'&&savedSettings.fontFamily!=='sans')settings.fontFamily='sans';
   return {...defaults,...value,version:7,revision:Number.isSafeInteger(value.revision)&&value.revision>=0?value.revision:0,settings,tasks,projects:migratedProjects,selectedProjectId,expandedProjectIds:Array.isArray(value.expandedProjectIds)?[...new Set(value.expandedProjectIds.filter((id:string)=>id==='unclassified'||migratedProjects.some(row=>row.id===id)))]:[...migratedProjects.map(row=>row.id),'unclassified']};
 }
 function isAbsoluteProjectPath(root:string){return path.isAbsolute(root)||path.win32.isAbsolute(root);}

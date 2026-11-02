@@ -154,7 +154,7 @@
 .forge-dependencies strong,.forge-attempt-current > strong,.forge-review-decisions > h3 { color:var(--muted); font-size:10px; }
 .forge-dependencies ul,.forge-receipt-body ul { display:grid; gap:4px; margin:0; padding-left:17px; }
 .forge-dependencies li,.forge-receipt-body li { color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
-.forge-dependencies code,.forge-attempt-current code,.forge-candidate code,.forge-receipt code,.forge-board-footer code { color:#c9bafa; font-family:var(--font-mono); font-size:10px; overflow-wrap:anywhere; }
+.forge-dependencies code,.forge-attempt-current code,.forge-candidate code,.forge-receipt code,.forge-board-footer code { color:#c9bafa; font-family:var(--font-app); font-size:10px; overflow-wrap:anywhere; }
 .forge-block-reason { margin:0; padding:7px 8px; border-left:2px solid var(--warning); background:var(--warning-wash); color:var(--warning); font-size:10px; line-height:1.45; }
 .forge-block-reason.execution { border-left-color:var(--danger); background:var(--danger-wash); color:#e6b9ba; }
 .forge-attempt-current { min-width:0; display:grid; gap:6px; padding:8px; border:1px solid var(--border); border-radius:6px; background:var(--raised); }
@@ -174,7 +174,7 @@
 .forge-run span,.forge-run small { color:var(--muted); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
 .forge-run > small { color:var(--subtle); }
 .forge-integration > header > div { min-width:0; }
-.forge-integration code { font-family:var(--font-mono); font-size:10px; overflow-wrap:anywhere; }
+.forge-integration code { font-family:var(--font-app); font-size:10px; overflow-wrap:anywhere; }
 .forge-candidate { min-width:0; display:grid; gap:8px; margin-top:4px; padding:9px; border:1px solid var(--border); border-radius:6px; background:var(--surface); }
 .forge-candidate-branch { margin:0; color:var(--muted); font-size:10px; line-height:1.45; overflow-wrap:anywhere; }
 .forge-candidate dl,.forge-receipt-body dl { display:grid; grid-template-columns:minmax(100px,auto) minmax(0,1fr); gap:4px 9px; margin:0; }
