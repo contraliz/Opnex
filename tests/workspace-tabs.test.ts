@@ -41,12 +41,20 @@ describe('typed workspace tabs', () => {
     });
 
     expect(browser).toEqual({
-      id: 'browser:one', kind: 'browser', originTabId: 'task-123', originTaskId: 'task-123',
-      projectRoot: 'D:\\work\\repo', initialUrl: 'https://example.test',
+      id: 'browser:one',
+      kind: 'browser',
+      originTabId: 'task-123',
+      originTaskId: 'task-123',
+      projectRoot: 'D:\\work\\repo',
+      initialUrl: 'https://example.test',
     });
     expect(git).toEqual({
-      id: 'git:two', kind: 'git', originTabId: 'new:0', originTaskId: null,
-      projectRoot: 'D:\\work\\repo', focusUrl: '/pull/42',
+      id: 'git:two',
+      kind: 'git',
+      originTabId: 'new:0',
+      originTaskId: null,
+      projectRoot: 'D:\\work\\repo',
+      focusUrl: '/pull/42',
     });
   });
 
@@ -56,13 +64,21 @@ describe('typed workspace tabs', () => {
     expect(workspaceTabTitle('skills:three')).toBe('Skills');
     expect(workspaceTabTitle('new:0')).toBe('New session');
     expect(workspaceTabTitle('task-123', 'Research')).toBe('Research');
-    expect(() => createWorkspaceTabRecord('git', 'browser:one', { originTabId: null, projectRoot: '' })).toThrow('git: prefix');
+    expect(() =>
+      createWorkspaceTabRecord('git', 'browser:one', { originTabId: null, projectRoot: '' })
+    ).toThrow('git: prefix');
   });
 
   it('registers and removes peer tabs immutably by their stable IDs', () => {
-    const first = createWorkspaceTabRecord('browser', 'browser:one', { originTabId: 'task-123', projectRoot: 'D:\\repo' });
+    const first = createWorkspaceTabRecord('browser', 'browser:one', {
+      originTabId: 'task-123',
+      projectRoot: 'D:\\repo',
+    });
     const registry = registerWorkspaceTab({}, first);
-    const second = createWorkspaceTabRecord('git', 'git:two', { originTabId: 'task-123', projectRoot: 'D:\\repo' });
+    const second = createWorkspaceTabRecord('git', 'git:two', {
+      originTabId: 'task-123',
+      projectRoot: 'D:\\repo',
+    });
     const expanded = registerWorkspaceTab(registry, second);
 
     expect(registry).toEqual({ 'browser:one': first });

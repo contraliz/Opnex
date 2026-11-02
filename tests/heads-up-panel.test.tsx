@@ -14,7 +14,15 @@ const settings: Settings = {
 const runtime: Runtime = {
   codex: { state: 'connected', error: '', models: [], workerAvailable: true },
 };
-const project:Project={id:'project-1',name:'New project',projectRoot:'D:/new-project',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
+const project: Project = {
+  id: 'project-1',
+  name: 'New project',
+  projectRoot: 'D:/new-project',
+  needsLocation: false,
+  pinned: false,
+  createdAt: '2026-10-01T00:00:00.000Z',
+  updatedAt: '2026-10-01T00:00:00.000Z',
+};
 
 function pass(id: string, index: number, overrides: Partial<TaskPass> = {}): TaskPass {
   return {
@@ -31,7 +39,11 @@ function pass(id: string, index: number, overrides: Partial<TaskPass> = {}): Tas
   };
 }
 
-function threadUsage(threadId: string, totalTokens: number, source: 'thread' | 'thread-estimate' = 'thread') {
+function threadUsage(
+  threadId: string,
+  totalTokens: number,
+  source: 'thread' | 'thread-estimate' = 'thread'
+) {
   return {
     threadId,
     tokenStatus: 'available' as const,
@@ -83,10 +95,33 @@ function taskFixture(id = 'task-1'): Task {
     orchestratorThreadId: 'orchestrator-current',
     workerThreadId: 'worker-current',
     reasoningTurns: [
-      { role: 'orchestrator', threadId: 'orchestrator-current', turnId: 'orch-turn', requestedModel: 'gpt-6.1-sol', requestedEffort: 'low', status: 'completed' },
-      { role: 'worker', threadId: 'worker-current', turnId: 'worker-turn', requestedModel: 'gpt-6-luna', requestedEffort: 'high', status: 'completed' },
+      {
+        role: 'orchestrator',
+        threadId: 'orchestrator-current',
+        turnId: 'orch-turn',
+        requestedModel: 'gpt-6.1-sol',
+        requestedEffort: 'low',
+        status: 'completed',
+      },
+      {
+        role: 'worker',
+        threadId: 'worker-current',
+        turnId: 'worker-turn',
+        requestedModel: 'gpt-6-luna',
+        requestedEffort: 'high',
+        status: 'completed',
+      },
     ],
-    reasoningSummaries: [{ role: 'worker', threadId: 'worker-current', turnId: 'worker-turn', itemId: 'hidden', summaryIndex: 0, text: 'Private provider reasoning must not be copied into the panel.' }],
+    reasoningSummaries: [
+      {
+        role: 'worker',
+        threadId: 'worker-current',
+        turnId: 'worker-turn',
+        itemId: 'hidden',
+        summaryIndex: 0,
+        text: 'Private provider reasoning must not be copied into the panel.',
+      },
+    ],
     usage: {
       router: threadUsage('router-current', 25),
       orchestrator: threadUsage('orchestrator-current', 80),
@@ -111,14 +146,14 @@ function taskFixture(id = 'task-1'): Task {
 
 function PanelHarness({
   task,
-  project:currentProject=project,
+  project: currentProject = project,
   name = task?.id || 'empty',
   initiallyOpen = true,
   withinPane = false,
   onOpenSettings = vi.fn(),
 }: {
   task: Task | null;
-  project?:Project|null;
+  project?: Project | null;
   name?: string;
   initiallyOpen?: boolean;
   withinPane?: boolean;
@@ -126,10 +161,29 @@ function PanelHarness({
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  return <div className={withinPane ? 'pane-body' : undefined}>
-    <button ref={triggerRef} type="button" aria-label={`HUD ${name}`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>HUD</button>
-    <HeadsUpPanel task={task} project={currentProject} settings={settings} runtime={runtime} open={open} onClose={() => setOpen(false)} onOpenSettings={onOpenSettings} triggerRef={triggerRef}/>
-  </div>;
+  return (
+    <div className={withinPane ? 'pane-body' : undefined}>
+      <button
+        ref={triggerRef}
+        type='button'
+        aria-label={`HUD ${name}`}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        HUD
+      </button>
+      <HeadsUpPanel
+        task={task}
+        project={currentProject}
+        settings={settings}
+        runtime={runtime}
+        open={open}
+        onClose={() => setOpen(false)}
+        onOpenSettings={onOpenSettings}
+        triggerRef={triggerRef}
+      />
+    </div>
+  );
 }
 
 afterEach(() => {
@@ -141,7 +195,7 @@ afterEach(() => {
 
 describe('Heads-up panel', () => {
   it('shows a useful empty state without inventing a thread or a zero token total', () => {
-    render(<PanelHarness task={null}/>);
+    render(<PanelHarness task={null} />);
 
     const panel = screen.getByRole('complementary', { name: 'Heads-up panel' });
     expect(panel.querySelector('.heads-up-status-pill')?.textContent).toBe('No session selected');
@@ -156,7 +210,7 @@ describe('Heads-up panel', () => {
 
   it('keeps the summary compact and reveals current sessions and settings on demand', async () => {
     const onOpenSettings = vi.fn();
-    render(<PanelHarness task={taskFixture()} onOpenSettings={onOpenSettings}/>);
+    render(<PanelHarness task={taskFixture()} onOpenSettings={onOpenSettings} />);
     const panel = screen.getByRole('complementary', { name: 'Heads-up panel' });
 
     expect(within(panel).getByText('Accepted')).toBeTruthy();
@@ -165,7 +219,9 @@ describe('Heads-up panel', () => {
     expect(within(panel).getByText('Fallback')).toBeTruthy();
     expect(within(panel).getByText('Escalated')).toBeTruthy();
     expect(within(panel).queryByText('simple_bounded_correction')).toBeNull();
-    const routeReason = within(panel).getByText('The bounded change exposed an architectural issue.');
+    const routeReason = within(panel).getByText(
+      'The bounded change exposed an architectural issue.'
+    );
     expect(routeReason.closest('[aria-hidden="true"]')).toBeTruthy();
     expect(within(panel).queryByText(/Pass 2/)).toBeNull();
 
@@ -187,7 +243,10 @@ describe('Heads-up panel', () => {
     expect(within(panel).getByText('worker-current')).toBeTruthy();
     expect(within(panel).queryByText('router-old')).toBeNull();
     const openCodexThread = vi.fn().mockResolvedValue(true);
-    Object.defineProperty(window, 'opnexDesktop', { configurable: true, value: { openCodexThread } });
+    Object.defineProperty(window, 'opnexDesktop', {
+      configurable: true,
+      value: { openCodexThread },
+    });
     const codexLinks = [
       ['Router', 'router-current'],
       ['Orchestrator', 'orchestrator-current'],
@@ -217,7 +276,9 @@ describe('Heads-up panel', () => {
     expect(within(panel).queryByText('session-kb')).toBeNull();
     expect(within(panel).getByText('D:/new-project')).toBeTruthy();
     expect(within(panel).queryByText(/AgentMem|knowledge base/i)).toBeNull();
-    expect(within(panel).getByText('The bounded change exposed an architectural issue.')).toBeTruthy();
+    expect(
+      within(panel).getByText('The bounded change exposed an architectural issue.')
+    ).toBeTruthy();
     expect(within(panel).getByText(/The correction needs a multi-component change/)).toBeTruthy();
     expect(within(panel).getAllByText('gpt-6.1-sol · low')).toHaveLength(3);
     expect(within(panel).getByText('gpt-6-luna · high (app policy)')).toBeTruthy();
@@ -234,24 +295,35 @@ describe('Heads-up panel', () => {
     current.orchestratorThreadId = undefined;
     current.workerThreadId = 'worker-unreported';
     task.workerThreadId = 'worker-unreported';
-    render(<PanelHarness task={{ ...task, passes: [current], currentPassId: current.id }}/>);
+    render(<PanelHarness task={{ ...task, passes: [current], currentPassId: current.id }} />);
 
     const panel = screen.getByRole('complementary', { name: 'Heads-up panel' });
     expect(within(panel).getByText('Usage not reported')).toBeTruthy();
-    expect(within(panel).getByLabelText('Token usage by role').textContent).toContain('Worker Unreported');
+    expect(within(panel).getByLabelText('Token usage by role').textContent).toContain(
+      'Worker Unreported'
+    );
     expect(within(panel).queryByText('Direct answer')).toBeNull();
     expect(within(panel).queryByText('Router —')).toBeNull();
     expect(within(panel).queryByText('0 tokens')).toBeNull();
   });
 
   it('keeps the popup within its owning pane bounds', async () => {
-    render(<PanelHarness task={taskFixture()} withinPane/>);
+    render(<PanelHarness task={taskFixture()} withinPane />);
     const pane = document.querySelector('.pane-body')!;
     const trigger = screen.getByRole('button', { name: 'HUD task-1' });
     const panel = screen.getByRole('complementary', { name: 'Heads-up panel' });
-    const rect = (left: number, top: number, width: number, height: number) => ({
-      left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}),
-    }) as DOMRect;
+    const rect = (left: number, top: number, width: number, height: number) =>
+      ({
+        left,
+        top,
+        width,
+        height,
+        right: left + width,
+        bottom: top + height,
+        x: left,
+        y: top,
+        toJSON: () => ({}),
+      }) as DOMRect;
     vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue(rect(100, 40, 350, 500));
     vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(rect(350, 100, 24, 28));
     vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(rect(0, 0, 334, 300));
@@ -265,10 +337,12 @@ describe('Heads-up panel', () => {
   });
 
   it('closes only the focused tab panel on Escape and returns focus to its own trigger', async () => {
-    render(<>
-      <PanelHarness task={taskFixture('tab-a')}/>
-      <PanelHarness task={taskFixture('tab-b')}/>
-    </>);
+    render(
+      <>
+        <PanelHarness task={taskFixture('tab-a')} />
+        <PanelHarness task={taskFixture('tab-b')} />
+      </>
+    );
     const triggers = screen.getAllByRole('button', { name: /^HUD/ });
     const panels = screen.getAllByRole('complementary', { name: 'Heads-up panel' });
     expect(panels).toHaveLength(2);
@@ -282,10 +356,12 @@ describe('Heads-up panel', () => {
   });
 
   it('does not close another tab panel when a pointer interaction occurs inside it', () => {
-    render(<>
-      <PanelHarness task={taskFixture('tab-a')}/>
-      <PanelHarness task={taskFixture('tab-b')}/>
-    </>);
+    render(
+      <>
+        <PanelHarness task={taskFixture('tab-a')} />
+        <PanelHarness task={taskFixture('tab-b')} />
+      </>
+    );
     const panels = screen.getAllByRole('complementary', { name: 'Heads-up panel' });
 
     fireEvent.pointerDown(within(panels[1]).getByText('Heads-up'));
@@ -295,7 +371,7 @@ describe('Heads-up panel', () => {
   });
 
   it('closes after an outside pointer interaction', () => {
-    render(<PanelHarness task={taskFixture()}/>);
+    render(<PanelHarness task={taskFixture()} />);
     const panel = screen.getByRole('complementary', { name: 'Heads-up panel' });
 
     fireEvent.pointerDown(document.body);

@@ -1,5 +1,27 @@
-import { Component, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { AlertCircle, ArrowDown, ArrowUpRight, Check, Circle, GitBranch, GitFork, LoaderCircle, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
+import {
+  Component,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
+import {
+  AlertCircle,
+  ArrowDown,
+  ArrowUpRight,
+  Check,
+  Circle,
+  GitBranch,
+  GitFork,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import { api } from './api';
 import { layoutCommitGraph, type GraphLayout } from './git-graph';
 import { useWorkspaceVisibility } from './useWorkspaceVisibility';
@@ -7,161 +29,1631 @@ import type { Project } from '../types';
 import { workspaceOptionLabel } from './workspace-label';
 import './LocalGitWorkspace.css';
 
-type Commit={hash:string;parents:string[];author:string;date:string;subject:string;refs:string[]};
-type Branch={name:string;hash:string;upstream?:string;current:boolean;remote:boolean};
-type Worktree={path:string;head?:string;branch?:string;detached:boolean;locked:boolean;prunable:boolean};
-type InitialCommitFile={path:string;status:'staged'|'working'|'staged and modified'|'untracked'};
-type InitialCommitPreview={status:'unborn'|'committed'|'unavailable';eligible:boolean;reason?:string;branch?:string;files:InitialCommitFile[];totalFiles:number;empty:boolean;truncated:boolean;previewToken?:string};
-type RemoteItem={number:number;title:string;url:string;state:string;updatedAt:string;headBranch?:string;baseBranch?:string;isDraft?:boolean;author?:string;labels?:string[]};
-type Workspace={available:boolean;authorizedRoot:string;repositoryRoot?:string;repositoryStatus?:'repository'|'missing'|'unavailable';currentBranch?:string;branches:Branch[];branchPage:{offset:number;pageSize:number;totalCount:number;totalIsExact?:boolean;hasMore:boolean;nextOffset:number|null;limitReached?:boolean};worktrees:Worktree[];commits:Commit[];history:{offset:number;pageSize:number;hasMore:boolean;nextOffset:number|null;limitReached?:boolean};github?:GitHub;initialCommit?:InitialCommitPreview;detail?:string};
-type GitHub={available:boolean;authenticated:boolean;account?:string;detail?:string;repositoryAvailable?:boolean;pullRequestsAvailable?:boolean;issuesAvailable?:boolean;repository?:{name:string;url:string;description?:string;defaultBranch:string};pullRequests?:RemoteItem[];issues?:RemoteItem[]};
-type GitHubAuth={state:'idle'|'starting'|'awaiting'|'authenticated'|'failed'|'cancelled'|'expired';cliAvailable:boolean;authenticated:boolean;account?:string;attemptId?:string;verificationUrl?:string;userCode?:string;expiresAt?:number;detail?:string};
-type Props={taskId?:string;projectId?:string;projectRoot?:string;workspaces?:Project[];focusUrl?:string;active?:boolean;onOpenBrowserTab?:(url?:string)=>void};
-const stamp=(date:string)=>{const parsed=new Date(date);return Number.isNaN(parsed.valueOf())?'':new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(parsed);};
-const hash=(value:string)=>value.slice(0,8);
+type Commit = {
+  hash: string;
+  parents: string[];
+  author: string;
+  date: string;
+  subject: string;
+  refs: string[];
+};
+type Branch = { name: string; hash: string; upstream?: string; current: boolean; remote: boolean };
+type Worktree = {
+  path: string;
+  head?: string;
+  branch?: string;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+};
+type InitialCommitFile = {
+  path: string;
+  status: 'staged' | 'working' | 'staged and modified' | 'untracked';
+};
+type InitialCommitPreview = {
+  status: 'unborn' | 'committed' | 'unavailable';
+  eligible: boolean;
+  reason?: string;
+  branch?: string;
+  files: InitialCommitFile[];
+  totalFiles: number;
+  empty: boolean;
+  truncated: boolean;
+  previewToken?: string;
+};
+type RemoteItem = {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  updatedAt: string;
+  headBranch?: string;
+  baseBranch?: string;
+  isDraft?: boolean;
+  author?: string;
+  labels?: string[];
+};
+type Workspace = {
+  available: boolean;
+  authorizedRoot: string;
+  repositoryRoot?: string;
+  repositoryStatus?: 'repository' | 'missing' | 'unavailable';
+  currentBranch?: string;
+  branches: Branch[];
+  branchPage: {
+    offset: number;
+    pageSize: number;
+    totalCount: number;
+    totalIsExact?: boolean;
+    hasMore: boolean;
+    nextOffset: number | null;
+    limitReached?: boolean;
+  };
+  worktrees: Worktree[];
+  commits: Commit[];
+  history: {
+    offset: number;
+    pageSize: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+    limitReached?: boolean;
+  };
+  github?: GitHub;
+  initialCommit?: InitialCommitPreview;
+  detail?: string;
+};
+type GitHub = {
+  available: boolean;
+  authenticated: boolean;
+  account?: string;
+  detail?: string;
+  repositoryAvailable?: boolean;
+  pullRequestsAvailable?: boolean;
+  issuesAvailable?: boolean;
+  repository?: { name: string; url: string; description?: string; defaultBranch: string };
+  pullRequests?: RemoteItem[];
+  issues?: RemoteItem[];
+};
+type GitHubAuth = {
+  state: 'idle' | 'starting' | 'awaiting' | 'authenticated' | 'failed' | 'cancelled' | 'expired';
+  cliAvailable: boolean;
+  authenticated: boolean;
+  account?: string;
+  attemptId?: string;
+  verificationUrl?: string;
+  userCode?: string;
+  expiresAt?: number;
+  detail?: string;
+};
+type Props = {
+  taskId?: string;
+  projectId?: string;
+  projectRoot?: string;
+  workspaces?: Project[];
+  focusUrl?: string;
+  active?: boolean;
+  onOpenBrowserTab?: (url?: string) => void;
+};
+const stamp = (date: string) => {
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.valueOf())
+    ? ''
+    : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
+        parsed
+      );
+};
+const hash = (value: string) => value.slice(0, 8);
 
-type BoundaryState={error:string;attempt:number};
-class GitWorkspaceErrorBoundary extends Component<Props,{error:string;attempt:number}>{
-  state:BoundaryState={error:'',attempt:0};
-  static getDerivedStateFromError(error:unknown):Partial<BoundaryState>{return {error:error instanceof Error?error.message:'Unexpected Git workspace display error.'};}
-  render(){
-    if(this.state.error)return <section className="git-workspace git-workspace-failure" role="alert" aria-label="Git workspace error"><AlertCircle size={20}/><strong>The Git workspace could not be displayed.</strong><span>{this.state.error}</span><button type="button" onClick={()=>this.setState(state=>({error:'',attempt:state.attempt+1}))}>Reload Git workspace</button></section>;
-    return <LocalGitWorkspaceContent key={this.state.attempt} {...this.props}/>;
+type BoundaryState = { error: string; attempt: number };
+class GitWorkspaceErrorBoundary extends Component<Props, { error: string; attempt: number }> {
+  state: BoundaryState = { error: '', attempt: 0 };
+  static getDerivedStateFromError(error: unknown): Partial<BoundaryState> {
+    return {
+      error: error instanceof Error ? error.message : 'Unexpected Git workspace display error.',
+    };
+  }
+  render() {
+    if (this.state.error)
+      return (
+        <section
+          className='git-workspace git-workspace-failure'
+          role='alert'
+          aria-label='Git workspace error'
+        >
+          <AlertCircle size={20} />
+          <strong>The Git workspace could not be displayed.</strong>
+          <span>{this.state.error}</span>
+          <button
+            type='button'
+            onClick={() => this.setState((state) => ({ error: '', attempt: state.attempt + 1 }))}
+          >
+            Reload Git workspace
+          </button>
+        </section>
+      );
+    return <LocalGitWorkspaceContent key={this.state.attempt} {...this.props} />;
   }
 }
 
-export function LocalGitWorkspace(props:Props){return <GitWorkspaceErrorBoundary key={`${props.taskId||''}:${props.projectId||''}:${props.projectRoot||''}`} {...props}/>;}
+export function LocalGitWorkspace(props: Props) {
+  return (
+    <GitWorkspaceErrorBoundary
+      key={`${props.taskId || ''}:${props.projectId || ''}:${props.projectRoot || ''}`}
+      {...props}
+    />
+  );
+}
 
-function normalizeWorkspace(value:unknown):Workspace{
-  if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('The local Git service returned an invalid workspace response. Restart Opnex and retry.');
-  const row=value as Record<string,unknown>;
-  if(typeof row.available!=='boolean'||typeof row.authorizedRoot!=='string'||!Array.isArray(row.branches)||!Array.isArray(row.worktrees)||!Array.isArray(row.commits)||!row.history||typeof row.history!=='object'||Array.isArray(row.history)||(row.available===true&&(!row.branchPage||typeof row.branchPage!=='object'||Array.isArray(row.branchPage))))throw new Error('The local Git service returned incomplete workspace data. Refresh this panel; if the error continues, restart Opnex.');
-  const branches=Array.isArray(row.branches)?row.branches.filter((item):item is Branch=>!!item&&typeof item==='object'&&typeof (item as Branch).name==='string'&&typeof (item as Branch).hash==='string'):[];
-  const worktrees=Array.isArray(row.worktrees)?row.worktrees.flatMap(item=>{if(!item||typeof item!=='object')return [];const worktree=item as Record<string,unknown>;if(typeof worktree.path!=='string')return [];return [{path:worktree.path,...(typeof worktree.head==='string'?{head:worktree.head}:{}),...(typeof worktree.branch==='string'?{branch:worktree.branch}:{}),detached:worktree.detached===true,locked:worktree.locked===true,prunable:worktree.prunable===true}];}):[];
-  const commits=Array.isArray(row.commits)?row.commits.flatMap(item=>{if(!item||typeof item!=='object')return [];const commit=item as Record<string,unknown>;if(typeof commit.hash!=='string')return [];return [{hash:commit.hash,parents:Array.isArray(commit.parents)?commit.parents.filter((parent):parent is string=>typeof parent==='string'):[],author:typeof commit.author==='string'?commit.author:'',date:typeof commit.date==='string'?commit.date:'',subject:typeof commit.subject==='string'?commit.subject:'',refs:Array.isArray(commit.refs)?commit.refs.filter((ref):ref is string=>typeof ref==='string'):[]}];}):[];
-  const page=(candidate:unknown,defaults:{offset:number;pageSize:number})=>{
-    if(!candidate||typeof candidate!=='object')return {...defaults,totalCount:0,hasMore:false,nextOffset:null};
-    const item=candidate as Record<string,unknown>;
-    return {offset:Number.isInteger(item.offset)&&Number(item.offset)>=0?Number(item.offset):defaults.offset,pageSize:Number.isInteger(item.pageSize)&&Number(item.pageSize)>0?Number(item.pageSize):defaults.pageSize,totalCount:Number.isFinite(item.totalCount)?Number(item.totalCount):0,...('totalIsExact'in item?{totalIsExact:item.totalIsExact!==false}:{}),hasMore:item.hasMore===true,nextOffset:Number.isInteger(item.nextOffset)&&Number(item.nextOffset)>=0?Number(item.nextOffset):null,...('limitReached'in item?{limitReached:item.limitReached===true}:{})};
+function normalizeWorkspace(value: unknown): Workspace {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error(
+      'The local Git service returned an invalid workspace response. Restart Opnex and retry.'
+    );
+  const row = value as Record<string, unknown>;
+  if (
+    typeof row.available !== 'boolean' ||
+    typeof row.authorizedRoot !== 'string' ||
+    !Array.isArray(row.branches) ||
+    !Array.isArray(row.worktrees) ||
+    !Array.isArray(row.commits) ||
+    !row.history ||
+    typeof row.history !== 'object' ||
+    Array.isArray(row.history) ||
+    (row.available === true &&
+      (!row.branchPage || typeof row.branchPage !== 'object' || Array.isArray(row.branchPage)))
+  )
+    throw new Error(
+      'The local Git service returned incomplete workspace data. Refresh this panel; if the error continues, restart Opnex.'
+    );
+  const branches = Array.isArray(row.branches)
+    ? row.branches.filter(
+        (item): item is Branch =>
+          !!item &&
+          typeof item === 'object' &&
+          typeof (item as Branch).name === 'string' &&
+          typeof (item as Branch).hash === 'string'
+      )
+    : [];
+  const worktrees = Array.isArray(row.worktrees)
+    ? row.worktrees.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const worktree = item as Record<string, unknown>;
+        if (typeof worktree.path !== 'string') return [];
+        return [
+          {
+            path: worktree.path,
+            ...(typeof worktree.head === 'string' ? { head: worktree.head } : {}),
+            ...(typeof worktree.branch === 'string' ? { branch: worktree.branch } : {}),
+            detached: worktree.detached === true,
+            locked: worktree.locked === true,
+            prunable: worktree.prunable === true,
+          },
+        ];
+      })
+    : [];
+  const commits = Array.isArray(row.commits)
+    ? row.commits.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const commit = item as Record<string, unknown>;
+        if (typeof commit.hash !== 'string') return [];
+        return [
+          {
+            hash: commit.hash,
+            parents: Array.isArray(commit.parents)
+              ? commit.parents.filter((parent): parent is string => typeof parent === 'string')
+              : [],
+            author: typeof commit.author === 'string' ? commit.author : '',
+            date: typeof commit.date === 'string' ? commit.date : '',
+            subject: typeof commit.subject === 'string' ? commit.subject : '',
+            refs: Array.isArray(commit.refs)
+              ? commit.refs.filter((ref): ref is string => typeof ref === 'string')
+              : [],
+          },
+        ];
+      })
+    : [];
+  const page = (candidate: unknown, defaults: { offset: number; pageSize: number }) => {
+    if (!candidate || typeof candidate !== 'object')
+      return { ...defaults, totalCount: 0, hasMore: false, nextOffset: null };
+    const item = candidate as Record<string, unknown>;
+    return {
+      offset:
+        Number.isInteger(item.offset) && Number(item.offset) >= 0
+          ? Number(item.offset)
+          : defaults.offset,
+      pageSize:
+        Number.isInteger(item.pageSize) && Number(item.pageSize) > 0
+          ? Number(item.pageSize)
+          : defaults.pageSize,
+      totalCount: Number.isFinite(item.totalCount) ? Number(item.totalCount) : 0,
+      ...('totalIsExact' in item ? { totalIsExact: item.totalIsExact !== false } : {}),
+      hasMore: item.hasMore === true,
+      nextOffset:
+        Number.isInteger(item.nextOffset) && Number(item.nextOffset) >= 0
+          ? Number(item.nextOffset)
+          : null,
+      ...('limitReached' in item ? { limitReached: item.limitReached === true } : {}),
+    };
   };
-  const githubRow=row.github&&typeof row.github==='object'&&!Array.isArray(row.github)?row.github as Record<string,unknown>:undefined;
-  const remoteItems=(candidate:unknown):RemoteItem[]|undefined=>Array.isArray(candidate)?candidate.flatMap(value=>{if(!value||typeof value!=='object')return [];const item=value as Record<string,unknown>;if(!Number.isFinite(item.number)||typeof item.title!=='string'||typeof item.url!=='string'||typeof item.state!=='string')return [];return [{number:Number(item.number),title:item.title,url:item.url,state:item.state,updatedAt:typeof item.updatedAt==='string'?item.updatedAt:'',...(typeof item.headBranch==='string'?{headBranch:item.headBranch}:{}),...(typeof item.baseBranch==='string'?{baseBranch:item.baseBranch}:{}),...(typeof item.author==='string'?{author:item.author}:{}),...(typeof item.isDraft==='boolean'?{isDraft:item.isDraft}:{}),...(Array.isArray(item.labels)?{labels:item.labels.filter((label):label is string=>typeof label==='string')}: {})}];}):undefined;
-  const repositoryRow=githubRow?.repository&&typeof githubRow.repository==='object'?githubRow.repository as Record<string,unknown>:undefined;
-  const pullRequests=githubRow?remoteItems(githubRow.pullRequests):undefined;const issues=githubRow?remoteItems(githubRow.issues):undefined;
-  const github:GitHub|undefined=githubRow?{available:githubRow.available===true,authenticated:githubRow.authenticated===true,...(typeof githubRow.account==='string'?{account:githubRow.account}:{}),...(typeof githubRow.detail==='string'?{detail:githubRow.detail}:{}),...(typeof githubRow.repositoryAvailable==='boolean'?{repositoryAvailable:githubRow.repositoryAvailable}:{}),...(typeof githubRow.pullRequestsAvailable==='boolean'?{pullRequestsAvailable:githubRow.pullRequestsAvailable}:{}),...(typeof githubRow.issuesAvailable==='boolean'?{issuesAvailable:githubRow.issuesAvailable}:{}),...(repositoryRow&&typeof repositoryRow.name==='string'&&typeof repositoryRow.url==='string'?{repository:{name:repositoryRow.name,url:repositoryRow.url,...(typeof repositoryRow.description==='string'?{description:repositoryRow.description}:{}),defaultBranch:typeof repositoryRow.defaultBranch==='string'?repositoryRow.defaultBranch:'main'}}:{}),...(pullRequests?{pullRequests}:{}),...(issues?{issues}:{})}:undefined;
-  const repositoryStatus=row.repositoryStatus==='repository'||row.repositoryStatus==='missing'||row.repositoryStatus==='unavailable'?row.repositoryStatus:undefined;
-  const initialCommitRow=row.initialCommit&&typeof row.initialCommit==='object'&&!Array.isArray(row.initialCommit)?row.initialCommit as Record<string,unknown>:undefined;
-  const initialCommit:InitialCommitPreview|undefined=initialCommitRow&&['unborn','committed','unavailable'].includes(String(initialCommitRow.status))&&typeof initialCommitRow.eligible==='boolean'?{status:initialCommitRow.status as InitialCommitPreview['status'],eligible:initialCommitRow.eligible,...(typeof initialCommitRow.reason==='string'?{reason:initialCommitRow.reason}:{}),...(typeof initialCommitRow.branch==='string'?{branch:initialCommitRow.branch}:{}),files:Array.isArray(initialCommitRow.files)?initialCommitRow.files.flatMap(value=>{if(!value||typeof value!=='object')return [];const file=value as Record<string,unknown>;if(typeof file.path!=='string'||!['staged','working','staged and modified','untracked'].includes(String(file.status)))return [];return [{path:file.path,status:file.status as InitialCommitFile['status']}];}):[],totalFiles:Number.isInteger(initialCommitRow.totalFiles)&&Number(initialCommitRow.totalFiles)>=0?Number(initialCommitRow.totalFiles):0,empty:initialCommitRow.empty===true,truncated:initialCommitRow.truncated===true,...(typeof initialCommitRow.previewToken==='string'?{previewToken:initialCommitRow.previewToken}:{})}:undefined;
-  return {available:row.available===true,authorizedRoot:typeof row.authorizedRoot==='string'?row.authorizedRoot:'',...(typeof row.repositoryRoot==='string'?{repositoryRoot:row.repositoryRoot}:{}),...(repositoryStatus?{repositoryStatus}:{}),...(typeof row.currentBranch==='string'?{currentBranch:row.currentBranch}:{}),branches,branchPage:page(row.branchPage,{offset:0,pageSize:100}) as Workspace['branchPage'],worktrees,commits,history:page(row.history,{offset:0,pageSize:100}) as Workspace['history'],...(github?{github}:{}),...(initialCommit?{initialCommit}:{}),...(typeof row.detail==='string'?{detail:row.detail}:{})};
+  const githubRow =
+    row.github && typeof row.github === 'object' && !Array.isArray(row.github)
+      ? (row.github as Record<string, unknown>)
+      : undefined;
+  const remoteItems = (candidate: unknown): RemoteItem[] | undefined =>
+    Array.isArray(candidate)
+      ? candidate.flatMap((value) => {
+          if (!value || typeof value !== 'object') return [];
+          const item = value as Record<string, unknown>;
+          if (
+            !Number.isFinite(item.number) ||
+            typeof item.title !== 'string' ||
+            typeof item.url !== 'string' ||
+            typeof item.state !== 'string'
+          )
+            return [];
+          return [
+            {
+              number: Number(item.number),
+              title: item.title,
+              url: item.url,
+              state: item.state,
+              updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
+              ...(typeof item.headBranch === 'string' ? { headBranch: item.headBranch } : {}),
+              ...(typeof item.baseBranch === 'string' ? { baseBranch: item.baseBranch } : {}),
+              ...(typeof item.author === 'string' ? { author: item.author } : {}),
+              ...(typeof item.isDraft === 'boolean' ? { isDraft: item.isDraft } : {}),
+              ...(Array.isArray(item.labels)
+                ? {
+                    labels: item.labels.filter(
+                      (label): label is string => typeof label === 'string'
+                    ),
+                  }
+                : {}),
+            },
+          ];
+        })
+      : undefined;
+  const repositoryRow =
+    githubRow?.repository && typeof githubRow.repository === 'object'
+      ? (githubRow.repository as Record<string, unknown>)
+      : undefined;
+  const pullRequests = githubRow ? remoteItems(githubRow.pullRequests) : undefined;
+  const issues = githubRow ? remoteItems(githubRow.issues) : undefined;
+  const github: GitHub | undefined = githubRow
+    ? {
+        available: githubRow.available === true,
+        authenticated: githubRow.authenticated === true,
+        ...(typeof githubRow.account === 'string' ? { account: githubRow.account } : {}),
+        ...(typeof githubRow.detail === 'string' ? { detail: githubRow.detail } : {}),
+        ...(typeof githubRow.repositoryAvailable === 'boolean'
+          ? { repositoryAvailable: githubRow.repositoryAvailable }
+          : {}),
+        ...(typeof githubRow.pullRequestsAvailable === 'boolean'
+          ? { pullRequestsAvailable: githubRow.pullRequestsAvailable }
+          : {}),
+        ...(typeof githubRow.issuesAvailable === 'boolean'
+          ? { issuesAvailable: githubRow.issuesAvailable }
+          : {}),
+        ...(repositoryRow &&
+        typeof repositoryRow.name === 'string' &&
+        typeof repositoryRow.url === 'string'
+          ? {
+              repository: {
+                name: repositoryRow.name,
+                url: repositoryRow.url,
+                ...(typeof repositoryRow.description === 'string'
+                  ? { description: repositoryRow.description }
+                  : {}),
+                defaultBranch:
+                  typeof repositoryRow.defaultBranch === 'string'
+                    ? repositoryRow.defaultBranch
+                    : 'main',
+              },
+            }
+          : {}),
+        ...(pullRequests ? { pullRequests } : {}),
+        ...(issues ? { issues } : {}),
+      }
+    : undefined;
+  const repositoryStatus =
+    row.repositoryStatus === 'repository' ||
+    row.repositoryStatus === 'missing' ||
+    row.repositoryStatus === 'unavailable'
+      ? row.repositoryStatus
+      : undefined;
+  const initialCommitRow =
+    row.initialCommit && typeof row.initialCommit === 'object' && !Array.isArray(row.initialCommit)
+      ? (row.initialCommit as Record<string, unknown>)
+      : undefined;
+  const initialCommit: InitialCommitPreview | undefined =
+    initialCommitRow &&
+    ['unborn', 'committed', 'unavailable'].includes(String(initialCommitRow.status)) &&
+    typeof initialCommitRow.eligible === 'boolean'
+      ? {
+          status: initialCommitRow.status as InitialCommitPreview['status'],
+          eligible: initialCommitRow.eligible,
+          ...(typeof initialCommitRow.reason === 'string'
+            ? { reason: initialCommitRow.reason }
+            : {}),
+          ...(typeof initialCommitRow.branch === 'string'
+            ? { branch: initialCommitRow.branch }
+            : {}),
+          files: Array.isArray(initialCommitRow.files)
+            ? initialCommitRow.files.flatMap((value) => {
+                if (!value || typeof value !== 'object') return [];
+                const file = value as Record<string, unknown>;
+                if (
+                  typeof file.path !== 'string' ||
+                  !['staged', 'working', 'staged and modified', 'untracked'].includes(
+                    String(file.status)
+                  )
+                )
+                  return [];
+                return [{ path: file.path, status: file.status as InitialCommitFile['status'] }];
+              })
+            : [],
+          totalFiles:
+            Number.isInteger(initialCommitRow.totalFiles) &&
+            Number(initialCommitRow.totalFiles) >= 0
+              ? Number(initialCommitRow.totalFiles)
+              : 0,
+          empty: initialCommitRow.empty === true,
+          truncated: initialCommitRow.truncated === true,
+          ...(typeof initialCommitRow.previewToken === 'string'
+            ? { previewToken: initialCommitRow.previewToken }
+            : {}),
+        }
+      : undefined;
+  return {
+    available: row.available === true,
+    authorizedRoot: typeof row.authorizedRoot === 'string' ? row.authorizedRoot : '',
+    ...(typeof row.repositoryRoot === 'string' ? { repositoryRoot: row.repositoryRoot } : {}),
+    ...(repositoryStatus ? { repositoryStatus } : {}),
+    ...(typeof row.currentBranch === 'string' ? { currentBranch: row.currentBranch } : {}),
+    branches,
+    branchPage: page(row.branchPage, { offset: 0, pageSize: 100 }) as Workspace['branchPage'],
+    worktrees,
+    commits,
+    history: page(row.history, { offset: 0, pageSize: 100 }) as Workspace['history'],
+    ...(github ? { github } : {}),
+    ...(initialCommit ? { initialCommit } : {}),
+    ...(typeof row.detail === 'string' ? { detail: row.detail } : {}),
+  };
 }
 
-function LocalGitWorkspaceContent({taskId,projectId,projectRoot,workspaces=[],focusUrl,active=true,onOpenBrowserTab}:Props){
-  const [selectedWorkspaceId,setSelectedWorkspaceId]=useState(projectId||workspaces[0]?.id||'');const [data,setData]=useState<Workspace|null>(null);const [error,setError]=useState('');const [busy,setBusy]=useState(false);const [createBusy,setCreateBusy]=useState(false);const [initialCommitBusy,setInitialCommitBusy]=useState(false);const [initialCommitOpen,setInitialCommitOpen]=useState(false);const [initialCommitMessage,setInitialCommitMessage]=useState('Initial commit');const [initialCommitPreview,setInitialCommitPreview]=useState<InitialCommitPreview|null>(null);const [githubBusy,setGithubBusy]=useState(true);const [auth,setAuth]=useState<GitHubAuth|null>(null);const [authBusy,setAuthBusy]=useState(false);const [expiresIn,setExpiresIn]=useState(0);const [view,setView]=useState<'overview'|'branches'|'worktrees'|'history'|'pullRequests'|'issues'>('overview');const [query,setQuery]=useState('');
-  useEffect(()=>{if(workspaces.length&&!workspaces.some(workspace=>workspace.id===selectedWorkspaceId))setSelectedWorkspaceId(projectId&&workspaces.some(workspace=>workspace.id===projectId)?projectId:workspaces[0]!.id);},[projectId,selectedWorkspaceId,workspaces]);
-  const selectedWorkspace=workspaces.find(workspace=>workspace.id===selectedWorkspaceId);const selectedRoot=selectedWorkspace?.projectRoot||projectRoot;const workspaceRoute=workspaces.length>0;const route=taskId&&!workspaceRoute?'/api/tasks/'+encodeURIComponent(taskId)+'/git-workspace':'/api/git-workspace';const capturedRootQuery=workspaceRoute&&selectedWorkspaceId?'projectId='+encodeURIComponent(selectedWorkspaceId)+'&':!taskId&&projectId?'projectId='+encodeURIComponent(projectId)+'&':'';const capturedGithubQuery=workspaceRoute&&selectedWorkspaceId?'?projectId='+encodeURIComponent(selectedWorkspaceId):!taskId&&projectId?'?projectId='+encodeURIComponent(projectId):'';const initialCommitProjectId=workspaceRoute?selectedWorkspaceId:!taskId?projectId||'':'';const initialCommitRoute=initialCommitProjectId?`/api/git-workspace/initial-commit-preview?projectId=${encodeURIComponent(initialCommitProjectId)}`:undefined;const workspaceKey=(workspaceRoute?selectedWorkspaceId:taskId||projectId||'')+'|'+(selectedRoot||'');const workspaceKeyRef=useRef(workspaceKey);workspaceKeyRef.current=workspaceKey;const sectionRef=useRef<HTMLElement>(null);const visible=useWorkspaceVisibility(sectionRef,active);const localRequest=useRef<{key:string;controller:AbortController;promise:Promise<void>}|null>(null);const githubRequest=useRef<{key:string;controller:AbortController;promise:Promise<void>}|null>(null);const authRequest=useRef<{controller:AbortController;signal:AbortSignal;promise:Promise<void>}|null>(null);const openedAttemptId=useRef('');const openBrowserTabRef=useRef(onOpenBrowserTab);openBrowserTabRef.current=onOpenBrowserTab;
-  const mergeBy=<T,>(current:T[],incoming:T[],key:(item:T)=>string)=>{const map=new Map(current.map(item=>[key(item),item]));for(const item of incoming)map.set(key(item),item);return [...map.values()];};
-  const loadLocal=useCallback(({historyOffset=0,branchOffset=0,appendHistory=false,appendBranches=false,coalesceOnly=false,signal}:{historyOffset?:number;branchOffset?:number;appendHistory?:boolean;appendBranches?:boolean;coalesceOnly?:boolean;signal?:AbortSignal}={})=>{
-    const key=workspaceKeyRef.current;const requestKey=`${key}\u0000${historyOffset}\u0000${branchOffset}`;const pending=localRequest.current;if(pending?.key===requestKey&&!pending.controller.signal.aborted)return pending.promise;if(coalesceOnly&&pending&&!pending.controller.signal.aborted)return pending.promise;
-    pending?.controller.abort();const controller=new AbortController();const abort=()=>controller.abort();if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',abort,{once:true});setBusy(true);setError('');
-    const promise=(async()=>{try{const fresh=normalizeWorkspace(await api<unknown>(route+'?'+capturedRootQuery+'offset='+historyOffset+'&branchOffset='+branchOffset,undefined,controller.signal));if(initialCommitRoute&&!taskId&&fresh.available){const preview=await api<unknown>(initialCommitRoute,undefined,controller.signal).catch(()=>undefined);if(preview)fresh.initialCommit=normalizeWorkspace({...fresh,initialCommit:preview}).initialCommit;}if(controller.signal.aborted||workspaceKeyRef.current!==key)return;setData(current=>{if(!current||current.repositoryRoot!==fresh.repositoryRoot)return fresh;return {...fresh,commits:appendHistory?mergeBy(current.commits,fresh.commits,item=>item.hash):fresh.commits,branches:appendBranches?mergeBy(current.branches,fresh.branches,item=>item.name):fresh.branches,worktrees:fresh.worktrees,github:current.github};});}catch(cause){if(!controller.signal.aborted&&workspaceKeyRef.current===key)setError(String(cause));}finally{signal?.removeEventListener('abort',abort);if(localRequest.current?.controller===controller)localRequest.current=null;if(!controller.signal.aborted&&workspaceKeyRef.current===key)setBusy(false);}})();localRequest.current={key:requestKey,controller,promise};return promise;
-  },[capturedRootQuery,initialCommitRoute,route,taskId]);
-  const refreshLocal=useCallback((coalesceOnly=false)=>{const historyOffset=data?.history.offset||0;const branchOffset=data?.branchPage.offset||0;return loadLocal({historyOffset,branchOffset,appendHistory:historyOffset>0,appendBranches:branchOffset>0,coalesceOnly});},[data?.history.offset,data?.branchPage.offset,loadLocal]);
-  const loadGithub=useCallback((signal?:AbortSignal)=>{
-    const key=workspaceKeyRef.current;const pending=githubRequest.current;if(pending?.key===key&&!pending.controller.signal.aborted)return pending.promise;
-    pending?.controller.abort();const controller=new AbortController();const abort=()=>controller.abort();if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',abort,{once:true});setGithubBusy(true);
-    const promise=(async()=>{try{const result=await api<GitHub>(route+'/github'+capturedGithubQuery,undefined,controller.signal);if(!controller.signal.aborted&&workspaceKeyRef.current===key)setData(current=>current?{...current,github:result}:current);}catch{if(!controller.signal.aborted&&workspaceKeyRef.current===key)setData(current=>current?{...current,github:{available:false,authenticated:false,detail:'GitHub metadata is temporarily unavailable. Local Git remains available.'}}:current);}finally{signal?.removeEventListener('abort',abort);if(githubRequest.current?.controller===controller)githubRequest.current=null;if(!controller.signal.aborted&&workspaceKeyRef.current===key)setGithubBusy(false);}})();githubRequest.current={key,controller,promise};return promise;
-  },[capturedGithubQuery,route]);
-  const loadAuth=useCallback(async(signal?:AbortSignal)=>{if(signal?.aborted)return;const pending=authRequest.current;if(pending&&!pending.signal.aborted)return pending.promise;const controller=new AbortController();const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});const promise=(async()=>{try{const result=await api<GitHubAuth>('/api/github/auth',{action:'status'},controller.signal);if(!controller.signal.aborted)setAuth(result);}catch(cause){if(!controller.signal.aborted)setError(String(cause));}finally{signal?.removeEventListener('abort',abort);if(authRequest.current?.controller===controller)authRequest.current=null;}})();authRequest.current={controller,signal:controller.signal,promise};return promise;},[]);
-  useEffect(()=>{if(!visible)return;const controller=new AbortController();setData(null);setError('');setBusy(true);setGithubBusy(true);setView('overview');setQuery('');void loadLocal({signal:controller.signal});void loadGithub(controller.signal);void loadAuth(controller.signal);return()=>{controller.abort();localRequest.current?.controller.abort();githubRequest.current?.controller.abort();authRequest.current?.controller.abort();};},[loadAuth,loadGithub,loadLocal,visible,workspaceKey]);
-  useEffect(()=>{if(!visible)return;void refreshLocal(true);const onFocus=()=>void refreshLocal(true);window.addEventListener('focus',onFocus);const timer=window.setInterval(()=>void refreshLocal(true),20_000);return()=>{window.removeEventListener('focus',onFocus);window.clearInterval(timer);};},[refreshLocal,visible]);
-  useEffect(()=>{if(focusUrl){setView(focusUrl.includes('/pull/')?'pullRequests':focusUrl.includes('/issues/')?'issues':'overview');setQuery('');}},[focusUrl]);
-  useEffect(()=>{if(!visible||auth?.state!=='starting'&&auth?.state!=='awaiting')return;const timer=window.setInterval(()=>void loadAuth(),1500);return()=>window.clearInterval(timer);},[auth?.state,loadAuth,visible]);
-  useEffect(()=>{if(auth?.state!=='awaiting'||!auth.attemptId||!auth.verificationUrl)return;const open=openBrowserTabRef.current;if(!open)return;const storageKey=`opnex:github-auth-page:${auth.attemptId}`;const legacyStorageKey=`pseudoharness:github-auth-page:${auth.attemptId}`;try{if(sessionStorage.getItem(storageKey)||sessionStorage.getItem(legacyStorageKey))return;sessionStorage.setItem(storageKey,'opened');}catch{if(openedAttemptId.current===auth.attemptId)return;}if(openedAttemptId.current===auth.attemptId)return;openedAttemptId.current=auth.attemptId;open(auth.verificationUrl);},[auth?.attemptId,auth?.state,auth?.verificationUrl]);
-  useEffect(()=>{if(!visible||auth?.state!=='awaiting'||!auth.expiresAt){setExpiresIn(auth?.state==='awaiting'&&auth.expiresAt?Math.max(0,Math.ceil((auth.expiresAt-Date.now())/1000)):0);return;}const update=()=>setExpiresIn(Math.max(0,Math.ceil((auth.expiresAt!-Date.now())/1000)));update();const timer=window.setInterval(update,1000);return()=>window.clearInterval(timer);},[auth?.expiresAt,auth?.state,visible]);
-  const runAuthAction=async(action:'start'|'cancel')=>{setAuthBusy(true);setError('');try{const result=await api<GitHubAuth>('/api/github/auth',{action});setAuth(result);if(result.authenticated)void loadGithub();}catch(e){setError(String(e));}finally{setAuthBusy(false);}};
-  const createRepository=async()=>{if(!selectedWorkspaceId||!selectedWorkspace){setError('Select a workspace with an existing working directory first.');return;}setCreateBusy(true);setError('');try{await api('/api/git-workspace/init',{projectId:selectedWorkspaceId});await loadLocal({historyOffset:0,branchOffset:0});void loadGithub();}catch(cause){setError(String(cause));}finally{setCreateBusy(false);}};
-  const openInitialCommit=async()=>{if(!initialCommitProjectId||selectedWorkspace?.needsLocation){setError('Restore this workspace’s working directory before reviewing an initial commit.');return;}setInitialCommitBusy(true);setError('');try{const preview=await api<unknown>(`/api/git-workspace/initial-commit-preview?projectId=${encodeURIComponent(initialCommitProjectId)}`);const normalized=normalizeWorkspace({...data,initialCommit:preview}).initialCommit;if(!normalized?.eligible||!normalized.previewToken){setError('This repository is no longer ready for an initial commit. Refresh the Git workspace and try again.');await loadLocal({historyOffset:0,branchOffset:0});return;}setInitialCommitPreview(normalized);setInitialCommitMessage('Initial commit');setInitialCommitOpen(true);}catch(cause){setError(String(cause));}finally{setInitialCommitBusy(false);}};
-  const confirmInitialCommit=async()=>{if(!initialCommitProjectId||!initialCommitPreview?.previewToken)return;setInitialCommitBusy(true);setError('');try{await api('/api/git-workspace/initial-commit',{projectId:initialCommitProjectId,previewToken:initialCommitPreview.previewToken,message:initialCommitMessage});setInitialCommitOpen(false);setInitialCommitPreview(null);await loadLocal({historyOffset:0,branchOffset:0});void loadGithub();}catch(cause){setError(String(cause));await loadLocal({historyOffset:0,branchOffset:0});}finally{setInitialCommitBusy(false);}};
-  const openVerificationPage=()=>{if(!auth?.verificationUrl)return;const open=openBrowserTabRef.current;if(open)open(auth.verificationUrl);else setError('Open a new Browser workspace to continue GitHub sign-in.');};
-  const copyDeviceCode=async()=>{if(!auth?.userCode)return;try{await navigator.clipboard.writeText(auth.userCode);setError('GitHub device code copied.');}catch{setError('Could not copy the device code. Select and copy it directly.');}};
-  const formatCountdown=(seconds:number)=>`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
-  const filteredBranches=useMemo(()=>{const term=query.trim().toLocaleLowerCase();return (data?.branches||[]).filter(branch=>!term||`${branch.name} ${branch.upstream||''}`.toLocaleLowerCase().includes(term));},[data?.branches,query]);
-  const filteredCommits=useMemo(()=>{const term=query.trim().toLocaleLowerCase();return (data?.commits||[]).filter(commit=>!term||`${commit.subject} ${commit.author} ${commit.refs.join(' ')}`.toLocaleLowerCase().includes(term));},[data?.commits,query]);
-  const gh=data?.github;const commits=data?.commits||[];const graph=useMemo(()=>layoutCommitGraph(commits,filteredCommits),[commits,filteredCommits]);
-  const signedIn=!!auth?.authenticated||!!gh?.authenticated;
-  const authActive=auth?.state==='starting'||auth?.state==='awaiting';
-  return <section ref={sectionRef} className="git-workspace" aria-label="Local Git and GitHub workspace">
-    <header className="git-workspace-header"><div className="git-title-icon"><GitBranch size={17}/></div><div className="git-title"><strong>{gh?.repository?.name||data?.repositoryRoot?.split(/[\\/]/).filter(Boolean).at(-1)||'Local Git workspace'}</strong><span title={data?.repositoryRoot||data?.authorizedRoot}>{data?.repositoryRoot||data?.detail||'Loading repository metadata…'}</span></div>{workspaces.length>0&&<label className="git-workspace-selector"><span>Workspace</span><select aria-label="Git workspace" value={selectedWorkspaceId} onChange={event=>{setSelectedWorkspaceId(event.currentTarget.value);setData(null);setError('');}}>{workspaces.filter(workspace=>!workspace.needsLocation).map(workspace=><option key={workspace.id} value={workspace.id} title={workspace.projectRoot}>{workspaceOptionLabel(workspace,workspaces)}</option>)}</select></label>}<div className="git-auth-controls"><span className={`git-auth-state ${signedIn?'authenticated':''}`}><i/>{githubBusy||authBusy?'GitHub loading':signedIn?`GitHub${auth?.account||gh?.account?` · ${auth?.account||gh?.account}`:''}`:auth?.state==='awaiting'?'Waiting for authorization':auth?.state==='starting'?'Starting sign-in':auth?.cliAvailable===false?'GitHub CLI unavailable':gh?.available?'GitHub not signed in':'Local only'}</span>{!signedIn&&!authActive&&<button className="git-sign-in-button" type="button" disabled={authBusy||githubBusy||auth?.cliAvailable===false} onClick={()=>void runAuthAction('start')}>{auth?.state==='failed'||auth?.state==='expired'||auth?.state==='cancelled'?'Retry sign in':'Sign in with GitHub'}</button>}</div><button className="git-icon-button" aria-label="Refresh Git data" disabled={busy||githubBusy} onClick={()=>{void refreshLocal();void loadGithub();void loadAuth();}}><RefreshCw className={busy||githubBusy?'spinning':''} size={15}/></button></header>
-    {error&&<div className="git-error" role="alert"><AlertCircle size={15}/>{error}</div>}
-    {data?.initialCommit?.eligible&&!initialCommitOpen&&<div className="git-initial-commit-banner"><div><strong>This repository has no commits yet</strong><span>Review the project files before creating its first commit.</span></div><button type="button" onClick={()=>void openInitialCommit()} disabled={initialCommitBusy||!!selectedWorkspace?.needsLocation}>{initialCommitBusy?<LoaderCircle className="spinning" size={14}/>:<GitBranch size={14}/>}Create initial commit</button></div>}
-    {initialCommitOpen&&initialCommitPreview&&<section className="git-initial-commit-review" role="dialog" aria-modal="true" aria-label="Create initial commit">
-      <header><div><strong>Review initial commit</strong><span>Only the listed, non-ignored project paths are included. Existing staged content stays staged for this commit.</span></div><button type="button" aria-label="Close initial commit review" onClick={()=>setInitialCommitOpen(false)} disabled={initialCommitBusy}><X size={15}/></button></header>
-      <label>Commit message<input aria-label="Commit message" value={initialCommitMessage} maxLength={500} onChange={event=>setInitialCommitMessage(event.currentTarget.value)}/></label>
-      {initialCommitPreview.empty?<p className="git-initial-commit-empty">No non-ignored files are present. This will create an empty initial commit.</p>:<>
-        <p className="git-initial-commit-count">{initialCommitPreview.totalFiles} {initialCommitPreview.totalFiles===1?'path':'paths'} will be included on <code>{initialCommitPreview.branch}</code>{initialCommitPreview.truncated?`; showing the first ${initialCommitPreview.files.length}.`:'.'}</p>
-        <ul aria-label="Files included in initial commit">{initialCommitPreview.files.map(file=><li key={file.path}><code title={file.path}>{file.path}</code><span>{file.status}</span></li>)}</ul>
-        {initialCommitPreview.truncated&&<p className="git-initial-commit-count">The remaining {initialCommitPreview.totalFiles-initialCommitPreview.files.length} paths will also be included.</p>}
-      </>}
-      <footer><button type="button" onClick={()=>setInitialCommitOpen(false)} disabled={initialCommitBusy}>Cancel</button><button type="button" className="primary" onClick={()=>void confirmInitialCommit()} disabled={initialCommitBusy||!initialCommitMessage.trim()||!initialCommitPreview.previewToken}>{initialCommitBusy?<LoaderCircle className="spinning" size={14}/>:<Check size={14}/>}Create initial commit</button></footer>
-    </section>}
-    {auth&&!auth.authenticated&&auth.state!=='idle'&&<section className={`github-device-panel ${auth.state}`} aria-live="polite" aria-label="GitHub sign-in status">
-      {auth.state==='starting'&&<><LoaderCircle className="spinning" size={18}/><div><strong>Starting GitHub sign-in</strong><span>GitHub CLI is preparing a one-time device code.</span></div><button type="button" disabled={authBusy} onClick={()=>void runAuthAction('cancel')}>Cancel</button></>}
-      {auth.state==='awaiting'&&<><div className="github-device-copy"><strong>Authorize GitHub CLI</strong><span>Enter this one-time code on the GitHub page opened in a Browser workspace.</span><code aria-label="GitHub device code">{auth.userCode}</code><small>This attempt expires in {formatCountdown(expiresIn)}.</small></div><div className="github-device-actions"><button type="button" onClick={()=>void copyDeviceCode()}>Copy code</button><button type="button" onClick={openVerificationPage}>Open verification page</button><button type="button" disabled={authBusy} onClick={()=>void runAuthAction('cancel')}>Cancel</button></div></>}
-      {auth.state==='failed'&&<><AlertCircle size={18}/><div><strong>GitHub sign-in failed</strong><span>{auth.detail||'Check the GitHub CLI and network, then try again.'}</span></div></>}
-      {auth.state==='expired'&&<><AlertCircle size={18}/><div><strong>GitHub sign-in expired</strong><span>{auth.detail||'Start a new sign-in attempt to get another code.'}</span></div></>}
-      {auth.state==='cancelled'&&<><X size={18}/><div><strong>GitHub sign-in cancelled</strong><span>You can start a new sign-in attempt at any time.</span></div></>}
-    </section>}
-    {gh?.detail&&<div className="git-privacy-note"><ShieldCheck size={14}/><span>{gh.detail} Browser cookies are stored separately in this device’s Electron profile and are not used for GitHub authentication.</span></div>}
-    <nav className="git-view-tabs" aria-label="Git workspace views">{([['overview','Overview'],['branches','Branches'],['worktrees','Worktrees'],['history','History'],['pullRequests','Pull requests'],['issues','Issues']] as const).map(([id,label])=><button key={id} className={view===id?'selected':''} aria-current={view===id?'page':undefined} onClick={()=>{setView(id);setQuery('');}}>{label}{id==='branches'&&data&&<span>{data.branches.length}/{data.branchPage.totalIsExact===false?'100k+':data.branchPage.totalCount}</span>}{id==='worktrees'&&data&&<span>{data.worktrees.length}</span>}</button>)}</nav>
-    {!data?<div className="git-empty"><LoaderCircle className="spinning" size={23}/><span>Reading local repository…</span></div>:data.repositoryStatus==='missing'?<div className="git-empty git-no-repository"><GitBranch size={25}/><strong>This workspace does not have a Git repository</strong><span>Create a local Git repository in {selectedWorkspace?workspaceOptionLabel(selectedWorkspace,workspaces):'this workspace'} to begin tracking changes. Existing files stay in place.</span><button className="git-create-repository" type="button" disabled={createBusy||!selectedWorkspaceId||selectedWorkspace?.needsLocation} onClick={()=>void createRepository()}>{createBusy?<LoaderCircle className="spinning" size={14}/>:<GitBranch size={14}/>}Create repository</button></div>:!data.available?<div className="git-empty"><GitBranch size={25}/><strong>{data.detail}</strong><span>{data.repositoryRoot
-        ? 'In Settings, select the repository root itself or a workspace folder that contains it. No files or credentials are sent to Codex from this view.'
-        : 'Choose a workspace folder inside a local Git repository. No files or credentials are sent to Codex from this view.'}</span></div>:<>
-      {view==='overview'&&<div className="git-overview"><div className="git-summary-row"><div><span>Current branch</span><strong><GitBranch size={15}/>{data.currentBranch||'Detached HEAD'}</strong></div><div><span>Local branches loaded</span><strong>{data.branches.filter(item=>!item.remote).length}</strong></div><div><span>Worktrees</span><strong>{data.worktrees.length}</strong></div><div><span>Recent commits loaded</span><strong>{commits.length}</strong></div></div><div className="git-overview-grid"><div><div className="git-section-heading"><h2>Branches</h2><button onClick={()=>setView('branches')}>View all <ArrowUpRight size={13}/></button></div><BranchList branches={data.branches.slice(0,8)}/></div><div><div className="git-section-heading"><h2>Worktrees</h2><button onClick={()=>setView('worktrees')}>View all <ArrowUpRight size={13}/></button></div><WorktreeList worktrees={data.worktrees.slice(0,4)}/></div></div><div className="git-section-heading history-heading"><h2>Commit history</h2><button onClick={()=>setView('history')}>Open graph <ArrowUpRight size={13}/></button></div><CommitGraph commits={commits.slice(0,12)} layout={layoutCommitGraph(commits,commits.slice(0,12))}/></div>}
-      {view==='branches'&&<div className="git-list-view"><div className="git-view-heading"><div><h2>Branches</h2><p>Showing {data.branches.length} of {data.branchPage.totalIsExact===false?'at least 100,000':data.branchPage.totalCount} local branches and fetched remote refs.</p></div><Filter value={query} onChange={setQuery}/></div><BranchList branches={filteredBranches}/>{data.branchPage.hasMore&&<button className="git-load-more" disabled={busy} onClick={()=>void loadLocal({historyOffset:data.history.offset,branchOffset:data.branchPage.nextOffset||0,appendBranches:true,appendHistory:true})}>{busy?<LoaderCircle className="spinning" size={14}/>:<ArrowDown size={14}/>}Load next 100 branches</button>}{data.branchPage.limitReached&&<div className="git-limit-note">Showing the first 100,000 refs. The branch safety limit has been reached.</div>}</div>}
-      {view==='worktrees'&&<div className="git-list-view"><div className="git-view-heading"><div><h2>Worktrees</h2><p>Linked checkouts reported by local Git.</p></div></div><WorktreeList worktrees={data.worktrees}/></div>}
-      {view==='history'&&<div className="git-list-view git-history-view"><div className="git-view-heading"><div><h2>Commit history</h2><p>Loaded {data.commits.length} commits · ordered by topology, newest first.</p></div><Filter value={query} onChange={setQuery}/></div><CommitGraph commits={filteredCommits} layout={graph}/>{data.history.hasMore&&<button className="git-load-more" disabled={busy} onClick={()=>void loadLocal({historyOffset:data.history.nextOffset||0,branchOffset:data.branchPage.offset,appendHistory:true,appendBranches:true})}>{busy?<LoaderCircle className="spinning" size={14}/>:<ArrowDown size={14}/>}Load next 100 commits</button>}{data.history.limitReached&&<div className="git-limit-note">Showing the first 10,000 commits. The history safety limit has been reached.</div>}</div>}
-      {(view==='pullRequests'||view==='issues')&&<GitHubLists kind={view} gh={gh} loading={githubBusy} cliAuthenticated={!!auth?.authenticated}/>}
-    </>}</section>;
-}
-
-function Filter({value,onChange}:{value:string;onChange:(value:string)=>void}){return <label className="git-filter"><Search size={14}/><input value={value} onChange={event=>onChange(event.currentTarget.value)} placeholder="Filter" aria-label="Filter Git data"/></label>;}
-const BranchList=memo(function BranchList({branches}:{branches:Branch[]}){if(!branches.length)return <div className="git-empty-row">No branches match this filter.</div>;return <div className="git-branch-list">{branches.map(branch=><div className="git-branch-row" key={branch.name}><span className={`git-branch-marker ${branch.current?'current':''}`}><GitBranch size={14}/></span><strong>{branch.name}</strong>{branch.current&&<span className="git-current-tag">HEAD</span>}{branch.remote&&<span className="git-remote-tag">Remote</span>}{branch.upstream&&<span className="git-upstream">↗ {branch.upstream}</span>}<code>{branch.hash}</code></div>)}</div>;});
-const WorktreeList=memo(function WorktreeList({worktrees}:{worktrees:Worktree[]}){if(!worktrees.length)return <div className="git-empty-row">No Git worktrees were reported.</div>;return <div className="git-worktree-list">{worktrees.map(item=><article className="git-worktree-row" key={item.path}><GitFork size={15}/><div><strong>{item.branch||'Detached HEAD'}</strong><span title={item.path}>{item.path}</span></div><code>{hash(item.head||'')}</code>{item.locked&&<span className="git-worktree-badge">Locked</span>}{item.prunable&&<span className="git-worktree-badge warning">Prunable</span>}</article>)}</div>;});
-const CommitGraph=memo(function CommitGraph({commits,layout}:{commits:Commit[];layout:GraphLayout}){
-  if(!commits.length)return <div className="git-empty-row">No commits match this filter.</div>;
-  const laneWidth=14;
-  const width=layout.laneCount*laneWidth+10;
-  const svgWidth=width+5;
-  const height=commits.length*layout.rowHeight;
-  const style={'--git-graph-width':`${width}px`,'--git-graph-height':`${height}px`,'--git-graph-row-height':`${layout.rowHeight}px`} as CSSProperties;
-  return <div className="git-commit-graph" style={style}>
-    <svg className="git-graph-lines" style={{width:svgWidth,height}} viewBox={`0 0 ${svgWidth} ${height}`} aria-hidden="true">
-      {layout.positions.map((lane,row)=>{
-        const x=5+lane*laneWidth;
-        const y=(row+.5)*layout.rowHeight;
-        return <path key={`commit-${row}`} className={row===0?'git-commit-connector head-connector':'git-commit-connector'} d={`M ${x} ${y} H ${svgWidth}`}/>;
-      })}
-      {layout.edges.map((edge,index)=>{
-        const x1=5+edge.fromLane*laneWidth;
-        const x2=5+edge.toLane*laneWidth;
-        const y1=(edge.row+.5)*layout.rowHeight;
-        const y2=edge.parentRow===null?height-3:(edge.parentRow+.5)*layout.rowHeight;
-        const control=Math.max(5,Math.min(18,(y2-y1)/2));
-        return <path key={`${edge.row}-${edge.parentHash}-${index}`} className={edge.parentRow===null?'external-edge':edge.mergeParent?'merge-edge':'first-parent-edge'} d={`M ${x1} ${y1} C ${x1} ${y1+control}, ${x2} ${y2-control}, ${x2} ${y2}`}><title>{edge.mergeParent?'Merge parent':'Parent'} {hash(edge.parentHash)}{edge.parentRow===null?' (outside the visible history)':''}</title></path>;
-      })}
-    </svg>
-    {commits.map((commit,row)=>{
-      const lane=layout.positions[row];
-      return <article className="git-commit-row" key={commit.hash}>
-        <div className="git-graph-space" style={{width}} aria-hidden="true">
-          <i className={row===0?'head-node':''} style={{left:5+lane*laneWidth}}/>
-          {layout.edges.filter(edge=>edge.row===row&&edge.parentRow===null).map(edge=><span className="git-external-parent" key={edge.parentHash} title={`Parent ${edge.parentHash} is outside the visible history`}>{hash(edge.parentHash)}</span>)}
+function LocalGitWorkspaceContent({
+  taskId,
+  projectId,
+  projectRoot,
+  workspaces = [],
+  focusUrl,
+  active = true,
+  onOpenBrowserTab,
+}: Props) {
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(
+    projectId || workspaces[0]?.id || ''
+  );
+  const [data, setData] = useState<Workspace | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [initialCommitBusy, setInitialCommitBusy] = useState(false);
+  const [initialCommitOpen, setInitialCommitOpen] = useState(false);
+  const [initialCommitMessage, setInitialCommitMessage] = useState('Initial commit');
+  const [initialCommitPreview, setInitialCommitPreview] = useState<InitialCommitPreview | null>(
+    null
+  );
+  const [githubBusy, setGithubBusy] = useState(true);
+  const [auth, setAuth] = useState<GitHubAuth | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [expiresIn, setExpiresIn] = useState(0);
+  const [view, setView] = useState<
+    'overview' | 'branches' | 'worktrees' | 'history' | 'pullRequests' | 'issues'
+  >('overview');
+  const [query, setQuery] = useState('');
+  useEffect(() => {
+    if (workspaces.length && !workspaces.some((workspace) => workspace.id === selectedWorkspaceId))
+      setSelectedWorkspaceId(
+        projectId && workspaces.some((workspace) => workspace.id === projectId)
+          ? projectId
+          : workspaces[0]!.id
+      );
+  }, [projectId, selectedWorkspaceId, workspaces]);
+  const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId);
+  const selectedRoot = selectedWorkspace?.projectRoot || projectRoot;
+  const workspaceRoute = workspaces.length > 0;
+  const route =
+    taskId && !workspaceRoute
+      ? '/api/tasks/' + encodeURIComponent(taskId) + '/git-workspace'
+      : '/api/git-workspace';
+  const capturedRootQuery =
+    workspaceRoute && selectedWorkspaceId
+      ? 'projectId=' + encodeURIComponent(selectedWorkspaceId) + '&'
+      : !taskId && projectId
+        ? 'projectId=' + encodeURIComponent(projectId) + '&'
+        : '';
+  const capturedGithubQuery =
+    workspaceRoute && selectedWorkspaceId
+      ? '?projectId=' + encodeURIComponent(selectedWorkspaceId)
+      : !taskId && projectId
+        ? '?projectId=' + encodeURIComponent(projectId)
+        : '';
+  const initialCommitProjectId = workspaceRoute
+    ? selectedWorkspaceId
+    : !taskId
+      ? projectId || ''
+      : '';
+  const initialCommitRoute = initialCommitProjectId
+    ? `/api/git-workspace/initial-commit-preview?projectId=${encodeURIComponent(initialCommitProjectId)}`
+    : undefined;
+  const workspaceKey =
+    (workspaceRoute ? selectedWorkspaceId : taskId || projectId || '') + '|' + (selectedRoot || '');
+  const workspaceKeyRef = useRef(workspaceKey);
+  workspaceKeyRef.current = workspaceKey;
+  const sectionRef = useRef<HTMLElement>(null);
+  const visible = useWorkspaceVisibility(sectionRef, active);
+  const localRequest = useRef<{
+    key: string;
+    controller: AbortController;
+    promise: Promise<void>;
+  } | null>(null);
+  const githubRequest = useRef<{
+    key: string;
+    controller: AbortController;
+    promise: Promise<void>;
+  } | null>(null);
+  const authRequest = useRef<{
+    controller: AbortController;
+    signal: AbortSignal;
+    promise: Promise<void>;
+  } | null>(null);
+  const openedAttemptId = useRef('');
+  const openBrowserTabRef = useRef(onOpenBrowserTab);
+  openBrowserTabRef.current = onOpenBrowserTab;
+  const mergeBy = <T,>(current: T[], incoming: T[], key: (item: T) => string) => {
+    const map = new Map(current.map((item) => [key(item), item]));
+    for (const item of incoming) map.set(key(item), item);
+    return [...map.values()];
+  };
+  const loadLocal = useCallback(
+    ({
+      historyOffset = 0,
+      branchOffset = 0,
+      appendHistory = false,
+      appendBranches = false,
+      coalesceOnly = false,
+      signal,
+    }: {
+      historyOffset?: number;
+      branchOffset?: number;
+      appendHistory?: boolean;
+      appendBranches?: boolean;
+      coalesceOnly?: boolean;
+      signal?: AbortSignal;
+    } = {}) => {
+      const key = workspaceKey;
+      const requestKey = `${key}\u0000${historyOffset}\u0000${branchOffset}`;
+      const pending = localRequest.current;
+      if (pending?.key === requestKey && !pending.controller.signal.aborted) return pending.promise;
+      if (coalesceOnly && pending && !pending.controller.signal.aborted) return pending.promise;
+      pending?.controller.abort();
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      if (signal?.aborted) controller.abort();
+      else signal?.addEventListener('abort', abort, { once: true });
+      setBusy(true);
+      setError('');
+      const promise = (async () => {
+        try {
+          const fresh = normalizeWorkspace(
+            await api<unknown>(
+              route +
+                '?' +
+                capturedRootQuery +
+                'offset=' +
+                historyOffset +
+                '&branchOffset=' +
+                branchOffset,
+              undefined,
+              controller.signal
+            )
+          );
+          if (initialCommitRoute && !taskId && fresh.available) {
+            const preview = await api<unknown>(
+              initialCommitRoute,
+              undefined,
+              controller.signal
+            ).catch(() => undefined);
+            if (preview)
+              fresh.initialCommit = normalizeWorkspace({
+                ...fresh,
+                initialCommit: preview,
+              }).initialCommit;
+          }
+          if (controller.signal.aborted || workspaceKeyRef.current !== key) return;
+          setData((current) => {
+            if (!current || current.repositoryRoot !== fresh.repositoryRoot) return fresh;
+            return {
+              ...fresh,
+              commits: appendHistory
+                ? mergeBy(current.commits, fresh.commits, (item) => item.hash)
+                : fresh.commits,
+              branches: appendBranches
+                ? mergeBy(current.branches, fresh.branches, (item) => item.name)
+                : fresh.branches,
+              worktrees: fresh.worktrees,
+              github: current.github,
+            };
+          });
+        } catch (cause) {
+          if (!controller.signal.aborted && workspaceKeyRef.current === key)
+            setError(String(cause));
+        } finally {
+          signal?.removeEventListener('abort', abort);
+          if (localRequest.current?.controller === controller) localRequest.current = null;
+          if (!controller.signal.aborted && workspaceKeyRef.current === key) setBusy(false);
+        }
+      })();
+      localRequest.current = { key: requestKey, controller, promise };
+      return promise;
+    },
+    [capturedRootQuery, initialCommitRoute, route, taskId, workspaceKey]
+  );
+  const refreshLocal = useCallback(
+    (coalesceOnly = false) => {
+      const historyOffset = data?.history.offset || 0;
+      const branchOffset = data?.branchPage.offset || 0;
+      return loadLocal({
+        historyOffset,
+        branchOffset,
+        appendHistory: historyOffset > 0,
+        appendBranches: branchOffset > 0,
+        coalesceOnly,
+      });
+    },
+    [data?.history.offset, data?.branchPage.offset, loadLocal]
+  );
+  const loadGithub = useCallback(
+    (signal?: AbortSignal) => {
+      const key = workspaceKey;
+      const pending = githubRequest.current;
+      if (pending?.key === key && !pending.controller.signal.aborted) return pending.promise;
+      pending?.controller.abort();
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      if (signal?.aborted) controller.abort();
+      else signal?.addEventListener('abort', abort, { once: true });
+      setGithubBusy(true);
+      const promise = (async () => {
+        try {
+          const result = await api<GitHub>(
+            route + '/github' + capturedGithubQuery,
+            undefined,
+            controller.signal
+          );
+          if (!controller.signal.aborted && workspaceKeyRef.current === key)
+            setData((current) => (current ? { ...current, github: result } : current));
+        } catch {
+          if (!controller.signal.aborted && workspaceKeyRef.current === key)
+            setData((current) =>
+              current
+                ? {
+                    ...current,
+                    github: {
+                      available: false,
+                      authenticated: false,
+                      detail:
+                        'GitHub metadata is temporarily unavailable. Local Git remains available.',
+                    },
+                  }
+                : current
+            );
+        } finally {
+          signal?.removeEventListener('abort', abort);
+          if (githubRequest.current?.controller === controller) githubRequest.current = null;
+          if (!controller.signal.aborted && workspaceKeyRef.current === key) setGithubBusy(false);
+        }
+      })();
+      githubRequest.current = { key, controller, promise };
+      return promise;
+    },
+    [capturedGithubQuery, route, workspaceKey]
+  );
+  const loadAuth = useCallback(async (signal?: AbortSignal) => {
+    if (signal?.aborted) return;
+    const pending = authRequest.current;
+    if (pending && !pending.signal.aborted) return pending.promise;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    const promise = (async () => {
+      try {
+        const result = await api<GitHubAuth>(
+          '/api/github/auth',
+          { action: 'status' },
+          controller.signal
+        );
+        if (!controller.signal.aborted) setAuth(result);
+      } catch (cause) {
+        if (!controller.signal.aborted) setError(String(cause));
+      } finally {
+        signal?.removeEventListener('abort', abort);
+        if (authRequest.current?.controller === controller) authRequest.current = null;
+      }
+    })();
+    authRequest.current = { controller, signal: controller.signal, promise };
+    return promise;
+  }, []);
+  useEffect(() => {
+    if (!visible) return;
+    const controller = new AbortController();
+    setData(null);
+    setError('');
+    setBusy(true);
+    setGithubBusy(true);
+    setView('overview');
+    setQuery('');
+    void loadLocal({ signal: controller.signal });
+    void loadGithub(controller.signal);
+    void loadAuth(controller.signal);
+    return () => {
+      controller.abort();
+      localRequest.current?.controller.abort();
+      githubRequest.current?.controller.abort();
+      authRequest.current?.controller.abort();
+    };
+  }, [loadAuth, loadGithub, loadLocal, visible, workspaceKey]);
+  useEffect(() => {
+    if (!visible) return;
+    void refreshLocal(true);
+    const onFocus = () => void refreshLocal(true);
+    window.addEventListener('focus', onFocus);
+    const timer = window.setInterval(() => void refreshLocal(true), 20_000);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(timer);
+    };
+  }, [refreshLocal, visible]);
+  useEffect(() => {
+    if (focusUrl) {
+      setView(
+        focusUrl.includes('/pull/')
+          ? 'pullRequests'
+          : focusUrl.includes('/issues/')
+            ? 'issues'
+            : 'overview'
+      );
+      setQuery('');
+    }
+  }, [focusUrl]);
+  useEffect(() => {
+    if (!visible || (auth?.state !== 'starting' && auth?.state !== 'awaiting')) return;
+    const timer = window.setInterval(() => void loadAuth(), 1500);
+    return () => window.clearInterval(timer);
+  }, [auth?.state, loadAuth, visible]);
+  useEffect(() => {
+    if (auth?.state !== 'awaiting' || !auth.attemptId || !auth.verificationUrl) return;
+    const open = openBrowserTabRef.current;
+    if (!open) return;
+    const storageKey = `opnex:github-auth-page:${auth.attemptId}`;
+    const legacyStorageKey = `pseudoharness:github-auth-page:${auth.attemptId}`;
+    try {
+      if (sessionStorage.getItem(storageKey) || sessionStorage.getItem(legacyStorageKey)) return;
+      sessionStorage.setItem(storageKey, 'opened');
+    } catch {
+      if (openedAttemptId.current === auth.attemptId) return;
+    }
+    if (openedAttemptId.current === auth.attemptId) return;
+    openedAttemptId.current = auth.attemptId;
+    open(auth.verificationUrl);
+  }, [auth?.attemptId, auth?.state, auth?.verificationUrl]);
+  useEffect(() => {
+    if (!visible || auth?.state !== 'awaiting' || !auth.expiresAt) {
+      setExpiresIn(
+        auth?.state === 'awaiting' && auth.expiresAt
+          ? Math.max(0, Math.ceil((auth.expiresAt - Date.now()) / 1000))
+          : 0
+      );
+      return;
+    }
+    const update = () =>
+      setExpiresIn(Math.max(0, Math.ceil((auth.expiresAt! - Date.now()) / 1000)));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [auth?.expiresAt, auth?.state, visible]);
+  const runAuthAction = async (action: 'start' | 'cancel') => {
+    setAuthBusy(true);
+    setError('');
+    try {
+      const result = await api<GitHubAuth>('/api/github/auth', { action });
+      setAuth(result);
+      if (result.authenticated) void loadGithub();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+  const createRepository = async () => {
+    if (!selectedWorkspaceId || !selectedWorkspace) {
+      setError('Select a workspace with an existing working directory first.');
+      return;
+    }
+    setCreateBusy(true);
+    setError('');
+    try {
+      await api('/api/git-workspace/init', { projectId: selectedWorkspaceId });
+      await loadLocal({ historyOffset: 0, branchOffset: 0 });
+      void loadGithub();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+  const openInitialCommit = async () => {
+    if (!initialCommitProjectId || selectedWorkspace?.needsLocation) {
+      setError('Restore this workspace’s working directory before reviewing an initial commit.');
+      return;
+    }
+    setInitialCommitBusy(true);
+    setError('');
+    try {
+      const preview = await api<unknown>(
+        `/api/git-workspace/initial-commit-preview?projectId=${encodeURIComponent(initialCommitProjectId)}`
+      );
+      const normalized = normalizeWorkspace({ ...data, initialCommit: preview }).initialCommit;
+      if (!normalized?.eligible || !normalized.previewToken) {
+        setError(
+          'This repository is no longer ready for an initial commit. Refresh the Git workspace and try again.'
+        );
+        await loadLocal({ historyOffset: 0, branchOffset: 0 });
+        return;
+      }
+      setInitialCommitPreview(normalized);
+      setInitialCommitMessage('Initial commit');
+      setInitialCommitOpen(true);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setInitialCommitBusy(false);
+    }
+  };
+  const confirmInitialCommit = async () => {
+    if (!initialCommitProjectId || !initialCommitPreview?.previewToken) return;
+    setInitialCommitBusy(true);
+    setError('');
+    try {
+      await api('/api/git-workspace/initial-commit', {
+        projectId: initialCommitProjectId,
+        previewToken: initialCommitPreview.previewToken,
+        message: initialCommitMessage,
+      });
+      setInitialCommitOpen(false);
+      setInitialCommitPreview(null);
+      await loadLocal({ historyOffset: 0, branchOffset: 0 });
+      void loadGithub();
+    } catch (cause) {
+      setError(String(cause));
+      await loadLocal({ historyOffset: 0, branchOffset: 0 });
+    } finally {
+      setInitialCommitBusy(false);
+    }
+  };
+  const openVerificationPage = () => {
+    if (!auth?.verificationUrl) return;
+    const open = openBrowserTabRef.current;
+    if (open) open(auth.verificationUrl);
+    else setError('Open a new Browser workspace to continue GitHub sign-in.');
+  };
+  const copyDeviceCode = async () => {
+    if (!auth?.userCode) return;
+    try {
+      await navigator.clipboard.writeText(auth.userCode);
+      setError('GitHub device code copied.');
+    } catch {
+      setError('Could not copy the device code. Select and copy it directly.');
+    }
+  };
+  const formatCountdown = (seconds: number) =>
+    `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  const filteredBranches = useMemo(() => {
+    const term = query.trim().toLocaleLowerCase();
+    return (data?.branches || []).filter(
+      (branch) =>
+        !term || `${branch.name} ${branch.upstream || ''}`.toLocaleLowerCase().includes(term)
+    );
+  }, [data?.branches, query]);
+  const filteredCommits = useMemo(() => {
+    const term = query.trim().toLocaleLowerCase();
+    return (data?.commits || []).filter(
+      (commit) =>
+        !term ||
+        `${commit.subject} ${commit.author} ${commit.refs.join(' ')}`
+          .toLocaleLowerCase()
+          .includes(term)
+    );
+  }, [data?.commits, query]);
+  const gh = data?.github;
+  const commits = data?.commits || [];
+  const overviewCommits = useMemo(() => commits.slice(0, 12), [commits]);
+  const overviewGraph = useMemo(
+    () => layoutCommitGraph(commits, overviewCommits),
+    [commits, overviewCommits]
+  );
+  const graph = useMemo(
+    () => (view === 'history' ? layoutCommitGraph(commits, filteredCommits) : undefined),
+    [commits, filteredCommits, view]
+  );
+  const signedIn = !!auth?.authenticated || !!gh?.authenticated;
+  const authActive = auth?.state === 'starting' || auth?.state === 'awaiting';
+  return (
+    <section ref={sectionRef} className='git-workspace' aria-label='Local Git and GitHub workspace'>
+      <header className='git-workspace-header'>
+        <div className='git-title-icon'>
+          <GitBranch size={17} />
         </div>
-        <div className="git-commit-copy"><strong title={commit.subject}>{commit.subject||'(no commit message)'}</strong><span>{commit.author} · {stamp(commit.date)}</span></div>
-        <div className="git-commit-refs">{commit.refs.slice(0,3).map(ref=><span key={ref}>{ref}</span>)}</div>
-        <code title={commit.hash}>{hash(commit.hash)}</code>
-      </article>;
-    })}
-  </div>;
+        <div className='git-title'>
+          <strong>
+            {gh?.repository?.name ||
+              data?.repositoryRoot?.split(/[\\/]/).filter(Boolean).at(-1) ||
+              'Local Git workspace'}
+          </strong>
+          <span title={data?.repositoryRoot || data?.authorizedRoot}>
+            {data?.repositoryRoot || data?.detail || 'Loading repository metadata…'}
+          </span>
+        </div>
+        {workspaces.length > 0 && (
+          <label className='git-workspace-selector'>
+            <span>Workspace</span>
+            <select
+              aria-label='Git workspace'
+              value={selectedWorkspaceId}
+              onChange={(event) => {
+                setSelectedWorkspaceId(event.currentTarget.value);
+                setData(null);
+                setError('');
+              }}
+            >
+              {workspaces
+                .filter((workspace) => !workspace.needsLocation)
+                .map((workspace) => (
+                  <option key={workspace.id} value={workspace.id} title={workspace.projectRoot}>
+                    {workspaceOptionLabel(workspace, workspaces)}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
+        <div className='git-auth-controls'>
+          <span className={`git-auth-state ${signedIn ? 'authenticated' : ''}`}>
+            <i />
+            {githubBusy || authBusy
+              ? 'GitHub loading'
+              : signedIn
+                ? `GitHub${auth?.account || gh?.account ? ` · ${auth?.account || gh?.account}` : ''}`
+                : auth?.state === 'awaiting'
+                  ? 'Waiting for authorization'
+                  : auth?.state === 'starting'
+                    ? 'Starting sign-in'
+                    : auth?.cliAvailable === false
+                      ? 'GitHub CLI unavailable'
+                      : gh?.available
+                        ? 'GitHub not signed in'
+                        : 'Local only'}
+          </span>
+          {!signedIn && !authActive && (
+            <button
+              className='git-sign-in-button'
+              type='button'
+              disabled={authBusy || githubBusy || auth?.cliAvailable === false}
+              onClick={() => void runAuthAction('start')}
+            >
+              {auth?.state === 'failed' || auth?.state === 'expired' || auth?.state === 'cancelled'
+                ? 'Retry sign in'
+                : 'Sign in with GitHub'}
+            </button>
+          )}
+        </div>
+        <button
+          className='git-icon-button'
+          aria-label='Refresh Git data'
+          disabled={busy || githubBusy}
+          onClick={() => {
+            void refreshLocal();
+            void loadGithub();
+            void loadAuth();
+          }}
+        >
+          <RefreshCw className={busy || githubBusy ? 'spinning' : ''} size={15} />
+        </button>
+      </header>
+      {error && (
+        <div className='git-error' role='alert'>
+          <AlertCircle size={15} />
+          {error}
+        </div>
+      )}
+      {data?.initialCommit?.eligible && !initialCommitOpen && (
+        <div className='git-initial-commit-banner'>
+          <div>
+            <strong>This repository has no commits yet</strong>
+            <span>Review the project files before creating its first commit.</span>
+          </div>
+          <button
+            type='button'
+            onClick={() => void openInitialCommit()}
+            disabled={initialCommitBusy || !!selectedWorkspace?.needsLocation}
+          >
+            {initialCommitBusy ? (
+              <LoaderCircle className='spinning' size={14} />
+            ) : (
+              <GitBranch size={14} />
+            )}
+            Create initial commit
+          </button>
+        </div>
+      )}
+      {initialCommitOpen && initialCommitPreview && (
+        <section
+          className='git-initial-commit-review'
+          role='dialog'
+          aria-modal='true'
+          aria-label='Create initial commit'
+        >
+          <header>
+            <div>
+              <strong>Review initial commit</strong>
+              <span>
+                Only the listed, non-ignored project paths are included. Existing staged content
+                stays staged for this commit.
+              </span>
+            </div>
+            <button
+              type='button'
+              aria-label='Close initial commit review'
+              onClick={() => setInitialCommitOpen(false)}
+              disabled={initialCommitBusy}
+            >
+              <X size={15} />
+            </button>
+          </header>
+          <label>
+            Commit message
+            <input
+              aria-label='Commit message'
+              value={initialCommitMessage}
+              maxLength={500}
+              onChange={(event) => setInitialCommitMessage(event.currentTarget.value)}
+            />
+          </label>
+          {initialCommitPreview.empty ? (
+            <p className='git-initial-commit-empty'>
+              No non-ignored files are present. This will create an empty initial commit.
+            </p>
+          ) : (
+            <>
+              <p className='git-initial-commit-count'>
+                {initialCommitPreview.totalFiles}{' '}
+                {initialCommitPreview.totalFiles === 1 ? 'path' : 'paths'} will be included on{' '}
+                <code>{initialCommitPreview.branch}</code>
+                {initialCommitPreview.truncated
+                  ? `; showing the first ${initialCommitPreview.files.length}.`
+                  : '.'}
+              </p>
+              <ul aria-label='Files included in initial commit'>
+                {initialCommitPreview.files.map((file) => (
+                  <li key={file.path}>
+                    <code title={file.path}>{file.path}</code>
+                    <span>{file.status}</span>
+                  </li>
+                ))}
+              </ul>
+              {initialCommitPreview.truncated && (
+                <p className='git-initial-commit-count'>
+                  The remaining{' '}
+                  {initialCommitPreview.totalFiles - initialCommitPreview.files.length} paths will
+                  also be included.
+                </p>
+              )}
+            </>
+          )}
+          <footer>
+            <button
+              type='button'
+              onClick={() => setInitialCommitOpen(false)}
+              disabled={initialCommitBusy}
+            >
+              Cancel
+            </button>
+            <button
+              type='button'
+              className='primary'
+              onClick={() => void confirmInitialCommit()}
+              disabled={
+                initialCommitBusy ||
+                !initialCommitMessage.trim() ||
+                !initialCommitPreview.previewToken
+              }
+            >
+              {initialCommitBusy ? (
+                <LoaderCircle className='spinning' size={14} />
+              ) : (
+                <Check size={14} />
+              )}
+              Create initial commit
+            </button>
+          </footer>
+        </section>
+      )}
+      {auth && !auth.authenticated && auth.state !== 'idle' && (
+        <section
+          className={`github-device-panel ${auth.state}`}
+          aria-live='polite'
+          aria-label='GitHub sign-in status'
+        >
+          {auth.state === 'starting' && (
+            <>
+              <LoaderCircle className='spinning' size={18} />
+              <div>
+                <strong>Starting GitHub sign-in</strong>
+                <span>GitHub CLI is preparing a one-time device code.</span>
+              </div>
+              <button
+                type='button'
+                disabled={authBusy}
+                onClick={() => void runAuthAction('cancel')}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+          {auth.state === 'awaiting' && (
+            <>
+              <div className='github-device-copy'>
+                <strong>Authorize GitHub CLI</strong>
+                <span>
+                  Enter this one-time code on the GitHub page opened in a Browser workspace.
+                </span>
+                <code aria-label='GitHub device code'>{auth.userCode}</code>
+                <small>This attempt expires in {formatCountdown(expiresIn)}.</small>
+              </div>
+              <div className='github-device-actions'>
+                <button type='button' onClick={() => void copyDeviceCode()}>
+                  Copy code
+                </button>
+                <button type='button' onClick={openVerificationPage}>
+                  Open verification page
+                </button>
+                <button
+                  type='button'
+                  disabled={authBusy}
+                  onClick={() => void runAuthAction('cancel')}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+          {auth.state === 'failed' && (
+            <>
+              <AlertCircle size={18} />
+              <div>
+                <strong>GitHub sign-in failed</strong>
+                <span>{auth.detail || 'Check the GitHub CLI and network, then try again.'}</span>
+              </div>
+            </>
+          )}
+          {auth.state === 'expired' && (
+            <>
+              <AlertCircle size={18} />
+              <div>
+                <strong>GitHub sign-in expired</strong>
+                <span>{auth.detail || 'Start a new sign-in attempt to get another code.'}</span>
+              </div>
+            </>
+          )}
+          {auth.state === 'cancelled' && (
+            <>
+              <X size={18} />
+              <div>
+                <strong>GitHub sign-in cancelled</strong>
+                <span>You can start a new sign-in attempt at any time.</span>
+              </div>
+            </>
+          )}
+        </section>
+      )}
+      {gh?.detail && (
+        <div className='git-privacy-note'>
+          <ShieldCheck size={14} />
+          <span>
+            {gh.detail} Browser cookies are stored separately in this device’s Electron profile and
+            are not used for GitHub authentication.
+          </span>
+        </div>
+      )}
+      <nav className='git-view-tabs' aria-label='Git workspace views'>
+        {(
+          [
+            ['overview', 'Overview'],
+            ['branches', 'Branches'],
+            ['worktrees', 'Worktrees'],
+            ['history', 'History'],
+            ['pullRequests', 'Pull requests'],
+            ['issues', 'Issues'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            className={view === id ? 'selected' : ''}
+            aria-current={view === id ? 'page' : undefined}
+            onClick={() => {
+              setView(id);
+              setQuery('');
+            }}
+          >
+            {label}
+            {id === 'branches' && data && (
+              <span>
+                {data.branches.length}/
+                {data.branchPage.totalIsExact === false ? '100k+' : data.branchPage.totalCount}
+              </span>
+            )}
+            {id === 'worktrees' && data && <span>{data.worktrees.length}</span>}
+          </button>
+        ))}
+      </nav>
+      {!data ? (
+        <div className='git-empty'>
+          <LoaderCircle className='spinning' size={23} />
+          <span>Reading local repository…</span>
+        </div>
+      ) : data.repositoryStatus === 'missing' ? (
+        <div className='git-empty git-no-repository'>
+          <GitBranch size={25} />
+          <strong>This workspace does not have a Git repository</strong>
+          <span>
+            Create a local Git repository in{' '}
+            {selectedWorkspace
+              ? workspaceOptionLabel(selectedWorkspace, workspaces)
+              : 'this workspace'}{' '}
+            to begin tracking changes. Existing files stay in place.
+          </span>
+          <button
+            className='git-create-repository'
+            type='button'
+            disabled={createBusy || !selectedWorkspaceId || selectedWorkspace?.needsLocation}
+            onClick={() => void createRepository()}
+          >
+            {createBusy ? <LoaderCircle className='spinning' size={14} /> : <GitBranch size={14} />}
+            Create repository
+          </button>
+        </div>
+      ) : !data.available ? (
+        <div className='git-empty'>
+          <GitBranch size={25} />
+          <strong>{data.detail}</strong>
+          <span>
+            {data.repositoryRoot
+              ? 'In Settings, select the repository root itself or a workspace folder that contains it. No files or credentials are sent to Codex from this view.'
+              : 'Choose a workspace folder inside a local Git repository. No files or credentials are sent to Codex from this view.'}
+          </span>
+        </div>
+      ) : (
+        <>
+          {view === 'overview' && (
+            <div className='git-overview'>
+              <div className='git-summary-row'>
+                <div>
+                  <span>Current branch</span>
+                  <strong>
+                    <GitBranch size={15} />
+                    {data.currentBranch || 'Detached HEAD'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Local branches loaded</span>
+                  <strong>{data.branches.filter((item) => !item.remote).length}</strong>
+                </div>
+                <div>
+                  <span>Worktrees</span>
+                  <strong>{data.worktrees.length}</strong>
+                </div>
+                <div>
+                  <span>Recent commits loaded</span>
+                  <strong>{commits.length}</strong>
+                </div>
+              </div>
+              <div className='git-overview-grid'>
+                <div>
+                  <div className='git-section-heading'>
+                    <h2>Branches</h2>
+                    <button onClick={() => setView('branches')}>
+                      View all <ArrowUpRight size={13} />
+                    </button>
+                  </div>
+                  <BranchList branches={data.branches.slice(0, 8)} />
+                </div>
+                <div>
+                  <div className='git-section-heading'>
+                    <h2>Worktrees</h2>
+                    <button onClick={() => setView('worktrees')}>
+                      View all <ArrowUpRight size={13} />
+                    </button>
+                  </div>
+                  <WorktreeList worktrees={data.worktrees.slice(0, 4)} />
+                </div>
+              </div>
+              <div className='git-section-heading history-heading'>
+                <h2>Commit history</h2>
+                <button onClick={() => setView('history')}>
+                  Open graph <ArrowUpRight size={13} />
+                </button>
+              </div>
+              <CommitGraph commits={overviewCommits} layout={overviewGraph} />
+            </div>
+          )}
+          {view === 'branches' && (
+            <div className='git-list-view'>
+              <div className='git-view-heading'>
+                <div>
+                  <h2>Branches</h2>
+                  <p>
+                    Showing {data.branches.length} of{' '}
+                    {data.branchPage.totalIsExact === false
+                      ? 'at least 100,000'
+                      : data.branchPage.totalCount}{' '}
+                    local branches and fetched remote refs.
+                  </p>
+                </div>
+                <Filter value={query} onChange={setQuery} />
+              </div>
+              <BranchList branches={filteredBranches} />
+              {data.branchPage.hasMore && (
+                <button
+                  className='git-load-more'
+                  disabled={busy}
+                  onClick={() =>
+                    void loadLocal({
+                      historyOffset: data.history.offset,
+                      branchOffset: data.branchPage.nextOffset || 0,
+                      appendBranches: true,
+                      appendHistory: true,
+                    })
+                  }
+                >
+                  {busy ? <LoaderCircle className='spinning' size={14} /> : <ArrowDown size={14} />}
+                  Load next 100 branches
+                </button>
+              )}
+              {data.branchPage.limitReached && (
+                <div className='git-limit-note'>
+                  Showing the first 100,000 refs. The branch safety limit has been reached.
+                </div>
+              )}
+            </div>
+          )}
+          {view === 'worktrees' && (
+            <div className='git-list-view'>
+              <div className='git-view-heading'>
+                <div>
+                  <h2>Worktrees</h2>
+                  <p>Linked checkouts reported by local Git.</p>
+                </div>
+              </div>
+              <WorktreeList worktrees={data.worktrees} />
+            </div>
+          )}
+          {view === 'history' && (
+            <div className='git-list-view git-history-view'>
+              <div className='git-view-heading'>
+                <div>
+                  <h2>Commit history</h2>
+                  <p>Loaded {data.commits.length} commits · ordered by topology, newest first.</p>
+                </div>
+                <Filter value={query} onChange={setQuery} />
+              </div>
+              <CommitGraph commits={filteredCommits} layout={graph || overviewGraph} />
+              {data.history.hasMore && (
+                <button
+                  className='git-load-more'
+                  disabled={busy}
+                  onClick={() =>
+                    void loadLocal({
+                      historyOffset: data.history.nextOffset || 0,
+                      branchOffset: data.branchPage.offset,
+                      appendHistory: true,
+                      appendBranches: true,
+                    })
+                  }
+                >
+                  {busy ? <LoaderCircle className='spinning' size={14} /> : <ArrowDown size={14} />}
+                  Load next 100 commits
+                </button>
+              )}
+              {data.history.limitReached && (
+                <div className='git-limit-note'>
+                  Showing the first 10,000 commits. The history safety limit has been reached.
+                </div>
+              )}
+            </div>
+          )}
+          {(view === 'pullRequests' || view === 'issues') && (
+            <GitHubLists
+              kind={view}
+              gh={gh}
+              loading={githubBusy}
+              cliAuthenticated={!!auth?.authenticated}
+              onCopyError={(message) => setError(message)}
+            />
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function Filter({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <label className='git-filter'>
+      <Search size={14} />
+      <input
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        placeholder='Filter'
+        aria-label='Filter Git data'
+      />
+    </label>
+  );
+}
+const BranchList = memo(function BranchList({ branches }: { branches: Branch[] }) {
+  if (!branches.length) return <div className='git-empty-row'>No branches match this filter.</div>;
+  return (
+    <div className='git-branch-list'>
+      {branches.map((branch) => (
+        <div className='git-branch-row' key={branch.name}>
+          <span className={`git-branch-marker ${branch.current ? 'current' : ''}`}>
+            <GitBranch size={14} />
+          </span>
+          <strong>{branch.name}</strong>
+          {branch.current && <span className='git-current-tag'>HEAD</span>}
+          {branch.remote && <span className='git-remote-tag'>Remote</span>}
+          {branch.upstream && <span className='git-upstream'>↗ {branch.upstream}</span>}
+          <code>{branch.hash}</code>
+        </div>
+      ))}
+    </div>
+  );
 });
-function GitHubLists({kind,gh,loading,cliAuthenticated}:{kind:'pullRequests'|'issues';gh?:Workspace['github'];loading:boolean;cliAuthenticated:boolean}){const items=kind==='pullRequests'?gh?.pullRequests:gh?.issues;const available=kind==='pullRequests'?gh?.pullRequestsAvailable:gh?.issuesAvailable;const title=kind==='pullRequests'?'Pull requests':'Issues';if(loading)return <div className="git-empty"><LoaderCircle className="spinning" size={23}/><strong>Loading GitHub metadata…</strong><span>Local branches and history remain available while GitHub responds.</span></div>;if(!gh?.authenticated)return <div className="git-empty"><ShieldCheck size={23}/><strong>{gh?.detail||'GitHub sign-in is needed to view repository data.'}</strong><span>{cliAuthenticated?'GitHub CLI is signed in. Choose a folder inside a local Git repository, then refresh.':'Use Sign in with GitHub above. The Git page uses GitHub CLI device authorization and its local credential store.'}</span></div>;if(!gh.repository)return <div className="git-empty"><GitBranch size={23}/><strong>{gh.repositoryAvailable===false?'GitHub repository details could not be loaded.':'This repository is not connected to a GitHub repository.'}</strong><span>Check network access and the repository’s GitHub remote, then refresh this view.</span></div>;return <div className="git-list-view"><div className="git-view-heading"><div><h2>{title}</h2><p>{gh.repository.name} · read-only GitHub metadata · showing up to 20 open {title.toLowerCase()}.</p></div></div>{available===false?<div className="git-empty-row">GitHub did not return this list. Check network access and refresh.</div>:items?.length?<div className="github-item-list">{items.map(item=><article key={item.number}><div className="github-item-icon">{kind==='pullRequests'?<GitBranch size={15}/>:<Circle size={14}/>}</div><div><strong>#{item.number} {item.title}</strong><span>{kind==='pullRequests'?`${item.headBranch||''} → ${item.baseBranch||''} · ${item.author||'unknown author'}`:`${(item.labels||[]).join(', ')||'No labels'} · `}{item.updatedAt?`Updated ${stamp(item.updatedAt)}`:''}</span></div><span className={`github-item-state ${item.state.toLowerCase()}`}>{item.isDraft?'Draft':item.state}</span><button className="copy-github-url" title="Copy GitHub URL" onClick={()=>void navigator.clipboard?.writeText(item.url)} aria-label={`Copy URL for ${kind==='pullRequests'?'pull request':'issue'} ${item.number}`}><Check size={13}/></button></article>)}</div>:<div className="git-empty-row">No open {title.toLowerCase()} found.</div>}</div>;}
+const WorktreeList = memo(function WorktreeList({ worktrees }: { worktrees: Worktree[] }) {
+  if (!worktrees.length)
+    return <div className='git-empty-row'>No Git worktrees were reported.</div>;
+  return (
+    <div className='git-worktree-list'>
+      {worktrees.map((item) => (
+        <article className='git-worktree-row' key={item.path}>
+          <GitFork size={15} />
+          <div>
+            <strong>{item.branch || 'Detached HEAD'}</strong>
+            <span title={item.path}>{item.path}</span>
+          </div>
+          <code>{hash(item.head || '')}</code>
+          {item.locked && <span className='git-worktree-badge'>Locked</span>}
+          {item.prunable && <span className='git-worktree-badge warning'>Prunable</span>}
+        </article>
+      ))}
+    </div>
+  );
+});
+const CommitGraph = memo(function CommitGraph({
+  commits,
+  layout,
+}: {
+  commits: Commit[];
+  layout: GraphLayout;
+}) {
+  if (!commits.length) return <div className='git-empty-row'>No commits match this filter.</div>;
+  const laneWidth = 14;
+  const width = layout.laneCount * laneWidth + 10;
+  const svgWidth = width + 5;
+  const height = commits.length * layout.rowHeight;
+  const style = {
+    '--git-graph-width': `${width}px`,
+    '--git-graph-height': `${height}px`,
+    '--git-graph-row-height': `${layout.rowHeight}px`,
+  } as CSSProperties;
+  return (
+    <div className='git-commit-graph' style={style}>
+      <svg
+        className='git-graph-lines'
+        style={{ width: svgWidth, height }}
+        viewBox={`0 0 ${svgWidth} ${height}`}
+        aria-hidden='true'
+      >
+        {layout.positions.map((lane, row) => {
+          const x = 5 + lane * laneWidth;
+          const y = (row + 0.5) * layout.rowHeight;
+          return (
+            <path
+              key={`commit-${row}`}
+              className={row === 0 ? 'git-commit-connector head-connector' : 'git-commit-connector'}
+              d={`M ${x} ${y} H ${svgWidth}`}
+            />
+          );
+        })}
+        {layout.edges.map((edge, index) => {
+          const x1 = 5 + edge.fromLane * laneWidth;
+          const x2 = 5 + edge.toLane * laneWidth;
+          const y1 = (edge.row + 0.5) * layout.rowHeight;
+          const y2 =
+            edge.parentRow === null ? height - 3 : (edge.parentRow + 0.5) * layout.rowHeight;
+          const control = Math.max(5, Math.min(18, (y2 - y1) / 2));
+          return (
+            <path
+              key={`${edge.row}-${edge.parentHash}-${index}`}
+              className={
+                edge.parentRow === null
+                  ? 'external-edge'
+                  : edge.mergeParent
+                    ? 'merge-edge'
+                    : 'first-parent-edge'
+              }
+              d={`M ${x1} ${y1} C ${x1} ${y1 + control}, ${x2} ${y2 - control}, ${x2} ${y2}`}
+            >
+              <title>
+                {edge.mergeParent ? 'Merge parent' : 'Parent'} {hash(edge.parentHash)}
+                {edge.parentRow === null ? ' (outside the visible history)' : ''}
+              </title>
+            </path>
+          );
+        })}
+      </svg>
+      {commits.map((commit, row) => {
+        const lane = layout.positions[row];
+        return (
+          <article className='git-commit-row' key={commit.hash}>
+            <div className='git-graph-space' style={{ width }} aria-hidden='true'>
+              <i className={row === 0 ? 'head-node' : ''} style={{ left: 5 + lane * laneWidth }} />
+              {layout.edges
+                .filter((edge) => edge.row === row && edge.parentRow === null)
+                .map((edge) => (
+                  <span
+                    className='git-external-parent'
+                    key={edge.parentHash}
+                    title={`Parent ${edge.parentHash} is outside the visible history`}
+                  >
+                    {hash(edge.parentHash)}
+                  </span>
+                ))}
+            </div>
+            <div className='git-commit-copy'>
+              <strong title={commit.subject}>{commit.subject || '(no commit message)'}</strong>
+              <span>
+                {commit.author} · {stamp(commit.date)}
+              </span>
+            </div>
+            <div className='git-commit-refs'>
+              {commit.refs.slice(0, 3).map((ref) => (
+                <span key={ref}>{ref}</span>
+              ))}
+            </div>
+            <code title={commit.hash}>{hash(commit.hash)}</code>
+          </article>
+        );
+      })}
+    </div>
+  );
+});
+function GitHubLists({
+  kind,
+  gh,
+  loading,
+  cliAuthenticated,
+  onCopyError,
+}: {
+  kind: 'pullRequests' | 'issues';
+  gh?: Workspace['github'];
+  loading: boolean;
+  cliAuthenticated: boolean;
+  onCopyError: (message: string) => void;
+}) {
+  const copyUrl = async (url: string) => {
+    try {
+      if (!navigator.clipboard) throw new Error('Clipboard access is unavailable.');
+      await navigator.clipboard.writeText(url);
+    } catch {
+      onCopyError('Could not copy the GitHub URL. Open it and copy the address directly.');
+    }
+  };
+  const items = kind === 'pullRequests' ? gh?.pullRequests : gh?.issues;
+  const available = kind === 'pullRequests' ? gh?.pullRequestsAvailable : gh?.issuesAvailable;
+  const title = kind === 'pullRequests' ? 'Pull requests' : 'Issues';
+  if (loading)
+    return (
+      <div className='git-empty'>
+        <LoaderCircle className='spinning' size={23} />
+        <strong>Loading GitHub metadata…</strong>
+        <span>Local branches and history remain available while GitHub responds.</span>
+      </div>
+    );
+  if (!gh?.authenticated)
+    return (
+      <div className='git-empty'>
+        <ShieldCheck size={23} />
+        <strong>{gh?.detail || 'GitHub sign-in is needed to view repository data.'}</strong>
+        <span>
+          {cliAuthenticated
+            ? 'GitHub CLI is signed in. Choose a folder inside a local Git repository, then refresh.'
+            : 'Use Sign in with GitHub above. The Git page uses GitHub CLI device authorization and its local credential store.'}
+        </span>
+      </div>
+    );
+  if (!gh.repository)
+    return (
+      <div className='git-empty'>
+        <GitBranch size={23} />
+        <strong>
+          {gh.repositoryAvailable === false
+            ? 'GitHub repository details could not be loaded.'
+            : 'This repository is not connected to a GitHub repository.'}
+        </strong>
+        <span>
+          Check network access and the repository’s GitHub remote, then refresh this view.
+        </span>
+      </div>
+    );
+  return (
+    <div className='git-list-view'>
+      <div className='git-view-heading'>
+        <div>
+          <h2>{title}</h2>
+          <p>
+            {gh.repository.name} · read-only GitHub metadata · showing up to 20 open{' '}
+            {title.toLowerCase()}.
+          </p>
+        </div>
+      </div>
+      {available === false ? (
+        <div className='git-empty-row'>
+          GitHub did not return this list. Check network access and refresh.
+        </div>
+      ) : items?.length ? (
+        <div className='github-item-list'>
+          {items.map((item) => (
+            <article key={item.number}>
+              <div className='github-item-icon'>
+                {kind === 'pullRequests' ? <GitBranch size={15} /> : <Circle size={14} />}
+              </div>
+              <div>
+                <strong>
+                  #{item.number} {item.title}
+                </strong>
+                <span>
+                  {kind === 'pullRequests'
+                    ? `${item.headBranch || ''} → ${item.baseBranch || ''} · ${item.author || 'unknown author'}`
+                    : `${(item.labels || []).join(', ') || 'No labels'} · `}
+                  {item.updatedAt ? `Updated ${stamp(item.updatedAt)}` : ''}
+                </span>
+              </div>
+              <span className={`github-item-state ${item.state.toLowerCase()}`}>
+                {item.isDraft ? 'Draft' : item.state}
+              </span>
+              <button
+                className='copy-github-url'
+                title='Copy GitHub URL'
+                onClick={() => void copyUrl(item.url)}
+                aria-label={`Copy URL for ${kind === 'pullRequests' ? 'pull request' : 'issue'} ${item.number}`}
+              >
+                <Check size={13} />
+              </button>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className='git-empty-row'>No open {title.toLowerCase()} found.</div>
+      )}
+    </div>
+  );
+}

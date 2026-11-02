@@ -6,7 +6,10 @@ function sanitizeText(value, limit) {
     .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{10,}|github_pat_[A-Za-z0-9_]{10,})\b/g, '[redacted]')
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
-    .replace(/\b(access[_ -]?token|auth(?:orization)?|password|passwd|secret|api[_ -]?key|cookie)\s*[:=]\s*([^\s,;]+)/gi, '$1=[redacted]')
+    .replace(
+      /\b(access[_ -]?token|auth(?:orization)?|password|passwd|secret|api[_ -]?key|cookie)\s*[:=]\s*([^\s,;]+)/gi,
+      '$1=[redacted]'
+    )
     .trim()
     .slice(0, limit);
 }
@@ -20,11 +23,14 @@ function sanitizePageUrl(raw) {
     url.password = '';
     url.search = '';
     url.hash = '';
-    url.pathname = url.pathname.split('/').map(part =>
-      /token|auth|session|secret|credential|signature|jwt|gh[pousr]_|github_pat_/i.test(part)
-        ? '[redacted]'
-        : part,
-    ).join('/');
+    url.pathname = url.pathname
+      .split('/')
+      .map((part) =>
+        /token|auth|session|secret|credential|signature|jwt|gh[pousr]_|github_pat_/i.test(part)
+          ? '[redacted]'
+          : part
+      )
+      .join('/');
     return url.toString().slice(0, 1000);
   } catch {
     return '';

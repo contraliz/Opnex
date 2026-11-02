@@ -2,820 +2,5790 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Assignment } from '../server/contracts.js';
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-const fake=vi.hoisted(()=>({instance:null as any,agentInstance:null as any,instances:[] as any[],threadOwners:new Map<string,any>(),threadConfigs:new Map<string,any>(),dshSessions:new Map<string,any>(),dshNativeTools:[] as string[],dshWaitBarrier:null as Promise<void>|null,dshConnectHook:null as ((runtime:any)=>Promise<void>)|null,prepareWorktreeGate:null as {entered:(options:any)=>void;wait:Promise<void>}|null,mcpStatusFailureCount:0,calls:[] as any[],steerErrors:[] as string[],threadCount:0,turnCount:0,dshSessionCount:0,fastAvailable:true,authToken:'opaque-test-'+'token',refreshedToken:'opaque-refreshed-'+'token'}));
-vi.mock('../server/recruitment-git.js',async()=>{const actual=await vi.importActual<any>('../server/recruitment-git.js');return {...actual,prepareRecruitmentWorktrees:async(options:any)=>{const prepared=await actual.prepareRecruitmentWorktrees(options),gate=fake.prepareWorktreeGate;if(gate){gate.entered(options);await gate.wait;}return prepared;}};});
-vi.setConfig({testTimeout:30_000,hookTimeout:30_000});
-vi.mock('../server/codex.js',()=>{
-  class AppServerRequestError extends Error{constructor(readonly method:string,message:string){super(message);}}
-  class FakeAppServer{
-    ready=false;
-    listeners=new Map<string,((...args:any[])=>void)[]>();
-    constructor(options:any={}){fake.instances.push(this);if(options.metadataOnly)fake.instance=this;else fake.agentInstance=this;}
-    on(event:string,listener:(...args:any[])=>void){this.listeners.set(event,[...(this.listeners.get(event)||[]),listener]);return this;}
-    emit(event:string,...args:any[]){for(const listener of this.listeners.get(event)||[])listener(...args);return true;}
-    async connect(){this.ready=true;this.emit('connected');}
-    async verifyAgentRuntimeConfig(){return;}
-    async exportChatGPTAuthTokens(){return {accessToken:fake.authToken,chatgptAccountId:'test-account'};}
-    async useExternalChatGPTAuth(){return;}
-    async refreshChatGPTAuthTokens(previousAccountId:string|null){fake.calls.push({kind:'refresh-auth',previousAccountId});return {accessToken:fake.refreshedToken,chatgptAccountId:'test-account',chatgptPlanType:'plus'};}
-    async models(){return [
-      {id:'gpt-6-luna',supportedReasoningEfforts:['low','high','xhigh','max'].map(reasoningEffort=>({reasoningEffort})),serviceTiers:fake.fastAvailable?[{id:'priority'}]:[]},
-      {id:'gpt-6.1-sol',supportedReasoningEfforts:['low'].map(reasoningEffort=>({reasoningEffort}))},
-      {id:'gpt-6.1-terra',supportedReasoningEfforts:['high'].map(reasoningEffort=>({reasoningEffort}))},
-      {id:'codex-runtime-entry',supportedReasoningEfforts:['low'].map(reasoningEffort=>({reasoningEffort}))},
-    ] as any;}
-    async startThread(role:string,root:string,model:string,effort:string,approvalPolicy:string,ownedPolicy?:string,dynamicTools?:unknown,skillsMcpConfig?:unknown){const threadId=`${role}-${++fake.threadCount}`;fake.threadOwners.set(threadId,this);fake.threadConfigs.set(threadId,{skillsMcpConfig});fake.calls.push({kind:'thread',server:this===fake.agentInstance?'agent':'broker',role,root,model,effort,approvalPolicy,dynamicTools,skillsMcpConfig,threadId});return threadId;}
-    async resumeThread(threadId:string,approvalPolicy?:string,role?:string,root?:string,ownedPolicy?:string,skillsMcpConfig?:unknown,_dynamicTools?:unknown){fake.threadConfigs.set(threadId,{skillsMcpConfig});return threadId;}
-    async mcpServerStatus(threadId:string){if(fake.mcpStatusFailureCount>0){fake.mcpStatusFailureCount--;throw new Error('Fixture MCP catalog preflight failure.');}const config=fake.threadConfigs.get(threadId) as any;return [{name:'project_notes',tools:{search:{}}},{name:'pseudoharness_skills',tools:config?.skillsMcpConfig?{skills_list:{},skills_search:{},skills_load:{},skills_read_file:{},skills_save:{}}:{}}];}
-    respondServerRequest(id:string|number,result:unknown){fake.calls.push({kind:'server-response',id,result},{kind:'mcp-response',id,result});}
-    respondServerError(id:string|number,code:number,message:string){fake.calls.push({kind:'server-error',id,code,message});}
-    async startTurn(threadId:string,input:string,role:string,model:string,effort:string,root:string,writeRoots:string[]=[],approvalPolicy:string,schema?:unknown,serviceTierForTurn?:string,images:any[]=[]){const turnId=`turn-${++fake.turnCount}`;fake.calls.push({kind:'turn',threadId,input,role,model,effort,root,writeRoots,approvalPolicy,schema,serviceTierForTurn,images,turnId});return {turn:{id:turnId}};}
-    async steerTurn(threadId:string,expectedTurnId:string,input:string,images:any[]=[],clientUserMessageId:string){fake.calls.push({kind:'steer',threadId,expectedTurnId,input,images,clientUserMessageId});const failure=fake.steerErrors.shift();if(failure)throw new AppServerRequestError('turn/steer',failure);return {turnId:expectedTurnId};}
-    async reviewTurn(threadId:string,input:string,model:string,effort:string,approvalPolicy:string,images:any[]=[],outputSchema?:unknown,role='orchestrator'){fake.calls.push({kind:'review-turn',threadId,model,effort,approvalPolicy,qaRole:role});return this.startTurn(threadId,input,'orchestrator',model,effort,'/workspace',[],approvalPolicy,outputSchema,undefined,images);}
-    async accountRateLimits(){return null;}
-    threadUsage(){return new Promise<never>(()=>{});}
-    async interrupt(threadId:string,turnId:string){fake.calls.push({kind:'interrupt',threadId,turnId});}
-    close(){this.ready=false;}
-  }
-  const extractAssistantText=(turn:any)=>turn?.items?.filter((item:any)=>['agentMessage','assistantMessage','message'].includes(item.type)).map((item:any)=>item.text??'').join('\n').trim()||'';
-  const approvalResponse=(method:string,requested:unknown,decision:string,content?:Record<string,unknown>)=>method==='item/permissions/requestApproval'?{permissions:decision==='accept'&&requested?requested:{},scope:'turn'}:method==='mcpServer/elicitation/request'?{action:decision,...(decision==='accept'?{content:content||{}}:{})}:{decision};
-  return {AppServer:FakeAppServer,AppServerRequestError,extractAssistantText,approvalResponse,normalCodexSqliteHome:()=>process.env.CODEX_SQLITE_HOME||process.env.CODEX_HOME||'C:/Users/test/.codex'};
+const fake = vi.hoisted(() => ({
+  instance: null as any,
+  agentInstance: null as any,
+  instances: [] as any[],
+  threadOwners: new Map<string, any>(),
+  threadConfigs: new Map<string, any>(),
+  dshSessions: new Map<string, any>(),
+  dshNativeTools: [] as string[],
+  dshWaitBarrier: null as Promise<void> | null,
+  dshConnectHook: null as ((runtime: any) => Promise<void>) | null,
+  prepareWorktreeGate: null as { entered: (options: any) => void; wait: Promise<void> } | null,
+  mcpStatusFailureCount: 0,
+  calls: [] as any[],
+  steerErrors: [] as string[],
+  threadCount: 0,
+  turnCount: 0,
+  dshSessionCount: 0,
+  fastAvailable: true,
+  authToken: 'opaque-test-' + 'token',
+  refreshedToken: 'opaque-refreshed-' + 'token',
+}));
+vi.mock('../server/recruitment-git.js', async () => {
+  const actual = await vi.importActual<any>('../server/recruitment-git.js');
+  return {
+    ...actual,
+    prepareRecruitmentWorktrees: async (options: any) => {
+      const prepared = await actual.prepareRecruitmentWorktrees(options),
+        gate = fake.prepareWorktreeGate;
+      if (gate) {
+        gate.entered(options);
+        await gate.wait;
+      }
+      return prepared;
+    },
+  };
 });
-vi.mock('../server/deepseek-harness.js',()=>{
-  class DeepSeekHarnessError extends Error{constructor(readonly code:string,message:string){super(message);}}
-  class DeepSeekHarnessSdkRuntime{
-    listeners=new Map<string,((...args:any[])=>void)[]>();
-    sessionId:string;
-    current:any;
-    cwd:string;
-    mcpToolCatalog:any;
-    runtimeInfo:any;
-    constructor(readonly options:any){this.sessionId=options.sessionId||`dsh-session-${++fake.dshSessionCount}`;this.cwd=options.cwd;this.mcpToolCatalog={status:(options.launch.configuredMcpServers||[]).length?'pending':'not-configured',configuredServerNames:[...(options.launch.configuredMcpServers||[])],availableServerNames:[],missingServerNames:[],toolNames:[]};fake.dshSessions.set(this.sessionId,this);}
-    on(event:string,listener:(...args:any[])=>void){this.listeners.set(event,[...(this.listeners.get(event)||[]),listener]);return this;}
-    emit(event:string,...args:any[]){for(const listener of this.listeners.get(event)||[])listener(...args);return true;}
-    async connect(){fake.calls.push({kind:'dsh-connect',sessionId:this.sessionId,cwd:this.cwd,profileName:this.options.launch.profileName||'opnex-sdk',profileArgs:[...this.options.launch.args],launchEnvKeys:Object.keys(this.options.launch.env||{})});await fake.dshConnectHook?.(this);this.runtimeInfo={provider:this.options.provider,requestedProviderRoute:'dsh-opencode-go',model:this.options.model,requestedReasoningEffort:this.options.reasoningEffort,permissionMode:'native-profile',selectedApprovalPolicy:this.options.permission.approvalPolicy,workspaceRoot:this.options.permission.workspaceRoot,writeScope:[...this.options.permission.writeScope],access:'native-profile',filesystemScope:'native-profile',sessionId:this.sessionId,profileName:this.options.launch.profileName||'opnex-sdk',configuredMcpServers:[],mcpToolCatalog:this.mcpToolCatalog,serverInfo:{name:'fixture-dsh-sdk',version:'0.2.1-rc.3'},harnessVersion:'0.2.1-rc.3',capabilities:{sessionResume:true,workingDirectory:true,approvalResponse:false,steering:false,gracefulSessionCancellation:false,cancellation:'process-tree-termination'}};return this.runtimeInfo;}
-    async getWorkingDirectory(){return this.cwd;}
-    async setWorkingDirectory(cwd:string){this.cwd=cwd;}
-    async startSession(blocks:any[]){
-      const input=blocks.filter(row=>row?.type==='text').map(row=>row.text||'').join('');const turnId=`dsh-turn-${++fake.turnCount}`;let finish:(value:unknown)=>void=()=>{};const wait=new Promise(resolve=>{finish=resolve;});
-      this.current={turnId,turn:Number(fake.turnCount),wait,finish,seq:0};
-      fake.calls.push({kind:'turn',server:'deepseek',role:'worker',threadId:this.sessionId,turnId,input,model:this.options.model,effort:this.options.reasoningEffort,writeRoots:[...(this.options.permission.writeScope||[])],approvalPolicy:this.options.permission.approvalPolicy,schema:undefined,serviceTierForTurn:undefined,images:[]});
-      const observed=[...fake.dshNativeTools];this.mcpToolCatalog={status:observed.length?'ready':'not-configured',configuredServerNames:[],availableServerNames:[],missingServerNames:[],toolNames:observed,observedAtSequence:this.current.seq+1};this.runtimeInfo={...this.runtimeInfo,mcpToolCatalog:this.mcpToolCatalog};
-      this.emit('notification',{method:'session.event',params:{sessionId:this.sessionId,event:{type:'request/header',seq:++this.current.seq,time:Date.now(),data:{header:{tools:[...observed,...['read_file','write_file','bash'].map(name=>({name}))].map(name=>typeof name==='string'?{name}:name)}}}}});
-      return {sessionId:this.sessionId};
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
+vi.mock('../server/codex.js', () => {
+  class AppServerRequestError extends Error {
+    constructor(
+      readonly method: string,
+      message: string
+    ) {
+      super(message);
     }
-    async waitSession(sessionId:string,timeoutMs?:number){fake.calls.push({kind:'dsh-wait',sessionId,timeoutMs});await this.current?.wait;if(fake.dshWaitBarrier)await fake.dshWaitBarrier;return {};}
-    toolCall(name:string,args:unknown,result:unknown,options:{isError?:boolean;mismatch?:boolean}={}){if(!this.current)throw new Error('The fake DSH session has no active turn.');const run=this.current,seq=++run.seq,callId=`tool-${seq}`;this.emit('notification',{method:'session.event',params:{sessionId:this.sessionId,event:{type:'tool/call',seq,time:Date.now(),data:{turn:run.turn,step:1,callId,name,arguments:JSON.stringify(args)}}}});if(result!==undefined)this.emit('notification',{method:'session.event',params:{sessionId:this.sessionId,event:{type:'tool/result',seq:++run.seq,sourceEventSeqs:[seq],time:Date.now(),data:{turn:run.turn,step:1,message:{role:'tool',toolCallId:options.mismatch?'wrong-call':callId,source:{callId:options.mismatch?'wrong-call':callId,kind:'tool'},content:[{type:'text',text:JSON.stringify(result)}],isError:options.isError===true}}}}});return {callId,seq};}
-    complete(turnId:string,value:unknown){if(!this.current||this.current.turnId!==turnId)throw new Error('The fake DSH session has no matching active turn.');const run=this.current;const text=typeof value==='string'?value:JSON.stringify(value);this.emit('notification',{method:'session.event',params:{sessionId:this.sessionId,event:{type:'assistant/message',seq:++run.seq,time:Date.now(),data:{turn:run.turn,step:1,message:{role:'assistant',content:[{type:'text',text}]}}}}});this.emit('notification',{method:'session.event',params:{sessionId:this.sessionId,event:{type:'turn/end',seq:++run.seq,time:Date.now(),data:{turn:run.turn,reason:{kind:'completed'}}}}});this.emit('notification',{method:'session.status',params:{sessionId:this.sessionId,status:'idle'}});run.finish({});}
-    async cancel(){fake.calls.push({kind:'dsh-cancel',sessionId:this.sessionId});if(this.current)this.current.finish({});return {status:'interrupted',sessionId:this.sessionId};}
-    async shutdown(){fake.calls.push({kind:'dsh-shutdown',sessionId:this.sessionId});}
   }
-  function resolveDeepSeekHarnessPermission(request:any){
-    const writeScope=[...request.writeScope];const access=writeScope.length?'unrestricted':'read-only';
-    if(request.requiresFilesystemConfinement)throw new DeepSeekHarnessError('unsupported-capability','Fixture DSH does not enforce filesystem confinement.');
-    if(writeScope.length&&request.approvalPolicy!=='full-access')throw new DeepSeekHarnessError('unsupported-capability','The fake DSH provider cannot answer approval requests for writable tasks.');
-    return {approvalPolicy:request.approvalPolicy,workspaceRoot:request.workspaceRoot,writeScope,permissionMode:writeScope.length?'danger-full-access':'read-only',access,filesystemScope:writeScope.length?'assignment-instruction-only':'read-only-preset'};
+  class FakeAppServer {
+    ready = false;
+    listeners = new Map<string, ((...args: any[]) => void)[]>();
+    constructor(options: any = {}) {
+      fake.instances.push(this);
+      if (options.metadataOnly) fake.instance = this;
+      else fake.agentInstance = this;
+    }
+    on(event: string, listener: (...args: any[]) => void) {
+      this.listeners.set(event, [...(this.listeners.get(event) || []), listener]);
+      return this;
+    }
+    emit(event: string, ...args: any[]) {
+      for (const listener of this.listeners.get(event) || []) listener(...args);
+      return true;
+    }
+    async connect() {
+      this.ready = true;
+      this.emit('connected');
+    }
+    async verifyAgentRuntimeConfig() {
+      return;
+    }
+    async exportChatGPTAuthTokens() {
+      return { accessToken: fake.authToken, chatgptAccountId: 'test-account' };
+    }
+    async useExternalChatGPTAuth() {
+      return;
+    }
+    async refreshChatGPTAuthTokens(previousAccountId: string | null) {
+      fake.calls.push({ kind: 'refresh-auth', previousAccountId });
+      return {
+        accessToken: fake.refreshedToken,
+        chatgptAccountId: 'test-account',
+        chatgptPlanType: 'plus',
+      };
+    }
+    async models() {
+      return [
+        {
+          id: 'gpt-6-luna',
+          supportedReasoningEfforts: ['low', 'high', 'xhigh', 'max'].map((reasoningEffort) => ({
+            reasoningEffort,
+          })),
+          serviceTiers: fake.fastAvailable ? [{ id: 'priority' }] : [],
+        },
+        {
+          id: 'gpt-6.1-sol',
+          supportedReasoningEfforts: ['low'].map((reasoningEffort) => ({ reasoningEffort })),
+        },
+        {
+          id: 'gpt-6.1-terra',
+          supportedReasoningEfforts: ['high'].map((reasoningEffort) => ({ reasoningEffort })),
+        },
+        {
+          id: 'codex-runtime-entry',
+          supportedReasoningEfforts: ['low'].map((reasoningEffort) => ({ reasoningEffort })),
+        },
+      ] as any;
+    }
+    async startThread(
+      role: string,
+      root: string,
+      model: string,
+      effort: string,
+      approvalPolicy: string,
+      ownedPolicy?: string,
+      dynamicTools?: unknown,
+      skillsMcpConfig?: unknown
+    ) {
+      const threadId = `${role}-${++fake.threadCount}`;
+      fake.threadOwners.set(threadId, this);
+      fake.threadConfigs.set(threadId, { skillsMcpConfig });
+      fake.calls.push({
+        kind: 'thread',
+        server: this === fake.agentInstance ? 'agent' : 'broker',
+        role,
+        root,
+        model,
+        effort,
+        approvalPolicy,
+        dynamicTools,
+        skillsMcpConfig,
+        threadId,
+      });
+      return threadId;
+    }
+    async resumeThread(
+      threadId: string,
+      approvalPolicy?: string,
+      role?: string,
+      root?: string,
+      ownedPolicy?: string,
+      skillsMcpConfig?: unknown,
+      _dynamicTools?: unknown
+    ) {
+      fake.threadConfigs.set(threadId, { skillsMcpConfig });
+      return threadId;
+    }
+    async mcpServerStatus(threadId: string) {
+      if (fake.mcpStatusFailureCount > 0) {
+        fake.mcpStatusFailureCount--;
+        throw new Error('Fixture MCP catalog preflight failure.');
+      }
+      const config = fake.threadConfigs.get(threadId) as any;
+      return [
+        { name: 'project_notes', tools: { search: {} } },
+        {
+          name: 'pseudoharness_skills',
+          tools: config?.skillsMcpConfig
+            ? {
+                skills_list: {},
+                skills_search: {},
+                skills_load: {},
+                skills_read_file: {},
+                skills_save: {},
+              }
+            : {},
+        },
+      ];
+    }
+    respondServerRequest(id: string | number, result: unknown) {
+      fake.calls.push(
+        { kind: 'server-response', id, result },
+        { kind: 'mcp-response', id, result }
+      );
+    }
+    respondServerError(id: string | number, code: number, message: string) {
+      fake.calls.push({ kind: 'server-error', id, code, message });
+    }
+    async startTurn(
+      threadId: string,
+      input: string,
+      role: string,
+      model: string,
+      effort: string,
+      root: string,
+      writeRoots: string[] = [],
+      approvalPolicy: string,
+      schema?: unknown,
+      serviceTierForTurn?: string,
+      images: any[] = []
+    ) {
+      const turnId = `turn-${++fake.turnCount}`;
+      fake.calls.push({
+        kind: 'turn',
+        threadId,
+        input,
+        role,
+        model,
+        effort,
+        root,
+        writeRoots,
+        approvalPolicy,
+        schema,
+        serviceTierForTurn,
+        images,
+        turnId,
+      });
+      return { turn: { id: turnId } };
+    }
+    async steerTurn(
+      threadId: string,
+      expectedTurnId: string,
+      input: string,
+      images: any[] = [],
+      clientUserMessageId: string
+    ) {
+      fake.calls.push({
+        kind: 'steer',
+        threadId,
+        expectedTurnId,
+        input,
+        images,
+        clientUserMessageId,
+      });
+      const failure = fake.steerErrors.shift();
+      if (failure) throw new AppServerRequestError('turn/steer', failure);
+      return { turnId: expectedTurnId };
+    }
+    async reviewTurn(
+      threadId: string,
+      input: string,
+      model: string,
+      effort: string,
+      approvalPolicy: string,
+      images: any[] = [],
+      outputSchema?: unknown,
+      role = 'orchestrator'
+    ) {
+      fake.calls.push({
+        kind: 'review-turn',
+        threadId,
+        model,
+        effort,
+        approvalPolicy,
+        qaRole: role,
+      });
+      return this.startTurn(
+        threadId,
+        input,
+        'orchestrator',
+        model,
+        effort,
+        '/workspace',
+        [],
+        approvalPolicy,
+        outputSchema,
+        undefined,
+        images
+      );
+    }
+    async accountRateLimits() {
+      return null;
+    }
+    threadUsage() {
+      return new Promise<never>(() => {});
+    }
+    async interrupt(threadId: string, turnId: string) {
+      fake.calls.push({ kind: 'interrupt', threadId, turnId });
+    }
+    close() {
+      this.ready = false;
+    }
   }
-  return {DeepSeekHarnessError,DeepSeekHarnessSdkRuntime,OPNEX_DSH_SDK_PROFILE:'opnex-sdk',resolveDeepSeekHarnessPermission,deepSeekHarnessConversationStorage:(stateRoot='C:/fixture-opnex-state',selectedHome?:string)=>({home:selectedHome||`${stateRoot}/dsh-conversations`,patchPath:`${stateRoot}/dsh-conversations.patch.yml`,patchContents:''}),withDeepSeekHarnessConversationStorage:(launch:any,storage?:any)=>({ ...launch,args:storage?[...launch.args,'--patch',storage.patchPath]:[...launch.args],conversationStorage:storage }),discoverWindowsDeepSeekHarnessSdkLaunch:()=>({command:'fixture-dsh',args:['--profile','opnex-sdk']})};
+  const extractAssistantText = (turn: any) =>
+    turn?.items
+      ?.filter((item: any) => ['agentMessage', 'assistantMessage', 'message'].includes(item.type))
+      .map((item: any) => item.text ?? '')
+      .join('\n')
+      .trim() || '';
+  const approvalResponse = (
+    method: string,
+    requested: unknown,
+    decision: string,
+    content?: Record<string, unknown>
+  ) =>
+    method === 'item/permissions/requestApproval'
+      ? { permissions: decision === 'accept' && requested ? requested : {}, scope: 'turn' }
+      : method === 'mcpServer/elicitation/request'
+        ? { action: decision, ...(decision === 'accept' ? { content: content || {} } : {}) }
+        : { decision };
+  return {
+    AppServer: FakeAppServer,
+    AppServerRequestError,
+    extractAssistantText,
+    approvalResponse,
+    normalCodexSqliteHome: () =>
+      process.env.CODEX_SQLITE_HOME || process.env.CODEX_HOME || 'C:/Users/test/.codex',
+  };
+});
+vi.mock('../server/deepseek-harness.js', () => {
+  class DeepSeekHarnessError extends Error {
+    constructor(
+      readonly code: string,
+      message: string
+    ) {
+      super(message);
+    }
+  }
+  class DeepSeekHarnessSdkRuntime {
+    listeners = new Map<string, ((...args: any[]) => void)[]>();
+    sessionId: string;
+    current: any;
+    cwd: string;
+    mcpToolCatalog: any;
+    runtimeInfo: any;
+    constructor(readonly options: any) {
+      this.sessionId = options.sessionId || `dsh-session-${++fake.dshSessionCount}`;
+      this.cwd = options.cwd;
+      this.mcpToolCatalog = {
+        status: (options.launch.configuredMcpServers || []).length ? 'pending' : 'not-configured',
+        configuredServerNames: [...(options.launch.configuredMcpServers || [])],
+        availableServerNames: [],
+        missingServerNames: [],
+        toolNames: [],
+      };
+      fake.dshSessions.set(this.sessionId, this);
+    }
+    on(event: string, listener: (...args: any[]) => void) {
+      this.listeners.set(event, [...(this.listeners.get(event) || []), listener]);
+      return this;
+    }
+    emit(event: string, ...args: any[]) {
+      for (const listener of this.listeners.get(event) || []) listener(...args);
+      return true;
+    }
+    async connect() {
+      fake.calls.push({
+        kind: 'dsh-connect',
+        sessionId: this.sessionId,
+        cwd: this.cwd,
+        profileName: this.options.launch.profileName || 'opnex-sdk',
+        profileArgs: [...this.options.launch.args],
+        launchEnvKeys: Object.keys(this.options.launch.env || {}),
+      });
+      await fake.dshConnectHook?.(this);
+      this.runtimeInfo = {
+        provider: this.options.provider,
+        requestedProviderRoute: 'dsh-opencode-go',
+        model: this.options.model,
+        requestedReasoningEffort: this.options.reasoningEffort,
+        permissionMode: 'native-profile',
+        selectedApprovalPolicy: this.options.permission.approvalPolicy,
+        workspaceRoot: this.options.permission.workspaceRoot,
+        writeScope: [...this.options.permission.writeScope],
+        access: 'native-profile',
+        filesystemScope: 'native-profile',
+        sessionId: this.sessionId,
+        profileName: this.options.launch.profileName || 'opnex-sdk',
+        configuredMcpServers: [],
+        mcpToolCatalog: this.mcpToolCatalog,
+        serverInfo: { name: 'fixture-dsh-sdk', version: '0.2.1-rc.3' },
+        harnessVersion: '0.2.1-rc.3',
+        capabilities: {
+          sessionResume: true,
+          workingDirectory: true,
+          approvalResponse: false,
+          steering: false,
+          gracefulSessionCancellation: false,
+          cancellation: 'process-tree-termination',
+        },
+      };
+      return this.runtimeInfo;
+    }
+    async getWorkingDirectory() {
+      return this.cwd;
+    }
+    async setWorkingDirectory(cwd: string) {
+      this.cwd = cwd;
+    }
+    async startSession(blocks: any[]) {
+      const input = blocks
+        .filter((row) => row?.type === 'text')
+        .map((row) => row.text || '')
+        .join('');
+      const turnId = `dsh-turn-${++fake.turnCount}`;
+      let finish: (value: unknown) => void = () => {};
+      const wait = new Promise((resolve) => {
+        finish = resolve;
+      });
+      this.current = { turnId, turn: Number(fake.turnCount), wait, finish, seq: 0 };
+      fake.calls.push({
+        kind: 'turn',
+        server: 'deepseek',
+        role: 'worker',
+        threadId: this.sessionId,
+        turnId,
+        input,
+        model: this.options.model,
+        effort: this.options.reasoningEffort,
+        writeRoots: [...(this.options.permission.writeScope || [])],
+        approvalPolicy: this.options.permission.approvalPolicy,
+        schema: undefined,
+        serviceTierForTurn: undefined,
+        images: [],
+      });
+      const observed = [...fake.dshNativeTools];
+      this.mcpToolCatalog = {
+        status: observed.length ? 'ready' : 'not-configured',
+        configuredServerNames: [],
+        availableServerNames: [],
+        missingServerNames: [],
+        toolNames: observed,
+        observedAtSequence: this.current.seq + 1,
+      };
+      this.runtimeInfo = { ...this.runtimeInfo, mcpToolCatalog: this.mcpToolCatalog };
+      this.emit('notification', {
+        method: 'session.event',
+        params: {
+          sessionId: this.sessionId,
+          event: {
+            type: 'request/header',
+            seq: ++this.current.seq,
+            time: Date.now(),
+            data: {
+              header: {
+                tools: [
+                  ...observed,
+                  ...['read_file', 'write_file', 'bash'].map((name) => ({ name })),
+                ].map((name) => (typeof name === 'string' ? { name } : name)),
+              },
+            },
+          },
+        },
+      });
+      return { sessionId: this.sessionId };
+    }
+    async waitSession(sessionId: string, timeoutMs?: number) {
+      fake.calls.push({ kind: 'dsh-wait', sessionId, timeoutMs });
+      await this.current?.wait;
+      if (fake.dshWaitBarrier) await fake.dshWaitBarrier;
+      return {};
+    }
+    toolCall(
+      name: string,
+      args: unknown,
+      result: unknown,
+      options: { isError?: boolean; mismatch?: boolean } = {}
+    ) {
+      if (!this.current) throw new Error('The fake DSH session has no active turn.');
+      const run = this.current,
+        seq = ++run.seq,
+        callId = `tool-${seq}`;
+      this.emit('notification', {
+        method: 'session.event',
+        params: {
+          sessionId: this.sessionId,
+          event: {
+            type: 'tool/call',
+            seq,
+            time: Date.now(),
+            data: { turn: run.turn, step: 1, callId, name, arguments: JSON.stringify(args) },
+          },
+        },
+      });
+      if (result !== undefined)
+        this.emit('notification', {
+          method: 'session.event',
+          params: {
+            sessionId: this.sessionId,
+            event: {
+              type: 'tool/result',
+              seq: ++run.seq,
+              sourceEventSeqs: [seq],
+              time: Date.now(),
+              data: {
+                turn: run.turn,
+                step: 1,
+                message: {
+                  role: 'tool',
+                  toolCallId: options.mismatch ? 'wrong-call' : callId,
+                  source: { callId: options.mismatch ? 'wrong-call' : callId, kind: 'tool' },
+                  content: [{ type: 'text', text: JSON.stringify(result) }],
+                  isError: options.isError === true,
+                },
+              },
+            },
+          },
+        });
+      return { callId, seq };
+    }
+    complete(turnId: string, value: unknown) {
+      if (!this.current || this.current.turnId !== turnId)
+        throw new Error('The fake DSH session has no matching active turn.');
+      const run = this.current;
+      const text = typeof value === 'string' ? value : JSON.stringify(value);
+      this.emit('notification', {
+        method: 'session.event',
+        params: {
+          sessionId: this.sessionId,
+          event: {
+            type: 'assistant/message',
+            seq: ++run.seq,
+            time: Date.now(),
+            data: {
+              turn: run.turn,
+              step: 1,
+              message: { role: 'assistant', content: [{ type: 'text', text }] },
+            },
+          },
+        },
+      });
+      this.emit('notification', {
+        method: 'session.event',
+        params: {
+          sessionId: this.sessionId,
+          event: {
+            type: 'turn/end',
+            seq: ++run.seq,
+            time: Date.now(),
+            data: { turn: run.turn, reason: { kind: 'completed' } },
+          },
+        },
+      });
+      this.emit('notification', {
+        method: 'session.status',
+        params: { sessionId: this.sessionId, status: 'idle' },
+      });
+      run.finish({});
+    }
+    async cancel() {
+      fake.calls.push({ kind: 'dsh-cancel', sessionId: this.sessionId });
+      if (this.current) this.current.finish({});
+      return { status: 'interrupted', sessionId: this.sessionId };
+    }
+    async shutdown() {
+      fake.calls.push({ kind: 'dsh-shutdown', sessionId: this.sessionId });
+    }
+  }
+  function resolveDeepSeekHarnessPermission(request: any) {
+    const writeScope = [...request.writeScope];
+    const access = writeScope.length ? 'unrestricted' : 'read-only';
+    if (request.requiresFilesystemConfinement)
+      throw new DeepSeekHarnessError(
+        'unsupported-capability',
+        'Fixture DSH does not enforce filesystem confinement.'
+      );
+    if (writeScope.length && request.approvalPolicy !== 'full-access')
+      throw new DeepSeekHarnessError(
+        'unsupported-capability',
+        'The fake DSH provider cannot answer approval requests for writable tasks.'
+      );
+    return {
+      approvalPolicy: request.approvalPolicy,
+      workspaceRoot: request.workspaceRoot,
+      writeScope,
+      permissionMode: writeScope.length ? 'danger-full-access' : 'read-only',
+      access,
+      filesystemScope: writeScope.length ? 'assignment-instruction-only' : 'read-only-preset',
+    };
+  }
+  return {
+    DeepSeekHarnessError,
+    DeepSeekHarnessSdkRuntime,
+    OPNEX_DSH_SDK_PROFILE: 'opnex-sdk',
+    resolveDeepSeekHarnessPermission,
+    deepSeekHarnessConversationStorage: (
+      stateRoot = 'C:/fixture-opnex-state',
+      selectedHome?: string
+    ) => ({
+      home: selectedHome || `${stateRoot}/dsh-conversations`,
+      patchPath: `${stateRoot}/dsh-conversations.patch.yml`,
+      patchContents: '',
+    }),
+    withDeepSeekHarnessConversationStorage: (launch: any, storage?: any) => ({
+      ...launch,
+      args: storage ? [...launch.args, '--patch', storage.patchPath] : [...launch.args],
+      conversationStorage: storage,
+    }),
+    discoverWindowsDeepSeekHarnessSdkLaunch: () => ({
+      command: 'fixture-dsh',
+      args: ['--profile', 'opnex-sdk'],
+    }),
+  };
 });
 
-let dataDirectory='';let projectRoot='';let previousDataDirectory:string|undefined;const originalCodexHome=process.env.CODEX_HOME;const originalCodexProfile=process.env.CODEX_PROFILE;let testCodexHome='';let testCodexHomes:string[]=[];let modules:any;
-const assignment:Assignment={outcome:'Perform the requested implementation.',deliverable:'A bounded change.',read_scope:[],write_scope:[],exclusions:[],constraints:[],context_refs:[],skill_refs:[],acceptance:['The requested behavior is delivered.'],verification:['Run focused verification.'],ordinary_authority:['Choose local implementation details.'],escalation_conditions:['Scope expands.'],receipt_requirements:['Return status and evidence.']};
-const receipt={status:'complete',result:'Completed and verified.',changes:[],acceptance:{met:['The requested behavior is delivered.'],unmet:[]},verification:[{check:'Focused behavior check',result:'passed',evidence:'Mocked lifecycle completed.'},{check:'Unrelated integration suite',result:'not_run',evidence:null}],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};
-async function waitFor(predicate:()=>boolean){const deadline=Date.now()+10_000;while(Date.now()<deadline){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,10));}throw new Error('Timed out waiting for the routed workflow after 10 seconds.');}
-type StateMutationGate={match:(fn:any)=>boolean;enter:()=>void;wait:Promise<void>;error?:Error;afterCommit?:boolean};
-async function setup(fast=true,codexHomeOverride?:string,stateMutationGate?:StateMutationGate,executionProvider:'codex'|'deepseek'='codex',gitMode:'commit'|'uninitialized'|'none'='commit'){
-  vi.resetModules();fake.calls=[];fake.steerErrors=[];fake.instances=[];fake.instance=null;fake.agentInstance=null;fake.threadOwners.clear();fake.threadConfigs.clear();fake.dshSessions.clear();fake.dshNativeTools=[];fake.dshWaitBarrier=null;fake.dshConnectHook=null;fake.prepareWorktreeGate=null;fake.mcpStatusFailureCount=0;fake.threadCount=0;fake.turnCount=0;fake.dshSessionCount=0;fake.fastAvailable=fast;
-  if(stateMutationGate)vi.doMock('../server/state.js',async importOriginal=>{const actual=await importOriginal<any>();return {...actual,mutate:async(fn:any)=>{const matched=stateMutationGate.match(fn);if(matched){stateMutationGate.enter();await stateMutationGate.wait;if(!stateMutationGate.afterCommit&&stateMutationGate.error)throw stateMutationGate.error;}const result=await actual.mutate(fn);if(matched&&stateMutationGate.afterCommit&&stateMutationGate.error)throw stateMutationGate.error;return result;}};});
-  fake.prepareWorktreeGate=null;previousDataDirectory=process.env.OPNEX_DATA_DIR;dataDirectory=await mkdtemp(path.join(os.tmpdir(),'opnex-route-test-'));process.env.OPNEX_DATA_DIR=dataDirectory;
-  if(codexHomeOverride){process.env.CODEX_HOME=codexHomeOverride;process.env.CODEX_PROFILE='qa-profile';}
-  else{testCodexHome=await mkdtemp(path.join(os.tmpdir(),'opnex-route-codex-home-'));testCodexHomes.push(testCodexHome);process.env.CODEX_HOME=testCodexHome;delete process.env.CODEX_PROFILE;await mkdir(path.join(testCodexHome,'plugins'),{recursive:true});await writeFile(path.join(testCodexHome,'config.toml'),'[mcp_servers.project_notes]\ncommand="fixture-project-notes"\n[plugins.fixture]\nsource="fixture"\n');}
-  projectRoot=path.join(dataDirectory,'workspace');await mkdir(path.join(projectRoot,'src'),{recursive:true});projectRoot=await realpath(projectRoot);if(gitMode!=='none'){execFileSync('git',['init','--quiet'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});execFileSync('git',['config','user.name','Opnex test'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});}await writeFile(path.join(projectRoot,'src','baseline.ts'),'export const baseline = true;\n');if(gitMode!=='none'){execFileSync('git',['add','.'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});if(gitMode==='commit')execFileSync('git',['commit','--quiet','-m','test baseline'],{cwd:projectRoot,stdio:'ignore',windowsHide:true});}
-  const state=await import('../server/state.js');await state.loadState();const projectId='11111111-1111-4111-8111-111111111111';await state.mutate(value=>{value.settings={...value.settings,orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'full-access',executionProfile:executionProvider==='deepseek'?{provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'}:{provider:'codex',model:'gpt-6-luna',effort:'max'}};state.saveProjectInState(value,{id:projectId,name:'Fixture project',projectRoot,needsLocation:false,pinned:false});value.selectedProjectId=projectId;});
-  const orchestratorModule=await import('../server/orchestrator.js');const orchestrator={...orchestratorModule,submitTask:(...args:any[])=>orchestratorModule.submitTask(args[0],args[1],args[2],args[3],args[4]??(args[1]?undefined:projectId),args[5],args[6])};await orchestrator.initialize();await waitFor(()=>orchestrator.getRuntimeStatus().codex.models.length>0);modules={state,orchestrator};return modules;
+let dataDirectory = '';
+let projectRoot = '';
+let previousDataDirectory: string | undefined;
+const originalCodexHome = process.env.CODEX_HOME;
+const originalCodexProfile = process.env.CODEX_PROFILE;
+let testCodexHome = '';
+let testCodexHomes: string[] = [];
+let modules: any;
+const assignment: Assignment = {
+  outcome: 'Perform the requested implementation.',
+  deliverable: 'A bounded change.',
+  read_scope: [],
+  write_scope: [],
+  exclusions: [],
+  constraints: [],
+  context_refs: [],
+  skill_refs: [],
+  acceptance: ['The requested behavior is delivered.'],
+  verification: ['Run focused verification.'],
+  ordinary_authority: ['Choose local implementation details.'],
+  escalation_conditions: ['Scope expands.'],
+  receipt_requirements: ['Return status and evidence.'],
+};
+const receipt = {
+  status: 'complete',
+  result: 'Completed and verified.',
+  changes: [],
+  acceptance: { met: ['The requested behavior is delivered.'], unmet: [] },
+  verification: [
+    { check: 'Focused behavior check', result: 'passed', evidence: 'Mocked lifecycle completed.' },
+    { check: 'Unrelated integration suite', result: 'not_run', evidence: null },
+  ],
+  risks: [],
+  knowledge: { consulted: [], updated: [] },
+  decision_required: null,
+};
+async function waitFor(predicate: () => boolean) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for the routed workflow after 10 seconds.');
 }
-async function setupDeepSeek(fast=true,codexHomeOverride?:string,stateMutationGate?:StateMutationGate){return setup(fast,codexHomeOverride,stateMutationGate,'deepseek');}
-function lastTurn(role:string){const turn=[...fake.calls].reverse().find(row=>row.kind==='turn'&&row.role===role);if(!turn)throw new Error(`No ${role} turn started.`);return turn;}
-function turns(role:string){return fake.calls.filter(row=>row.kind==='turn'&&row.role===role);}
-function canonicalPath(input:string){return realpathSync.native(path.resolve(input)).toLowerCase();}
-function gitWorktreeRows(root:string){const rows:any[]=[];let current:any;for(const line of execFileSync('git',['worktree','list','--porcelain'],{cwd:root,encoding:'utf8'}).split(/\r?\n/)){if(line.startsWith('worktree ')){if(current)rows.push(current);current={path:canonicalPath(line.slice('worktree '.length))};}else if(current&&line.startsWith('branch '))current.branch=line.slice('branch '.length);}if(current)rows.push(current);return rows;}
-async function expectPreparedRecruitmentRetired(taskRoot:string){const worktrees=gitWorktreeRows(projectRoot);expect(worktrees).toHaveLength(1);expect(worktrees[0].path).toBe(canonicalPath(projectRoot));expect(execFileSync('git',['for-each-ref','--format=%(refname:short)','refs/heads/recruitment'],{cwd:projectRoot,encoding:'utf8'}).trim()).toBe('');await expect(lstat(taskRoot)).rejects.toThrow();}
-function isActiveWorkerTurn(threadId:string,_turnId?:string){return modules?.state.getState().tasks.some((task:any)=>task.passes?.some((pass:any)=>pass.recruitmentTeam?.workers.some((worker:any)=>worker.threadId===threadId&&!!worker.activeTurnId)||pass.recruitmentTeam?.integration.threadId===threadId&&!!pass.recruitmentTeam.integration.activeTurnId));}
-function pngAttachment(name='shape.png'){const bytes=Buffer.from('89504e470d0a1a0a','hex');return {name,type:'image/png',size:bytes.length,data:bytes.toString('base64')};}
-async function complete(role:string,value:unknown){const turn=lastTurn(role);if(role==='orchestrator'&&value&&typeof value==='object'&&'write_scope'in(value as object)){const task=modules.state.getState().tasks.find((row:any)=>row.orchestratorThreadId===turn.threadId);const selected=modules.state.getTask(task?.id)?.passes?.find((pass:any)=>pass.id===task?.currentPassId)?.selectedSkills||[];await recruit([{...workerPlan(),assignment:value as typeof assignment,skill_refs:selected.map((skill:any)=>skill.id)}]);return turn;}if(role==='worker'&&fake.dshSessions.has(turn.threadId)){fake.dshSessions.get(turn.threadId)?.complete(turn.turnId,value);return turn;}const owner=fake.threadOwners.get(turn.threadId)||fake.instance;owner.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'agentMessage',text:JSON.stringify(value)}]}});return turn;}
-async function waitForRole(role:string){await waitFor(()=>fake.calls.some(row=>row.kind==='turn'&&row.role===role));const turn=lastTurn(role);await waitFor(()=>role==='worker'?isActiveWorkerTurn(turn.threadId):modules?.state.getState().tasks.some((task:any)=>task[`${role}ThreadId` as string]===turn.threadId&&task.activeTurnId===turn.turnId));return turn;}
-function workerPlan(overrides:Partial<Assignment>={},effort:'max'='max',skill_refs:string[]=[]){return {name:'Implementation worker',step:'Implement the bounded requested change',depends_on:[] as string[],assignment:{...assignment,...overrides},effort,skill_refs};}
-type WorkerPlan=ReturnType<typeof workerPlan>;
-function sendRecruitmentRequest(id:string,workers:WorkerPlan[],mode?:'worktree'|'read_only'){const turn=lastTurn('orchestrator'),owner=fake.threadOwners.get(turn.threadId)||fake.agentInstance;owner.emit('serverRequest',id,'item/tool/call',{threadId:turn.threadId,turnId:turn.turnId,namespace:'opnex',tool:'recruit_workers',arguments:{...(mode?{mode}:{}),workers}});return turn;}
-async function recruit(workers:WorkerPlan[]=[workerPlan({write_scope:[path.join(projectRoot,'src')]})],trackActivity=false){const taskId=modules?.state.getState().activeTaskId;const beforePass=modules?.state.getTask(taskId)?.passes?.find((pass:any)=>pass.id===modules.state.getTask(taskId)?.currentPassId);const beforeTeamId=beforePass?.recruitmentTeam?.teamId;const workerTurnsBefore=turns('worker').length;const turn=lastTurn('orchestrator');const owner=fake.threadOwners.get(turn.threadId)||fake.agentInstance;const id=`recruit-${fake.turnCount}`;if(trackActivity)owner.emit('notification','item/started',{threadId:turn.threadId,turnId:turn.turnId,item:{id,type:'dynamicToolCall',toolName:'recruit_workers',status:'inProgress'}});owner.emit('serverRequest',id,'item/tool/call',{threadId:turn.threadId,turnId:turn.turnId,...(trackActivity?{callId:id}:{}),namespace:'opnex',tool:'recruit_workers',arguments:{workers}});await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===id));const response=fake.calls.find(row=>row.kind==='server-response'&&row.id===id)?.result;if(response?.success!==true)throw new Error(`Recruitment fixture rejected: ${response?.contentItems?.[0]?.text||JSON.stringify(response)}`);owner.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'agentMessage',text:'The complete team is sealed; I will wait for the combined receipt.'}]}});await waitFor(()=>{const pass=modules?.state.getTask(taskId)?.passes?.find((row:any)=>row.id===beforePass?.id),team=pass?.recruitmentTeam;return !!team?.sealed&&team.teamId!==beforeTeamId&&team.workers.length===workers.length;});await waitFor(()=>turns('worker').length>workerTurnsBefore||modules?.state.getTask(taskId)?.passes?.some((pass:any)=>pass.recruitmentTeam?.workers.some((worker:any)=>['failed','blocked'].includes(worker.status))));const currentTeam=modules?.state.getTask(taskId)?.passes?.find((pass:any)=>pass.id===beforePass?.id)?.recruitmentTeam;const failed=currentTeam?.workers.find((worker:any)=>['failed','blocked'].includes(worker.status));if(failed)throw new Error(`Recruited worker did not start: ${failed.error||failed.status}`);return lastTurn('worker');}
-async function runRecruitedTeamToReview(workerReceiptValue:unknown,integrationReceiptValue:unknown,qaEnabled=false,options:{beforeStart?:()=>void;until?:'review'|'audit-starting'|'audit-needs-attention';stateMutationGate?:StateMutationGate}={}){
-  const {orchestrator,state}=await setup(true,undefined,options.stateMutationGate,'codex');options.beforeStart?.();const task=await orchestrator.submitTask('Add one bounded feature with a recruited worker and integration receipt.',undefined,[],[],undefined,undefined,qaEnabled);await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'This request introduces behavior.'});await waitForRole('orchestrator');await recruit([workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]);
-  await waitFor(()=>turns('worker').length===1&&isActiveWorkerTurn(lastTurn('worker').threadId));await complete('worker',{type:'receipt',receipt:workerReceiptValue,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
-  await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status==='running');
-  await waitFor(()=>turns('integrator').length===1&&isActiveWorkerTurn(lastTurn('integrator').threadId));
-  await complete('integrator',{type:'receipt',receipt:integrationReceiptValue,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
-  if(options.until==='audit-starting')await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status==='auditing'&&['starting','auditing'].includes(state.getTask(task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1)?.status||''));
-  else if(options.until==='audit-needs-attention')await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status==='needs_attention'&&state.getTask(task.id)?.passes?.[0]?.qualityLoop?.resumeAction==='audit');
-  else await waitFor(()=>turns('orchestrator').length===2&&state.getTask(task.id)?.phase==='reviewing');return {orchestrator,state,task};
-}
-async function saveAndPauseQaFinding(context:any,title:string){
-  let pausePromise:Promise<unknown>|undefined,paused=false;const unsubscribe=context.state.subscribe((snapshot:any)=>{const task=snapshot.tasks.find((row:any)=>row.id===context.task.id),loop=task?.passes?.find((row:any)=>row.id===task.currentPassId)?.qualityLoop;if(!paused&&loop?.status==='awaiting_corrections'&&loop.rounds.at(-1)?.status==='awaiting_corrections'){paused=true;pausePromise=context.orchestrator.pauseQualityLoop(context.task.id);}});
-  try{await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'A saved QA finding needs one correction.',findings:[{title,severity:'medium',issue:'The behavior is not preserved.',required_fix:'Correct the behavior and add a regression.',evidence:['Observed during the focused QA audit.'],file:'src/example.ts',line:2}]});await waitFor(()=>paused&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='paused');if(pausePromise)await pausePromise;}finally{unsubscribe();}
-  const pass=context.state.getTask(context.task.id)?.passes?.find((row:any)=>row.id===context.state.getTask(context.task.id)?.currentPassId),round=pass?.qualityLoop?.rounds.at(-1);if(!pass||!round)throw new Error('The QA finding was not saved.');return {passId:pass.id,roundId:round.roundId,integrationHead:round.integrationHead,findings:round.findings};
-}
-async function completeCurrentSingleWorkerTeam(workerReceiptValue:unknown,integrationReceiptValue:unknown){
-  const initial=turns('worker').length-1,initialIntegrators=turns('integrator').length;
-  await waitFor(()=>turns('worker').length>=initial+1&&isActiveWorkerTurn(lastTurn('worker').threadId));await complete('worker',{type:'receipt',receipt:workerReceiptValue,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
-  await waitFor(()=>turns('integrator').length===initialIntegrators+1&&isActiveWorkerTurn(lastTurn('integrator').threadId));await complete('integrator',{type:'receipt',receipt:integrationReceiptValue,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
-}
-afterEach(async()=>{await new Promise(resolve=>setImmediate(resolve));const testState=modules?.state;if(modules?.orchestrator){await modules.orchestrator.shutdown();modules=null;}if(testState){await new Promise(resolve=>setImmediate(resolve));await testState.mutate(()=>{});}if(dataDirectory){const library=await import('../server/skill-library.js');library.closeSkillLibrary();}if(previousDataDirectory===undefined)delete process.env.OPNEX_DATA_DIR;else process.env.OPNEX_DATA_DIR=previousDataDirectory;if(originalCodexHome===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=originalCodexHome;if(originalCodexProfile===undefined)delete process.env.CODEX_PROFILE;else process.env.CODEX_PROFILE=originalCodexProfile;if(dataDirectory)await rm(dataDirectory,{recursive:true,force:true,maxRetries:10,retryDelay:100});for(const home of testCodexHomes)await rm(home,{recursive:true,force:true,maxRetries:10,retryDelay:100});testCodexHomes=[];testCodexHome='';vi.doUnmock('../server/state.js');});
-beforeEach(()=>vi.clearAllMocks());
-
-describe('routed request workflow',()=>{
-  it('advertises only worker effort values accepted by recruitment',async()=>{
-    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Delegate one bounded task to a worker.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs a recruited worker.'});const planner=await waitForRole('orchestrator');
-    expect(planner.input).toContain('Set every worker effort to exactly "max"; no other effort value is supported by the recruitment service.');expect(planner.input).not.toContain('Choose each worker\'s reasoning effort as high, xhigh, or max.');await orchestrator.cancelTask(task.id);
+type StateMutationGate = {
+  match: (fn: any) => boolean;
+  enter: () => void;
+  wait: Promise<void>;
+  error?: Error;
+  afterCommit?: boolean;
+};
+async function setup(
+  fast = true,
+  codexHomeOverride?: string,
+  stateMutationGate?: StateMutationGate,
+  executionProvider: 'codex' | 'deepseek' = 'codex',
+  gitMode: 'commit' | 'uninitialized' | 'none' = 'commit'
+) {
+  vi.resetModules();
+  fake.calls = [];
+  fake.steerErrors = [];
+  fake.instances = [];
+  fake.instance = null;
+  fake.agentInstance = null;
+  fake.threadOwners.clear();
+  fake.threadConfigs.clear();
+  fake.dshSessions.clear();
+  fake.dshNativeTools = [];
+  fake.dshWaitBarrier = null;
+  fake.dshConnectHook = null;
+  fake.prepareWorktreeGate = null;
+  fake.mcpStatusFailureCount = 0;
+  fake.threadCount = 0;
+  fake.turnCount = 0;
+  fake.dshSessionCount = 0;
+  fake.fastAvailable = fast;
+  if (stateMutationGate)
+    vi.doMock('../server/state.js', async (importOriginal) => {
+      const actual = await importOriginal<any>();
+      return {
+        ...actual,
+        mutate: async (fn: any) => {
+          const matched = stateMutationGate.match(fn);
+          if (matched) {
+            stateMutationGate.enter();
+            await stateMutationGate.wait;
+            if (!stateMutationGate.afterCommit && stateMutationGate.error)
+              throw stateMutationGate.error;
+          }
+          const result = await actual.mutate(fn);
+          if (matched && stateMutationGate.afterCommit && stateMutationGate.error)
+            throw stateMutationGate.error;
+          return result;
+        },
+      };
+    });
+  fake.prepareWorktreeGate = null;
+  previousDataDirectory = process.env.OPNEX_DATA_DIR;
+  dataDirectory = await mkdtemp(path.join(os.tmpdir(), 'opnex-route-test-'));
+  process.env.OPNEX_DATA_DIR = dataDirectory;
+  if (codexHomeOverride) {
+    process.env.CODEX_HOME = codexHomeOverride;
+    process.env.CODEX_PROFILE = 'qa-profile';
+  } else {
+    testCodexHome = await mkdtemp(path.join(os.tmpdir(), 'opnex-route-codex-home-'));
+    testCodexHomes.push(testCodexHome);
+    process.env.CODEX_HOME = testCodexHome;
+    delete process.env.CODEX_PROFILE;
+    await mkdir(path.join(testCodexHome, 'plugins'), { recursive: true });
+    await writeFile(
+      path.join(testCodexHome, 'config.toml'),
+      '[mcp_servers.project_notes]\ncommand="fixture-project-notes"\n[plugins.fixture]\nsource="fixture"\n'
+    );
+  }
+  projectRoot = path.join(dataDirectory, 'workspace');
+  await mkdir(path.join(projectRoot, 'src'), { recursive: true });
+  projectRoot = await realpath(projectRoot);
+  if (gitMode !== 'none') {
+    execFileSync('git', ['init', '--quiet'], {
+      cwd: projectRoot,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    execFileSync('git', ['config', 'user.name', 'Opnex test'], {
+      cwd: projectRoot,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], {
+      cwd: projectRoot,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+  }
+  await writeFile(path.join(projectRoot, 'src', 'baseline.ts'), 'export const baseline = true;\n');
+  if (gitMode !== 'none') {
+    execFileSync('git', ['add', '.'], { cwd: projectRoot, stdio: 'ignore', windowsHide: true });
+    if (gitMode === 'commit')
+      execFileSync('git', ['commit', '--quiet', '-m', 'test baseline'], {
+        cwd: projectRoot,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+  }
+  const state = await import('../server/state.js');
+  await state.loadState();
+  const projectId = '11111111-1111-4111-8111-111111111111';
+  await state.mutate((value) => {
+    value.settings = {
+      ...value.settings,
+      orchestratorModel: 'gpt-6.1-sol',
+      orchestratorEffort: 'low',
+      approvalPolicy: 'full-access',
+      executionProfile:
+        executionProvider === 'deepseek'
+          ? { provider: 'deepseek', model: 'deepseek-v4.1-flash', effort: 'max' }
+          : { provider: 'codex', model: 'gpt-6-luna', effort: 'max' },
+    };
+    state.saveProjectInState(value, {
+      id: projectId,
+      name: 'Fixture project',
+      projectRoot,
+      needsLocation: false,
+      pinned: false,
+    });
+    value.selectedProjectId = projectId;
   });
-  it('preserves the selected execution profile when a legacy settings client omits it',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const selected={provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'};
-    await state.mutate((saved:any)=>{saved.settings.executionProfile=selected;});
-    await orchestrator.saveSettings({orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request'});
+  const orchestratorModule = await import('../server/orchestrator.js');
+  const orchestrator = {
+    ...orchestratorModule,
+    submitTask: (...args: any[]) =>
+      orchestratorModule.submitTask(
+        args[0],
+        args[1],
+        args[2],
+        args[3],
+        args[4] ?? (args[1] ? undefined : projectId),
+        args[5],
+        args[6]
+      ),
+  };
+  await orchestrator.initialize();
+  await waitFor(() => orchestrator.getRuntimeStatus().codex.models.length > 0);
+  modules = { state, orchestrator };
+  return modules;
+}
+async function setupDeepSeek(
+  fast = true,
+  codexHomeOverride?: string,
+  stateMutationGate?: StateMutationGate
+) {
+  return setup(fast, codexHomeOverride, stateMutationGate, 'deepseek');
+}
+function lastTurn(role: string) {
+  const turn = [...fake.calls].reverse().find((row) => row.kind === 'turn' && row.role === role);
+  if (!turn) throw new Error(`No ${role} turn started.`);
+  return turn;
+}
+function turns(role: string) {
+  return fake.calls.filter((row) => row.kind === 'turn' && row.role === role);
+}
+function canonicalPath(input: string) {
+  return realpathSync.native(path.resolve(input)).toLowerCase();
+}
+function gitWorktreeRows(root: string) {
+  const rows: any[] = [];
+  let current: any;
+  for (const line of execFileSync('git', ['worktree', 'list', '--porcelain'], {
+    cwd: root,
+    encoding: 'utf8',
+  }).split(/\r?\n/)) {
+    if (line.startsWith('worktree ')) {
+      if (current) rows.push(current);
+      current = { path: canonicalPath(line.slice('worktree '.length)) };
+    } else if (current && line.startsWith('branch ')) current.branch = line.slice('branch '.length);
+  }
+  if (current) rows.push(current);
+  return rows;
+}
+async function expectPreparedRecruitmentRetired(taskRoot: string) {
+  const worktrees = gitWorktreeRows(projectRoot);
+  expect(worktrees).toHaveLength(1);
+  expect(worktrees[0].path).toBe(canonicalPath(projectRoot));
+  expect(
+    execFileSync('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads/recruitment'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+    }).trim()
+  ).toBe('');
+  await expect(lstat(taskRoot)).rejects.toThrow();
+}
+function isActiveWorkerTurn(threadId: string, _turnId?: string) {
+  return modules?.state
+    .getState()
+    .tasks.some((task: any) =>
+      task.passes?.some(
+        (pass: any) =>
+          pass.recruitmentTeam?.workers.some(
+            (worker: any) => worker.threadId === threadId && !!worker.activeTurnId
+          ) ||
+          (pass.recruitmentTeam?.integration.threadId === threadId &&
+            !!pass.recruitmentTeam.integration.activeTurnId)
+      )
+    );
+}
+function pngAttachment(name = 'shape.png') {
+  const bytes = Buffer.from('89504e470d0a1a0a', 'hex');
+  return { name, type: 'image/png', size: bytes.length, data: bytes.toString('base64') };
+}
+async function complete(role: string, value: unknown) {
+  const turn = lastTurn(role);
+  if (
+    role === 'orchestrator' &&
+    value &&
+    typeof value === 'object' &&
+    'write_scope' in (value as object)
+  ) {
+    const task = modules.state
+      .getState()
+      .tasks.find((row: any) => row.orchestratorThreadId === turn.threadId);
+    const selected =
+      modules.state.getTask(task?.id)?.passes?.find((pass: any) => pass.id === task?.currentPassId)
+        ?.selectedSkills || [];
+    await recruit([
+      {
+        ...workerPlan(),
+        assignment: value as typeof assignment,
+        skill_refs: selected.map((skill: any) => skill.id),
+      },
+    ]);
+    return turn;
+  }
+  if (role === 'worker' && fake.dshSessions.has(turn.threadId)) {
+    fake.dshSessions.get(turn.threadId)?.complete(turn.turnId, value);
+    return turn;
+  }
+  const owner = fake.threadOwners.get(turn.threadId) || fake.instance;
+  owner.emit('notification', 'turn/completed', {
+    threadId: turn.threadId,
+    turn: {
+      id: turn.turnId,
+      status: 'completed',
+      items: [{ type: 'agentMessage', text: JSON.stringify(value) }],
+    },
+  });
+  return turn;
+}
+async function waitForRole(role: string) {
+  await waitFor(() => fake.calls.some((row) => row.kind === 'turn' && row.role === role));
+  const turn = lastTurn(role);
+  await waitFor(() =>
+    role === 'worker'
+      ? isActiveWorkerTurn(turn.threadId)
+      : modules?.state
+          .getState()
+          .tasks.some(
+            (task: any) =>
+              task[`${role}ThreadId` as string] === turn.threadId &&
+              task.activeTurnId === turn.turnId
+          )
+  );
+  return turn;
+}
+function workerPlan(
+  overrides: Partial<Assignment> = {},
+  effort: 'max' = 'max',
+  skill_refs: string[] = []
+) {
+  return {
+    name: 'Implementation worker',
+    step: 'Implement the bounded requested change',
+    depends_on: [] as string[],
+    assignment: { ...assignment, ...overrides },
+    effort,
+    skill_refs,
+  };
+}
+type WorkerPlan = ReturnType<typeof workerPlan>;
+function sendRecruitmentRequest(
+  id: string,
+  workers: WorkerPlan[],
+  mode?: 'worktree' | 'read_only'
+) {
+  const turn = lastTurn('orchestrator'),
+    owner = fake.threadOwners.get(turn.threadId) || fake.agentInstance;
+  owner.emit('serverRequest', id, 'item/tool/call', {
+    threadId: turn.threadId,
+    turnId: turn.turnId,
+    namespace: 'opnex',
+    tool: 'recruit_workers',
+    arguments: { ...(mode ? { mode } : {}), workers },
+  });
+  return turn;
+}
+async function recruit(
+  workers: WorkerPlan[] = [workerPlan({ write_scope: [path.join(projectRoot, 'src')] })],
+  trackActivity = false
+) {
+  const taskId = modules?.state.getState().activeTaskId;
+  const beforePass = modules?.state
+    .getTask(taskId)
+    ?.passes?.find((pass: any) => pass.id === modules.state.getTask(taskId)?.currentPassId);
+  const beforeTeamId = beforePass?.recruitmentTeam?.teamId;
+  const workerTurnsBefore = turns('worker').length;
+  const turn = lastTurn('orchestrator');
+  const owner = fake.threadOwners.get(turn.threadId) || fake.agentInstance;
+  const id = `recruit-${fake.turnCount}`;
+  if (trackActivity)
+    owner.emit('notification', 'item/started', {
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      item: { id, type: 'dynamicToolCall', toolName: 'recruit_workers', status: 'inProgress' },
+    });
+  owner.emit('serverRequest', id, 'item/tool/call', {
+    threadId: turn.threadId,
+    turnId: turn.turnId,
+    ...(trackActivity ? { callId: id } : {}),
+    namespace: 'opnex',
+    tool: 'recruit_workers',
+    arguments: { workers },
+  });
+  await waitFor(() => fake.calls.some((row) => row.kind === 'server-response' && row.id === id));
+  const response = fake.calls.find(
+    (row) => row.kind === 'server-response' && row.id === id
+  )?.result;
+  if (response?.success !== true)
+    throw new Error(
+      `Recruitment fixture rejected: ${response?.contentItems?.[0]?.text || JSON.stringify(response)}`
+    );
+  owner.emit('notification', 'turn/completed', {
+    threadId: turn.threadId,
+    turn: {
+      id: turn.turnId,
+      status: 'completed',
+      items: [
+        {
+          type: 'agentMessage',
+          text: 'The complete team is sealed; I will wait for the combined receipt.',
+        },
+      ],
+    },
+  });
+  await waitFor(() => {
+    const pass = modules?.state
+        .getTask(taskId)
+        ?.passes?.find((row: any) => row.id === beforePass?.id),
+      team = pass?.recruitmentTeam;
+    return !!team?.sealed && team.teamId !== beforeTeamId && team.workers.length === workers.length;
+  });
+  await waitFor(
+    () =>
+      turns('worker').length > workerTurnsBefore ||
+      modules?.state
+        .getTask(taskId)
+        ?.passes?.some((pass: any) =>
+          pass.recruitmentTeam?.workers.some((worker: any) =>
+            ['failed', 'blocked'].includes(worker.status)
+          )
+        )
+  );
+  const currentTeam = modules?.state
+    .getTask(taskId)
+    ?.passes?.find((pass: any) => pass.id === beforePass?.id)?.recruitmentTeam;
+  const failed = currentTeam?.workers.find((worker: any) =>
+    ['failed', 'blocked'].includes(worker.status)
+  );
+  if (failed) throw new Error(`Recruited worker did not start: ${failed.error || failed.status}`);
+  return lastTurn('worker');
+}
+async function runRecruitedTeamToReview(
+  workerReceiptValue: unknown,
+  integrationReceiptValue: unknown,
+  qaEnabled = false,
+  options: {
+    beforeStart?: () => void;
+    until?: 'review' | 'audit-starting' | 'audit-needs-attention';
+    stateMutationGate?: StateMutationGate;
+  } = {}
+) {
+  const { orchestrator, state } = await setup(true, undefined, options.stateMutationGate, 'codex');
+  options.beforeStart?.();
+  const task = await orchestrator.submitTask(
+    'Add one bounded feature with a recruited worker and integration receipt.',
+    undefined,
+    [],
+    [],
+    undefined,
+    undefined,
+    qaEnabled
+  );
+  await complete('router', {
+    route: 'hard_task',
+    rule_id: 'hard_new_feature',
+    justification: 'This request introduces behavior.',
+  });
+  await waitForRole('orchestrator');
+  await recruit([workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] })]);
+  await waitFor(
+    () => turns('worker').length === 1 && isActiveWorkerTurn(lastTurn('worker').threadId)
+  );
+  await complete('worker', {
+    type: 'receipt',
+    receipt: workerReceiptValue,
+    decision_needed: null,
+    evidence: [],
+    options: [],
+    recommendation: null,
+    consequences: [],
+  });
+  await waitFor(
+    () => state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status === 'running'
+  );
+  await waitFor(
+    () => turns('integrator').length === 1 && isActiveWorkerTurn(lastTurn('integrator').threadId)
+  );
+  await complete('integrator', {
+    type: 'receipt',
+    receipt: integrationReceiptValue,
+    decision_needed: null,
+    evidence: [],
+    options: [],
+    recommendation: null,
+    consequences: [],
+  });
+  if (options.until === 'audit-starting')
+    await waitFor(
+      () =>
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status === 'auditing' &&
+        ['starting', 'auditing'].includes(
+          state.getTask(task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1)?.status || ''
+        )
+    );
+  else if (options.until === 'audit-needs-attention')
+    await waitFor(
+      () =>
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status === 'needs_attention' &&
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.resumeAction === 'audit'
+    );
+  else
+    await waitFor(
+      () => turns('orchestrator').length === 2 && state.getTask(task.id)?.phase === 'reviewing'
+    );
+  return { orchestrator, state, task };
+}
+async function saveAndPauseQaFinding(context: any, title: string) {
+  let pausePromise: Promise<unknown> | undefined,
+    paused = false;
+  const unsubscribe = context.state.subscribe((snapshot: any) => {
+    const task = snapshot.tasks.find((row: any) => row.id === context.task.id),
+      loop = task?.passes?.find((row: any) => row.id === task.currentPassId)?.qualityLoop;
+    if (
+      !paused &&
+      loop?.status === 'awaiting_corrections' &&
+      loop.rounds.at(-1)?.status === 'awaiting_corrections'
+    ) {
+      paused = true;
+      pausePromise = context.orchestrator.pauseQualityLoop(context.task.id);
+    }
+  });
+  try {
+    await complete('orchestrator', {
+      type: 'qa_audit',
+      status: 'issues_found',
+      summary: 'A saved QA finding needs one correction.',
+      findings: [
+        {
+          title,
+          severity: 'medium',
+          issue: 'The behavior is not preserved.',
+          required_fix: 'Correct the behavior and add a regression.',
+          evidence: ['Observed during the focused QA audit.'],
+          file: 'src/example.ts',
+          line: 2,
+        },
+      ],
+    });
+    await waitFor(
+      () =>
+        paused &&
+        context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status === 'paused'
+    );
+    if (pausePromise) await pausePromise;
+  } finally {
+    unsubscribe();
+  }
+  const pass = context.state
+      .getTask(context.task.id)
+      ?.passes?.find(
+        (row: any) => row.id === context.state.getTask(context.task.id)?.currentPassId
+      ),
+    round = pass?.qualityLoop?.rounds.at(-1);
+  if (!pass || !round) throw new Error('The QA finding was not saved.');
+  return {
+    passId: pass.id,
+    roundId: round.roundId,
+    integrationHead: round.integrationHead,
+    findings: round.findings,
+  };
+}
+async function completeCurrentSingleWorkerTeam(
+  workerReceiptValue: unknown,
+  integrationReceiptValue: unknown
+) {
+  const initial = turns('worker').length - 1,
+    initialIntegrators = turns('integrator').length;
+  await waitFor(
+    () => turns('worker').length >= initial + 1 && isActiveWorkerTurn(lastTurn('worker').threadId)
+  );
+  await complete('worker', {
+    type: 'receipt',
+    receipt: workerReceiptValue,
+    decision_needed: null,
+    evidence: [],
+    options: [],
+    recommendation: null,
+    consequences: [],
+  });
+  await waitFor(
+    () =>
+      turns('integrator').length === initialIntegrators + 1 &&
+      isActiveWorkerTurn(lastTurn('integrator').threadId)
+  );
+  await complete('integrator', {
+    type: 'receipt',
+    receipt: integrationReceiptValue,
+    decision_needed: null,
+    evidence: [],
+    options: [],
+    recommendation: null,
+    consequences: [],
+  });
+}
+afterEach(async () => {
+  await new Promise((resolve) => setImmediate(resolve));
+  const testState = modules?.state;
+  if (modules?.orchestrator) {
+    await modules.orchestrator.shutdown();
+    modules = null;
+  }
+  if (testState) {
+    await new Promise((resolve) => setImmediate(resolve));
+    await testState.mutate(() => {});
+  }
+  if (dataDirectory) {
+    const library = await import('../server/skill-library.js');
+    library.closeSkillLibrary();
+  }
+  if (previousDataDirectory === undefined) delete process.env.OPNEX_DATA_DIR;
+  else process.env.OPNEX_DATA_DIR = previousDataDirectory;
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+  if (originalCodexProfile === undefined) delete process.env.CODEX_PROFILE;
+  else process.env.CODEX_PROFILE = originalCodexProfile;
+  if (dataDirectory)
+    await rm(dataDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  for (const home of testCodexHomes)
+    await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  testCodexHomes = [];
+  testCodexHome = '';
+  vi.doUnmock('../server/state.js');
+});
+beforeEach(() => vi.clearAllMocks());
+
+describe('routed request workflow', () => {
+  it('advertises only worker effort values accepted by recruitment', async () => {
+    const { orchestrator } = await setup();
+    const task = await orchestrator.submitTask('Delegate one bounded task to a worker.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs a recruited worker.',
+    });
+    const planner = await waitForRole('orchestrator');
+    expect(planner.input).toContain(
+      'Set every worker effort to exactly "max"; no other effort value is supported by the recruitment service.'
+    );
+    expect(planner.input).not.toContain(
+      "Choose each worker's reasoning effort as high, xhigh, or max."
+    );
+    await orchestrator.cancelTask(task.id);
+  });
+  it('preserves the selected execution profile when a legacy settings client omits it', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const selected = { provider: 'deepseek', model: 'deepseek-v4.1-flash', effort: 'max' };
+    await state.mutate((saved: any) => {
+      saved.settings.executionProfile = selected;
+    });
+    await orchestrator.saveSettings({
+      orchestratorModel: 'gpt-6.1-sol',
+      orchestratorEffort: 'low',
+      approvalPolicy: 'on-request',
+    });
     expect(state.getState().settings.executionProfile).toEqual(selected);
   });
 
-  it('keeps the library passive on ordinary turns and does not inherit a prior invocation into a new pass',async()=>{
-    const {orchestrator,state}=await setup();const library=await import('../server/skill-library.js');const skill=await library.createSkill({name:'Passive fixture',description:'Must remain unloaded',instructions:'DO NOT LOAD THIS ON AN ORDINARY REQUEST.'});
-    const task=await orchestrator.submitTask('Explain a simple idea.',undefined,[],[skill.id]);expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([]);expect(lastTurn('router').input).not.toContain(skill.instructions);await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});await waitForRole('direct');expect(lastTurn('direct').input).not.toContain(skill.instructions);await complete('direct',{answer:'A concise explanation.'});await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');
-    const next=await orchestrator.submitTask('Explain another idea.',task.id);expect(next.id).toBe(task.id);expect(state.getTask(task.id)?.passes?.[1]?.selectedSkills).toEqual([]);expect(lastTurn('router').input).not.toContain(skill.instructions);await orchestrator.cancelTask(task.id);
-  });
-  it('steers the exact slash-invoked revision into the active turn and leaves the next pass empty',async()=>{
-    const {orchestrator,state}=await setup();const library=await import('../server/skill-library.js');const skill=await library.createSkill({name:'Steering fixture',description:'Explicit mid-turn guidance',instructions:'Preserve the active-turn boundary exactly.'});const task=await orchestrator.submitTask('Explain this idea.');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});const first=await waitForRole('direct');
-    await orchestrator.submitTask(`Apply this edge case.\n/skill library:${skill.id}`,task.id);expect(fake.calls).toContainEqual(expect.objectContaining({kind:'steer',threadId:first.threadId,expectedTurnId:first.turnId,input:expect.stringContaining('Preserve the active-turn boundary exactly.')}));expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([expect.objectContaining({revision:skill.revision,instructions:skill.instructions})]);
-    await complete('direct',{answer:'The edge case was checked.'});await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');await orchestrator.submitTask('Continue without a saved procedure.',task.id);expect(state.getTask(task.id)?.passes?.[1]?.selectedSkills).toEqual([]);expect(lastTurn('router').input).not.toContain(skill.instructions);await orchestrator.cancelTask(task.id);
-  });
-  it('pins an explicitly selected app skill to direct and delegated pass instructions',async()=>{
-    const {orchestrator,state}=await setup();const library=await import('../server/skill-library.js');const skill=await library.createSkill({name:'QA saved skill',description:'Selection provenance fixture',instructions:'Use the saved procedure exactly: preserve the boundary value 37.'});
-    const directTask=await orchestrator.submitTask(`Explain this value using the selected procedure.\n/skill library:${skill.id}`);
-    expect(state.getTask(directTask.id)?.passes?.[0]?.selectedSkills).toEqual([expect.objectContaining({id:`library:${skill.id}`,revision:skill.revision,source:skill.source,instructions:skill.instructions})]);
-    const router=lastTurn('router');expect(router.input).not.toContain(skill.instructions);expect(router.input).not.toContain(skill.revision);
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});const direct=await waitForRole('direct');
-    expect(direct.input).toContain('Use the saved procedure exactly: preserve the boundary value 37.');expect(direct.input).toContain(skill.revision);await complete('direct',{answer:'The selected procedure was followed.'});await waitFor(()=>state.getTask(directTask.id)?.phase==='needs_attention');
-    expect(fake.calls.find(row=>row.kind==='thread'&&row.role==='direct')?.skillsMcpConfig).toBeTruthy();
-
-    await state.mutate((saved:any)=>{saved.settings.executionProfile={provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'};});
-    const hardTask=await orchestrator.submitTask(`Implement a bounded change using the selected procedure.\n/skill library:${skill.id}`);
-    await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'This request introduces behavior.'});await waitForRole('orchestrator');
-    expect(lastTurn('orchestrator').input).toContain('Use the saved procedure exactly: preserve the boundary value 37.');
-    await complete('orchestrator',{...assignment,write_scope:[path.join(projectRoot,'src')]});const execute=await waitForRole('worker');
-    expect(execute.input).not.toContain('Use the saved procedure exactly: preserve the boundary value 37.');expect(execute.input).not.toContain(skill.revision);
-    expect(state.getTask(hardTask.id)?.passes?.[0]?.selectedSkills).toEqual([expect.objectContaining({id:`library:${skill.id}`,revision:skill.revision,source:skill.source})]);
-    expect(fake.calls.find(row=>row.kind==='dsh-connect')?.profileName).toBe('opnex-sdk');
-    await orchestrator.cancelTask(hardTask.id);
-  });
-  it('honors a picker-pinned historical revision when the active skill has since changed',async()=>{
-    const {orchestrator,state}=await setup();const library=await import('../server/skill-library.js');const original=await library.createSkill({name:'Pinned history fixture',description:'First metadata revision',instructions:'Use the original instruction snapshot.'});
-    const updated=await library.updateSkill(original.id,{name:original.name,description:'Current metadata revision',instructions:'Use the newer instruction snapshot.'},original.revision);
-    const task=await orchestrator.submitTask(`Explain the saved procedure.\n/skill library:${original.id}@${original.revision}`);
-    expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([expect.objectContaining({revision:original.revision,instructions:original.instructions})]);
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});const direct=await waitForRole('direct');
-    expect(direct.input).toContain(original.instructions);expect(direct.input).not.toContain(updated.instructions);
+  it('keeps the library passive on ordinary turns and does not inherit a prior invocation into a new pass', async () => {
+    const { orchestrator, state } = await setup();
+    const library = await import('../server/skill-library.js');
+    const skill = await library.createSkill({
+      name: 'Passive fixture',
+      description: 'Must remain unloaded',
+      instructions: 'DO NOT LOAD THIS ON AN ORDINARY REQUEST.',
+    });
+    const task = await orchestrator.submitTask('Explain a simple idea.', undefined, [], [skill.id]);
+    expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([]);
+    expect(lastTurn('router').input).not.toContain(skill.instructions);
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'A short explanation needs no implementation.',
+    });
+    await waitForRole('direct');
+    expect(lastTurn('direct').input).not.toContain(skill.instructions);
+    await complete('direct', { answer: 'A concise explanation.' });
+    await waitFor(() => state.getTask(task.id)?.phase === 'needs_attention');
+    const next = await orchestrator.submitTask('Explain another idea.', task.id);
+    expect(next.id).toBe(task.id);
+    expect(state.getTask(task.id)?.passes?.[1]?.selectedSkills).toEqual([]);
+    expect(lastTurn('router').input).not.toContain(skill.instructions);
     await orchestrator.cancelTask(task.id);
   });
-  it('uses an instruction-filtered Codex home with the normal MCP/plugin config and no global instruction file',async()=>{
+  it('steers the exact slash-invoked revision into the active turn and leaves the next pass empty', async () => {
+    const { orchestrator, state } = await setup();
+    const library = await import('../server/skill-library.js');
+    const skill = await library.createSkill({
+      name: 'Steering fixture',
+      description: 'Explicit mid-turn guidance',
+      instructions: 'Preserve the active-turn boundary exactly.',
+    });
+    const task = await orchestrator.submitTask('Explain this idea.');
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'A short explanation needs no implementation.',
+    });
+    const first = await waitForRole('direct');
+    await orchestrator.submitTask(`Apply this edge case.\n/skill library:${skill.id}`, task.id);
+    expect(fake.calls).toContainEqual(
+      expect.objectContaining({
+        kind: 'steer',
+        threadId: first.threadId,
+        expectedTurnId: first.turnId,
+        input: expect.stringContaining('Preserve the active-turn boundary exactly.'),
+      })
+    );
+    expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([
+      expect.objectContaining({ revision: skill.revision, instructions: skill.instructions }),
+    ]);
+    await complete('direct', { answer: 'The edge case was checked.' });
+    await waitFor(() => state.getTask(task.id)?.phase === 'needs_attention');
+    await orchestrator.submitTask('Continue without a saved procedure.', task.id);
+    expect(state.getTask(task.id)?.passes?.[1]?.selectedSkills).toEqual([]);
+    expect(lastTurn('router').input).not.toContain(skill.instructions);
+    await orchestrator.cancelTask(task.id);
+  });
+  it('pins an explicitly selected app skill to direct and delegated pass instructions', async () => {
+    const { orchestrator, state } = await setup();
+    const library = await import('../server/skill-library.js');
+    const skill = await library.createSkill({
+      name: 'QA saved skill',
+      description: 'Selection provenance fixture',
+      instructions: 'Use the saved procedure exactly: preserve the boundary value 37.',
+    });
+    const directTask = await orchestrator.submitTask(
+      `Explain this value using the selected procedure.\n/skill library:${skill.id}`
+    );
+    expect(state.getTask(directTask.id)?.passes?.[0]?.selectedSkills).toEqual([
+      expect.objectContaining({
+        id: `library:${skill.id}`,
+        revision: skill.revision,
+        source: skill.source,
+        instructions: skill.instructions,
+      }),
+    ]);
+    const router = lastTurn('router');
+    expect(router.input).not.toContain(skill.instructions);
+    expect(router.input).not.toContain(skill.revision);
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'A short explanation needs no implementation.',
+    });
+    const direct = await waitForRole('direct');
+    expect(direct.input).toContain(
+      'Use the saved procedure exactly: preserve the boundary value 37.'
+    );
+    expect(direct.input).toContain(skill.revision);
+    await complete('direct', { answer: 'The selected procedure was followed.' });
+    await waitFor(() => state.getTask(directTask.id)?.phase === 'needs_attention');
+    expect(
+      fake.calls.find((row) => row.kind === 'thread' && row.role === 'direct')?.skillsMcpConfig
+    ).toBeTruthy();
+
+    await state.mutate((saved: any) => {
+      saved.settings.executionProfile = {
+        provider: 'deepseek',
+        model: 'deepseek-v4.1-flash',
+        effort: 'max',
+      };
+    });
+    const hardTask = await orchestrator.submitTask(
+      `Implement a bounded change using the selected procedure.\n/skill library:${skill.id}`
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'This request introduces behavior.',
+    });
+    await waitForRole('orchestrator');
+    expect(lastTurn('orchestrator').input).toContain(
+      'Use the saved procedure exactly: preserve the boundary value 37.'
+    );
+    await complete('orchestrator', { ...assignment, write_scope: [path.join(projectRoot, 'src')] });
+    const execute = await waitForRole('worker');
+    expect(execute.input).not.toContain(
+      'Use the saved procedure exactly: preserve the boundary value 37.'
+    );
+    expect(execute.input).not.toContain(skill.revision);
+    expect(state.getTask(hardTask.id)?.passes?.[0]?.selectedSkills).toEqual([
+      expect.objectContaining({
+        id: `library:${skill.id}`,
+        revision: skill.revision,
+        source: skill.source,
+      }),
+    ]);
+    expect(fake.calls.find((row) => row.kind === 'dsh-connect')?.profileName).toBe('opnex-sdk');
+    await orchestrator.cancelTask(hardTask.id);
+  });
+  it('honors a picker-pinned historical revision when the active skill has since changed', async () => {
+    const { orchestrator, state } = await setup();
+    const library = await import('../server/skill-library.js');
+    const original = await library.createSkill({
+      name: 'Pinned history fixture',
+      description: 'First metadata revision',
+      instructions: 'Use the original instruction snapshot.',
+    });
+    const updated = await library.updateSkill(
+      original.id,
+      {
+        name: original.name,
+        description: 'Current metadata revision',
+        instructions: 'Use the newer instruction snapshot.',
+      },
+      original.revision
+    );
+    const task = await orchestrator.submitTask(
+      `Explain the saved procedure.\n/skill library:${original.id}@${original.revision}`
+    );
+    expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toEqual([
+      expect.objectContaining({ revision: original.revision, instructions: original.instructions }),
+    ]);
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'A short explanation needs no implementation.',
+    });
+    const direct = await waitForRole('direct');
+    expect(direct.input).toContain(original.instructions);
+    expect(direct.input).not.toContain(updated.instructions);
+    await orchestrator.cancelTask(task.id);
+  });
+  it('uses an instruction-filtered Codex home with the normal MCP/plugin config and no global instruction file', async () => {
     await setup();
-    const normalHome=process.env.CODEX_HOME||path.join(os.homedir(),'.codex');const home=path.join(dataDirectory,'agent-codex-home-v2');
-    const [normalConfig,linkedConfig]=await Promise.all([stat(path.join(normalHome,'config.toml')),stat(path.join(home,'config.toml'))]);
-    expect([linkedConfig.dev,linkedConfig.ino]).toEqual([normalConfig.dev,normalConfig.ino]);
-    expect(await realpath(path.join(home,'plugins'))).toBe(await realpath(path.join(normalHome,'plugins')));
-    await expect(lstat(path.join(home,'AGENTS.md'))).rejects.toMatchObject({code:'ENOENT'});
-    const config=await readFile(path.join(home,'config.toml'),'utf8');expect(config).toContain('[mcp_servers.project_notes]');expect(config).toContain('[plugins.');
-    await expect(lstat(path.join(home,'auth.json'))).rejects.toMatchObject({code:'ENOENT'});
+    const normalHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    const home = path.join(dataDirectory, 'agent-codex-home-v2');
+    const [normalConfig, linkedConfig] = await Promise.all([
+      stat(path.join(normalHome, 'config.toml')),
+      stat(path.join(home, 'config.toml')),
+    ]);
+    expect([linkedConfig.dev, linkedConfig.ino]).toEqual([normalConfig.dev, normalConfig.ino]);
+    expect(await realpath(path.join(home, 'plugins'))).toBe(
+      await realpath(path.join(normalHome, 'plugins'))
+    );
+    await expect(lstat(path.join(home, 'AGENTS.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const config = await readFile(path.join(home, 'config.toml'), 'utf8');
+    expect(config).toContain('[mcp_servers.project_notes]');
+    expect(config).toContain('[plugins.');
+    await expect(lstat(path.join(home, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
-  it('refreshes app-owned config/profile links from the selected Codex home on initialization',async()=>{
-    testCodexHome=await mkdtemp(path.join(os.tmpdir(),'opnex-codex-home-'));testCodexHomes.push(testCodexHome);
-    await mkdir(path.join(testCodexHome,'plugins'),{recursive:true});await writeFile(path.join(testCodexHome,'config.toml'),'[mcp_servers.fixture]\ncommand="node"\n');await writeFile(path.join(testCodexHome,'qa-profile.config.toml'),'[mcp_servers.profile_fixture]\ncommand="node"\n');await writeFile(path.join(testCodexHome,'AGENTS.md'),'GLOBAL_MARKER_DO_NOT_LOAD');
-    const {orchestrator}=await setup(true,testCodexHome);const home=path.join(dataDirectory,'agent-codex-home-v2');
-    expect(await readFile(path.join(home,'config.toml'),'utf8')).toContain('mcp_servers.fixture');expect(await readFile(path.join(home,'qa-profile.config.toml'),'utf8')).toContain('mcp_servers.profile_fixture');expect(await realpath(path.join(home,'plugins'))).toBe(await realpath(path.join(testCodexHome,'plugins')));await expect(lstat(path.join(home,'AGENTS.md'))).rejects.toMatchObject({code:'ENOENT'});
-    const replacement=path.join(testCodexHome,'config.replacement.toml');await writeFile(replacement,'[mcp_servers.refreshed_fixture]\ncommand="node"\n');await rename(replacement,path.join(testCodexHome,'config.toml'));await orchestrator.initialize();
-    expect(await readFile(path.join(home,'config.toml'),'utf8')).toContain('mcp_servers.refreshed_fixture');
+  it('refreshes app-owned config/profile links from the selected Codex home on initialization', async () => {
+    testCodexHome = await mkdtemp(path.join(os.tmpdir(), 'opnex-codex-home-'));
+    testCodexHomes.push(testCodexHome);
+    await mkdir(path.join(testCodexHome, 'plugins'), { recursive: true });
+    await writeFile(
+      path.join(testCodexHome, 'config.toml'),
+      '[mcp_servers.fixture]\ncommand="node"\n'
+    );
+    await writeFile(
+      path.join(testCodexHome, 'qa-profile.config.toml'),
+      '[mcp_servers.profile_fixture]\ncommand="node"\n'
+    );
+    await writeFile(path.join(testCodexHome, 'AGENTS.md'), 'GLOBAL_MARKER_DO_NOT_LOAD');
+    const { orchestrator } = await setup(true, testCodexHome);
+    const home = path.join(dataDirectory, 'agent-codex-home-v2');
+    expect(await readFile(path.join(home, 'config.toml'), 'utf8')).toContain('mcp_servers.fixture');
+    expect(await readFile(path.join(home, 'qa-profile.config.toml'), 'utf8')).toContain(
+      'mcp_servers.profile_fixture'
+    );
+    expect(await realpath(path.join(home, 'plugins'))).toBe(
+      await realpath(path.join(testCodexHome, 'plugins'))
+    );
+    await expect(lstat(path.join(home, 'AGENTS.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const replacement = path.join(testCodexHome, 'config.replacement.toml');
+    await writeFile(replacement, '[mcp_servers.refreshed_fixture]\ncommand="node"\n');
+    await rename(replacement, path.join(testCodexHome, 'config.toml'));
+    await orchestrator.initialize();
+    expect(await readFile(path.join(home, 'config.toml'), 'utf8')).toContain(
+      'mcp_servers.refreshed_fixture'
+    );
   });
-  it('bridges Codex credential refresh through the metadata-only signed-in transport',async()=>{
-    await setup();fake.agentInstance.emit('serverRequest','agent-auth-1','account/chatgptAuthTokens/refresh',{reason:'unauthorized',previousAccountId:'test-account'});
-    await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'));
-    expect(fake.calls.find(row=>row.kind==='refresh-auth')).toMatchObject({previousAccountId:'test-account'});
-    expect(fake.calls.find(row=>row.kind==='server-response')).toMatchObject({id:'agent-auth-1',result:{accessToken:fake.refreshedToken,chatgptAccountId:'test-account',chatgptPlanType:'plus'}});
+  it('bridges Codex credential refresh through the metadata-only signed-in transport', async () => {
+    await setup();
+    fake.agentInstance.emit('serverRequest', 'agent-auth-1', 'account/chatgptAuthTokens/refresh', {
+      reason: 'unauthorized',
+      previousAccountId: 'test-account',
+    });
+    await waitFor(() => fake.calls.some((row) => row.kind === 'server-response'));
+    expect(fake.calls.find((row) => row.kind === 'refresh-auth')).toMatchObject({
+      previousAccountId: 'test-account',
+    });
+    expect(fake.calls.find((row) => row.kind === 'server-response')).toMatchObject({
+      id: 'agent-auth-1',
+      result: {
+        accessToken: fake.refreshedToken,
+        chatgptAccountId: 'test-account',
+        chatgptPlanType: 'plus',
+      },
+    });
   });
-  it('runs a direct answer on the configured orchestrator profile without changing the worker profile',async()=>{
-    const {orchestrator}=await setup();let task=await orchestrator.submitTask('Explain why the sky looks blue.');expect(task.phase).toBe('routing');const router=lastTurn('router');expect(router).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:'priority'});
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A concise explanation needs no implementation.'});const direct=await waitForRole('direct');expect(direct).toMatchObject({model:'gpt-6.1-sol',effort:'low',serviceTierForTurn:undefined});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
-    expect(direct.input).not.toContain('Verified project context');await complete('direct',{type:'answer',answer:'Short wavelengths scatter more strongly.',escalation:null,route:null,justification:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');task=modules.state.getTask(task.id);expect(task).toMatchObject({resolution:'direct',reviewNote:expect.stringContaining('GPT-6.1 Sol at low effort')});expect(task.passes?.[0].executionProfile).toEqual({provider:'codex',model:'gpt-6-luna',effort:'max'});expect(task.passes?.[0].reasoningTurns?.find((turn:any)=>turn.role==='direct')?.requestedEffort).toBe('low');expect(task.passes?.[0].publicAnswer).toBe('Short wavelengths scatter more strongly.');expect(task.receipt).toBeUndefined();
+  it('runs a direct answer on the configured orchestrator profile without changing the worker profile', async () => {
+    const { orchestrator } = await setup();
+    let task = await orchestrator.submitTask('Explain why the sky looks blue.');
+    expect(task.phase).toBe('routing');
+    const router = lastTurn('router');
+    expect(router).toMatchObject({
+      model: 'gpt-6-luna',
+      effort: 'low',
+      serviceTierForTurn: 'priority',
+    });
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'A concise explanation needs no implementation.',
+    });
+    const direct = await waitForRole('direct');
+    expect(direct).toMatchObject({
+      model: 'gpt-6.1-sol',
+      effort: 'low',
+      serviceTierForTurn: undefined,
+    });
+    expect(fake.calls.some((row) => row.role === 'orchestrator')).toBe(false);
+    expect(direct.input).not.toContain('Verified project context');
+    await complete('direct', {
+      type: 'answer',
+      answer: 'Short wavelengths scatter more strongly.',
+      escalation: null,
+      route: null,
+      justification: null,
+    });
+    await waitFor(() => modules.state.getTask(task.id)?.phase === 'accepted');
+    task = modules.state.getTask(task.id);
+    expect(task).toMatchObject({
+      resolution: 'direct',
+      reviewNote: expect.stringContaining('GPT-6.1 Sol at low effort'),
+    });
+    expect(task.passes?.[0].executionProfile).toEqual({
+      provider: 'codex',
+      model: 'gpt-6-luna',
+      effort: 'max',
+    });
+    expect(
+      task.passes?.[0].reasoningTurns?.find((turn: any) => turn.role === 'direct')?.requestedEffort
+    ).toBe('low');
+    expect(task.passes?.[0].publicAnswer).toBe('Short wavelengths scatter more strongly.');
+    expect(task.receipt).toBeUndefined();
   });
-  it('keeps a saved DeepSeek worker profile out of the Codex direct-answer role',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Answer this short question.');
-    expect(state.getTask(task.id)?.passes?.[0]?.executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short answer needs no implementation.'});const direct=await waitForRole('direct');
-    expect(direct).toMatchObject({model:'gpt-6.1-sol',effort:'low'});expect(fake.dshSessions.size).toBe(0);
-    await complete('direct',{type:'answer',answer:'Answered by the configured orchestrator.',escalation:null,route:null,justification:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');
+  it('keeps a saved DeepSeek worker profile out of the Codex direct-answer role', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask('Answer this short question.');
+    expect(state.getTask(task.id)?.passes?.[0]?.executionProfile).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-v4.1-flash',
+      effort: 'max',
+    });
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'A short answer needs no implementation.',
+    });
+    const direct = await waitForRole('direct');
+    expect(direct).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' });
+    expect(fake.dshSessions.size).toBe(0);
+    await complete('direct', {
+      type: 'answer',
+      answer: 'Answered by the configured orchestrator.',
+      escalation: null,
+      route: null,
+      justification: null,
+    });
+    await waitFor(() => state.getTask(task.id)?.phase === 'accepted');
     expect(state.getTask(task.id)?.reviewNote).toContain('GPT-6.1 Sol at low effort');
   });
-  it('records the Codex provider for runtime-listed models without a gpt-prefixed ID',async()=>{
-    const {orchestrator,state}=await setup();await state.mutate((saved:any)=>{saved.settings.orchestratorModel='codex-runtime-entry';saved.settings.orchestratorEffort='low';});const task=await orchestrator.submitTask('Answer this short question.');
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short answer needs no implementation.'});const direct=await waitForRole('direct');expect(direct).toMatchObject({model:'codex-runtime-entry',effort:'low'});
-    expect(state.getTask(task.id)?.passes?.[0]?.reasoningTurns?.find((turn:any)=>turn.role==='direct')).toMatchObject({provider:'codex',requestedModel:'codex-runtime-entry',requestedEffort:'low'});
-    await complete('direct',{type:'answer',answer:'Runtime-listed model completed the direct path.',escalation:null,route:null,justification:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');expect(state.getTask(task.id)?.reviewNote).toContain('codex-runtime-entry at low effort');
+  it('records the Codex provider for runtime-listed models without a gpt-prefixed ID', async () => {
+    const { orchestrator, state } = await setup();
+    await state.mutate((saved: any) => {
+      saved.settings.orchestratorModel = 'codex-runtime-entry';
+      saved.settings.orchestratorEffort = 'low';
+    });
+    const task = await orchestrator.submitTask('Answer this short question.');
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'A short answer needs no implementation.',
+    });
+    const direct = await waitForRole('direct');
+    expect(direct).toMatchObject({ model: 'codex-runtime-entry', effort: 'low' });
+    expect(
+      state
+        .getTask(task.id)
+        ?.passes?.[0]?.reasoningTurns?.find((turn: any) => turn.role === 'direct')
+    ).toMatchObject({
+      provider: 'codex',
+      requestedModel: 'codex-runtime-entry',
+      requestedEffort: 'low',
+    });
+    await complete('direct', {
+      type: 'answer',
+      answer: 'Runtime-listed model completed the direct path.',
+      escalation: null,
+      route: null,
+      justification: null,
+    });
+    await waitFor(() => state.getTask(task.id)?.phase === 'accepted');
+    expect(state.getTask(task.id)?.reviewNote).toContain('codex-runtime-entry at low effort');
   });
-  it('runs direct and delegated sessions without an application-owned knowledge service lifecycle',async()=>{
-    const {orchestrator,state}=await setup();
-    const directTask=await orchestrator.submitTask('Answer this short question.');
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'This is a direct explanation.'});
-    const direct=await waitForRole('direct'),directThread=fake.calls.find(row=>row.kind==='thread'&&row.role==='direct');
-    expect(direct.model).toBe('gpt-6.1-sol');expect(directThread?.skillsMcpConfig).toBeTruthy();expect(directThread).not.toHaveProperty('mcpConfig');expect(direct.input).not.toContain('Verified project context');
-    await complete('direct',{type:'answer',answer:'Answered without any app-fetched context.',escalation:null,route:null,justification:null});await waitFor(()=>state.getTask(directTask.id)?.phase==='accepted');
+  it('runs direct and delegated sessions without an application-owned knowledge service lifecycle', async () => {
+    const { orchestrator, state } = await setup();
+    const directTask = await orchestrator.submitTask('Answer this short question.');
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'This is a direct explanation.',
+    });
+    const direct = await waitForRole('direct'),
+      directThread = fake.calls.find((row) => row.kind === 'thread' && row.role === 'direct');
+    expect(direct.model).toBe('gpt-6.1-sol');
+    expect(directThread?.skillsMcpConfig).toBeTruthy();
+    expect(directThread).not.toHaveProperty('mcpConfig');
+    expect(direct.input).not.toContain('Verified project context');
+    await complete('direct', {
+      type: 'answer',
+      answer: 'Answered without any app-fetched context.',
+      escalation: null,
+      route: null,
+      justification: null,
+    });
+    await waitFor(() => state.getTask(directTask.id)?.phase === 'accepted');
 
-    await state.mutate((saved:any)=>{saved.settings.executionProfile={provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'};});
-    const delegated=await orchestrator.submitTask('Implement one small change.',directTask.id);
-    await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'A source change requires delegated work.'});
-    const planner=await waitForRole('orchestrator');expect(planner.input).toContain('Use selected project skills and configured tools when relevant');expect(planner.input).not.toContain('Verified project context');
-    await complete('orchestrator',assignment);const worker=await waitForRole('worker');
-    expect(state.getTask(delegated.id)?.passes?.[1]?.executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});expect(worker).toMatchObject({server:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
-    expect(worker.input).toContain('"outcome":');expect(worker.input).not.toContain('EXECUTE.');expect(worker.input).not.toContain('COMPLETE ASSIGNMENT');expect(worker.input).not.toContain('Verified project context');
-    await complete('worker',{type:'receipt',receipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
-    await waitFor(()=>{const integration=state.getTask(delegated.id)?.passes?.[1]?.recruitmentTeam?.integration;return integration?.status==='running'&&!!integration.threadId&&fake.calls.some(row=>row.kind==='dsh-connect'&&row.sessionId===integration.threadId)&&!!fake.dshSessions.get(integration.threadId)?.current?.turnId;});
-    const integration=state.getTask(delegated.id)?.passes?.[1]?.recruitmentTeam?.integration;expect(integration?.threadId).not.toBe(worker.threadId);expect(turns('integrator')).toHaveLength(0);
-    const integrationSession=fake.dshSessions.get(integration?.threadId);integrationSession.complete(integrationSession.current.turnId,{type:'receipt',receipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});
-    await waitFor(()=>turns('orchestrator').length===2&&state.getTask(delegated.id)?.phase==='reviewing');
+    await state.mutate((saved: any) => {
+      saved.settings.executionProfile = {
+        provider: 'deepseek',
+        model: 'deepseek-v4.1-flash',
+        effort: 'max',
+      };
+    });
+    const delegated = await orchestrator.submitTask('Implement one small change.', directTask.id);
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'A source change requires delegated work.',
+    });
+    const planner = await waitForRole('orchestrator');
+    expect(planner.input).toContain(
+      'Use selected project skills and configured tools when relevant'
+    );
+    expect(planner.input).not.toContain('Verified project context');
+    await complete('orchestrator', assignment);
+    const worker = await waitForRole('worker');
+    expect(state.getTask(delegated.id)?.passes?.[1]?.executionProfile).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-v4.1-flash',
+      effort: 'max',
+    });
+    expect(worker).toMatchObject({
+      server: 'deepseek',
+      model: 'deepseek-v4.1-flash',
+      effort: 'max',
+    });
+    expect(worker.input).toContain('"outcome":');
+    expect(worker.input).not.toContain('EXECUTE.');
+    expect(worker.input).not.toContain('COMPLETE ASSIGNMENT');
+    expect(worker.input).not.toContain('Verified project context');
+    await complete('worker', {
+      type: 'receipt',
+      receipt,
+      decision_needed: null,
+      evidence: [],
+      options: [],
+      recommendation: null,
+      consequences: [],
+    });
+    await waitFor(() => {
+      const integration = state.getTask(delegated.id)?.passes?.[1]?.recruitmentTeam?.integration;
+      return (
+        integration?.status === 'running' &&
+        !!integration.threadId &&
+        fake.calls.some(
+          (row) => row.kind === 'dsh-connect' && row.sessionId === integration.threadId
+        ) &&
+        !!fake.dshSessions.get(integration.threadId)?.current?.turnId
+      );
+    });
+    const integration = state.getTask(delegated.id)?.passes?.[1]?.recruitmentTeam?.integration;
+    expect(integration?.threadId).not.toBe(worker.threadId);
+    expect(turns('integrator')).toHaveLength(0);
+    const integrationSession = fake.dshSessions.get(integration?.threadId);
+    integrationSession.complete(integrationSession.current.turnId, {
+      type: 'receipt',
+      receipt,
+      decision_needed: null,
+      evidence: [],
+      options: [],
+      recommendation: null,
+      consequences: [],
+    });
+    await waitFor(
+      () => turns('orchestrator').length === 2 && state.getTask(delegated.id)?.phase === 'reviewing'
+    );
     expect(state.getTask(delegated.id)?.passes?.[1]?.agentmemAudit).toBeUndefined();
     expect(state.getTask(delegated.id)?.passes?.[1]?.legacyAgentMem).toBeUndefined();
     await orchestrator.cancelTask(delegated.id);
-  });  it('forwards a provider MCP elicitation request to the user and sends only the explicit response',async()=>{
-    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Explain the existing project decision briefly.');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'A short explanation needs no implementation.'});const direct=await waitForRole('direct');
-    fake.agentInstance.emit('serverRequest','elicitation-1','mcpServer/elicitation/request',{threadId:direct.threadId,turnId:direct.turnId,serverName:'project_notes',mode:'form',message:'Confirm the project lookup.',requestedSchema:{type:'object',properties:{confirmed:{type:'boolean'}},required:['confirmed']}});
-    await waitFor(()=>state.getTask(task.id)?.approvalRequests?.length===1);expect(state.getTask(task.id)?.approvalRequests?.[0]).toMatchObject({method:'mcpServer/elicitation/request',serverName:'project_notes',mode:'form'});
-    await orchestrator.resolveApproval(task.id,'elicitation-1','accept',{confirmed:true});expect(fake.calls.find(row=>row.kind==='mcp-response')).toMatchObject({id:'elicitation-1',result:{action:'accept',content:{confirmed:true}}});expect(state.getTask(task.id)?.approvalRequests).toHaveLength(0);
   });
-  it('denies QA approval families and stale QA requests without creating or resolving user approval cards',async()=>{
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>!!context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1)?.turnId);const initial=context.state.getTask(context.task.id)!,pass=initial.passes!.find((row:any)=>row.id===initial.currentPassId)!,round=pass.qualityLoop.rounds.at(-1),threadId=round.threadId,turnId=round.turnId,owner=fake.threadOwners.get(threadId);
-    expect(round).toMatchObject({status:'auditing',threadId:expect.any(String),turnId:expect.any(String)});expect(turns('orchestrator').find(row=>row.turnId===turnId)).toMatchObject({approvalPolicy:'never'});
-    const requests=[
-      ['qa-command','item/commandExecution/requestApproval',{command:'write a file',cwd:projectRoot,networkApprovalContext:{host:'example.invalid',protocol:'https'}}],
-      ['qa-file','item/fileChange/requestApproval',{itemId:'file-item',grantRoot:projectRoot}],
-      ['qa-permissions','item/permissions/requestApproval',{permissions:{network:{enabled:true},fileSystem:{write:[projectRoot]}}}],
-      ['qa-elicitation','mcpServer/elicitation/request',{serverName:'external',mode:'form',requestedSchema:{type:'object'}}],
-      ['qa-unknown','item/future/requestApproval',{command:'unknown approval family'}],
+  it('forwards a provider MCP elicitation request to the user and sends only the explicit response', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask('Explain the existing project decision briefly.');
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'A short explanation needs no implementation.',
+    });
+    const direct = await waitForRole('direct');
+    fake.agentInstance.emit('serverRequest', 'elicitation-1', 'mcpServer/elicitation/request', {
+      threadId: direct.threadId,
+      turnId: direct.turnId,
+      serverName: 'project_notes',
+      mode: 'form',
+      message: 'Confirm the project lookup.',
+      requestedSchema: {
+        type: 'object',
+        properties: { confirmed: { type: 'boolean' } },
+        required: ['confirmed'],
+      },
+    });
+    await waitFor(() => state.getTask(task.id)?.approvalRequests?.length === 1);
+    expect(state.getTask(task.id)?.approvalRequests?.[0]).toMatchObject({
+      method: 'mcpServer/elicitation/request',
+      serverName: 'project_notes',
+      mode: 'form',
+    });
+    await orchestrator.resolveApproval(task.id, 'elicitation-1', 'accept', { confirmed: true });
+    expect(fake.calls.find((row) => row.kind === 'mcp-response')).toMatchObject({
+      id: 'elicitation-1',
+      result: { action: 'accept', content: { confirmed: true } },
+    });
+    expect(state.getTask(task.id)?.approvalRequests).toHaveLength(0);
+  });
+  it('denies QA approval families and stale QA requests without creating or resolving user approval cards', async () => {
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+    });
+    await waitFor(
+      () =>
+        !!context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1)?.turnId
+    );
+    const initial = context.state.getTask(context.task.id)!,
+      pass = initial.passes!.find((row: any) => row.id === initial.currentPassId)!,
+      round = pass.qualityLoop.rounds.at(-1),
+      threadId = round.threadId,
+      turnId = round.turnId,
+      owner = fake.threadOwners.get(threadId);
+    expect(round).toMatchObject({
+      status: 'auditing',
+      threadId: expect.any(String),
+      turnId: expect.any(String),
+    });
+    expect(turns('orchestrator').find((row) => row.turnId === turnId)).toMatchObject({
+      approvalPolicy: 'never',
+    });
+    const requests = [
+      [
+        'qa-command',
+        'item/commandExecution/requestApproval',
+        {
+          command: 'write a file',
+          cwd: projectRoot,
+          networkApprovalContext: { host: 'example.invalid', protocol: 'https' },
+        },
+      ],
+      [
+        'qa-file',
+        'item/fileChange/requestApproval',
+        { itemId: 'file-item', grantRoot: projectRoot },
+      ],
+      [
+        'qa-permissions',
+        'item/permissions/requestApproval',
+        { permissions: { network: { enabled: true }, fileSystem: { write: [projectRoot] } } },
+      ],
+      [
+        'qa-elicitation',
+        'mcpServer/elicitation/request',
+        { serverName: 'external', mode: 'form', requestedSchema: { type: 'object' } },
+      ],
+      ['qa-unknown', 'item/future/requestApproval', { command: 'unknown approval family' }],
     ] as const;
-    for(const [id,method,extra] of requests){owner.emit('serverRequest',id,method,{threadId,turnId,itemId:'item',...extra});await waitFor(()=>fake.calls.some(row=>row.kind==='server-error'&&row.id===id));}
-    expect(fake.calls.filter(row=>row.kind==='server-error'&&requests.some(([id])=>row.id===id))).toHaveLength(requests.length);expect(context.state.getTask(context.task.id)?.approvalRequests||[]).toEqual([]);expect(context.state.getTask(context.task.id)).toMatchObject({phase:'reviewing',activeRole:'orchestrator',activeTurnId:turnId,passes:[{qualityLoop:{status:'auditing'}}]});
-    await context.state.mutate((state:any)=>{const task=state.tasks.find((row:any)=>row.id===context.task.id);task.approvalRequests=[{requestId:'legacy-qa-approval',method:'item/permissions/requestApproval',itemId:'legacy',threadId,turnId,permissionRequest:{fileSystem:{write:[projectRoot]}}}];});
-    await context.orchestrator.resolveApproval(context.task.id,'legacy-qa-approval','accept');expect(fake.calls.some(row=>row.kind==='server-response'&&row.id==='legacy-qa-approval')).toBe(false);expect(fake.calls.some(row=>row.kind==='server-error'&&row.id==='legacy-qa-approval')).toBe(true);expect(context.state.getTask(context.task.id)?.approvalRequests).toEqual([]);
-    await context.orchestrator.pauseQualityLoop(context.task.id);const previousPassId=context.state.getTask(context.task.id)!.currentPassId!;await context.orchestrator.submitTask('Start a separate follow-up pass.',context.task.id);await waitFor(()=>context.state.getTask(context.task.id)?.currentPassId!==previousPassId&&turns('router').length===2);
-    const fresh=context.state.getTask(context.task.id)!,freshPassId=fresh.currentPassId!,freshRole=fresh.activeRole,freshTurn=fresh.activeTurnId;owner.emit('serverRequest','late-old-qa','item/future/requestApproval',{threadId,turnId,command:'late request'});await waitFor(()=>fake.calls.some(row=>row.kind==='server-error'&&row.id==='late-old-qa'));
-    expect(context.state.getTask(context.task.id)).toMatchObject({currentPassId:freshPassId,phase:'routing',activeRole:freshRole,activeTurnId:freshTurn,approvalRequests:[]});await context.orchestrator.cancelTask(context.task.id);
+    for (const [id, method, extra] of requests) {
+      owner.emit('serverRequest', id, method, { threadId, turnId, itemId: 'item', ...extra });
+      await waitFor(() => fake.calls.some((row) => row.kind === 'server-error' && row.id === id));
+    }
+    expect(
+      fake.calls.filter(
+        (row) => row.kind === 'server-error' && requests.some(([id]) => row.id === id)
+      )
+    ).toHaveLength(requests.length);
+    expect(context.state.getTask(context.task.id)?.approvalRequests || []).toEqual([]);
+    expect(context.state.getTask(context.task.id)).toMatchObject({
+      phase: 'reviewing',
+      activeRole: 'orchestrator',
+      activeTurnId: turnId,
+      passes: [{ qualityLoop: { status: 'auditing' } }],
+    });
+    await context.state.mutate((state: any) => {
+      const task = state.tasks.find((row: any) => row.id === context.task.id);
+      task.approvalRequests = [
+        {
+          requestId: 'legacy-qa-approval',
+          method: 'item/permissions/requestApproval',
+          itemId: 'legacy',
+          threadId,
+          turnId,
+          permissionRequest: { fileSystem: { write: [projectRoot] } },
+        },
+      ];
+    });
+    await context.orchestrator.resolveApproval(context.task.id, 'legacy-qa-approval', 'accept');
+    expect(
+      fake.calls.some((row) => row.kind === 'server-response' && row.id === 'legacy-qa-approval')
+    ).toBe(false);
+    expect(
+      fake.calls.some((row) => row.kind === 'server-error' && row.id === 'legacy-qa-approval')
+    ).toBe(true);
+    expect(context.state.getTask(context.task.id)?.approvalRequests).toEqual([]);
+    await context.orchestrator.pauseQualityLoop(context.task.id);
+    const previousPassId = context.state.getTask(context.task.id)!.currentPassId!;
+    await context.orchestrator.submitTask('Start a separate follow-up pass.', context.task.id);
+    await waitFor(
+      () =>
+        context.state.getTask(context.task.id)?.currentPassId !== previousPassId &&
+        turns('router').length === 2
+    );
+    const fresh = context.state.getTask(context.task.id)!,
+      freshPassId = fresh.currentPassId!,
+      freshRole = fresh.activeRole,
+      freshTurn = fresh.activeTurnId;
+    owner.emit('serverRequest', 'late-old-qa', 'item/future/requestApproval', {
+      threadId,
+      turnId,
+      command: 'late request',
+    });
+    await waitFor(() =>
+      fake.calls.some((row) => row.kind === 'server-error' && row.id === 'late-old-qa')
+    );
+    expect(context.state.getTask(context.task.id)).toMatchObject({
+      currentPassId: freshPassId,
+      phase: 'routing',
+      activeRole: freshRole,
+      activeTurnId: freshTurn,
+      approvalRequests: [],
+    });
+    await context.orchestrator.cancelTask(context.task.id);
   });
-  it('discovers and applies the project knowledge skill through generic skill selection',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();
-    const skillDirectory=path.join(projectRoot,'.agents','skills','agentmem-project');await mkdir(skillDirectory,{recursive:true});
-    const skillText=(await readFile(path.resolve('.agents/skills/agentmem-project/SKILL.md'),'utf8')).replace(/\r\n?/g,'\n');await writeFile(path.join(skillDirectory,'SKILL.md'),skillText);
-    const staging=await import('../server/worker-staging.js');const [skill]=await staging.searchConfiguredSkills('agentmem-project',testCodexHome,projectRoot);expect(skill).toBeTruthy();
-    const task=await orchestrator.submitTask(`Research the project's documented decision about this behavior using the project knowledge skill.\n/skill ${skill.id}`);await complete('router',{route:'hard_task',rule_id:'hard_explicit_project_knowledge',justification:'The request asks for substantive project-specific research.'});const planner=await waitForRole('orchestrator');
-    expect(state.getTask(task.id)?.routeDecision).toMatchObject({route:'hard_task',effectiveRoute:'hard_task',rule_id:'hard_explicit_project_knowledge'});
-    expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toContainEqual(expect.objectContaining({id:skill.id,revision:skill.revision,source:expect.stringContaining(path.join('.agents','skills','agentmem-project','SKILL.md'))}));
-    await complete('orchestrator',assignment);const worker=await waitForRole('worker');expect(planner.input).toContain(skillText.split('\n').slice(4).join('\n').trim());expect(worker.input).toContain('"outcome":');expect(worker.input).not.toContain('EXECUTE.');expect(worker.input).not.toContain(skillText.split('\n').slice(4).join('\n').trim());expect(planner.input).not.toContain('Verified project context');await orchestrator.cancelTask(task.id);
-  });
-  it('passes current-pass image and text content to router/direct, then starts an attachment-free follow-up pass',async()=>{
-    const {orchestrator}=await setup();const image=pngAttachment();const text=Buffer.from('The red square is in the upper left.');const file={name:'notes.txt',type:'text/plain',size:text.length,data:text.toString('base64')};
-    const task=await orchestrator.submitTask('What is in this image?',undefined,[image,file]);const router=lastTurn('router');expect(router.images).toEqual([{mediaType:'image/png',data:image.data}]);expect(router.input).toContain('The red square is in the upper left.');
-    await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'Identify the user-provided image.'});const direct=await waitForRole('direct');expect(direct.images).toEqual(router.images);expect(direct.input).toContain('The red square is in the upper left.');
-    await complete('direct',{type:'answer',answer:'A red square appears in the upper-left corner.',escalation:null,route:null,justification:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');
-    await orchestrator.submitTask('Handle a new request without an attachment.',task.id);let later=turns('router').at(-1)!;expect(later.images).toEqual([]);expect(later.input).not.toContain('The red square is in the upper left.');
-    await orchestrator.submitTask('An unrelated image-free task.');later=turns('router').at(-1)!;expect(later.images).toEqual([]);expect(later.input).not.toContain('The red square is in the upper left.');
-  });
-  it('runs a bounded implementation at the selected maximum effort and does not start Sol review',async()=>{
-    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/` and run its focused test.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const simple=await waitForRole('simple');expect(simple).toMatchObject({model:'gpt-6-luna',effort:'max',writeRoots:[path.join(projectRoot,'src')],serviceTierForTurn:undefined});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
-    await complete('simple',{type:'complete',receipt,escalation:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');expect(modules.state.getTask(task.id)).toMatchObject({phase:'accepted',resolution:'simple',reviewNote:expect.stringContaining('No Sol review')});
-  });
-  it('steers the exact active role turn in the same pass, then starts a new pass after completion',async()=>{
-    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/`.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const firstTurn=await waitForRole('simple');
-    const attachment=pngAttachment();await orchestrator.submitTask('Please check the focused test first.',task.id,[attachment]);const afterSteer=state.getTask(task.id)!;expect(afterSteer.passes).toHaveLength(1);expect(afterSteer.passes![0].userInputs).toEqual(['Fix the known typo under `src/`.','Please check the focused test first.']);expect(afterSteer.passes![0].attachments).toHaveLength(1);expect(afterSteer.messages.at(-1)).toMatchObject({passId:afterSteer.passes![0].id,submissionKind:'steering',deliveryStatus:'steered',attachments:[expect.objectContaining({name:'shape.png'})]});expect(fake.calls).toContainEqual(expect.objectContaining({kind:'steer',threadId:firstTurn.threadId,expectedTurnId:firstTurn.turnId,input:'Please check the focused test first.',images:[expect.objectContaining({mediaType:'image/png'})]}));expect(fake.calls.some(row=>row.kind==='interrupt')).toBe(false);expect(turns('orchestrator')).toHaveLength(0);
-    await complete('simple',{type:'complete',receipt,escalation:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');await orchestrator.submitTask('A separate follow-up after completion.',task.id);const afterCompletion=state.getTask(task.id)!;expect(afterCompletion.passes).toHaveLength(2);expect(afterCompletion.passes![0].userInputs).toEqual(['Fix the known typo under `src/`.','Please check the focused test first.']);expect(afterCompletion.passes![1].userInputs).toEqual(['A separate follow-up after completion.']);
-  });
-  it('does not deliver a stale steer to the subsequent active turn',async()=>{
-    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/`.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const turn=await waitForRole('simple');fake.steerErrors.push(`expected active turn id \`${turn.turnId}\` but found \`turn-newer\``);
-    await expect(orchestrator.submitTask('Keep this for the next pass.',task.id)).rejects.toThrow('active turn changed');const steers=fake.calls.filter(row=>row.kind==='steer');expect(steers.map(row=>row.expectedTurnId)).toEqual([turn.turnId]);expect(state.getTask(task.id)?.passes).toHaveLength(1);expect(state.getTask(task.id)?.messages.some((row:any)=>row.text==='Keep this for the next pass.')).toBe(false);expect(fake.calls.some(row=>row.kind==='interrupt')).toBe(false);
-  });
-  it('starts a new pass when the active turn completed during submit without interrupting',async()=>{
-    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/`.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const turn=await waitForRole('simple');fake.steerErrors.push('no active turn to steer');
-    await orchestrator.submitTask('Save this as a separate follow-up.',task.id);const saved=state.getTask(task.id)!;expect(saved.passes).toHaveLength(2);expect(saved.passes![0]).toMatchObject({phase:'needs_attention'});expect(saved.passes![1].userInputs).toEqual(['Save this as a separate follow-up.']);expect(fake.calls).toContainEqual(expect.objectContaining({kind:'steer',threadId:turn.threadId,expectedTurnId:turn.turnId}));expect(fake.calls.some(row=>row.kind==='interrupt')).toBe(false);
-  });
-  it('keeps explicit Stop mapped to turn/interrupt for the current active turn',async()=>{
-    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Fix the known typo under `src/`.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});const turn=await waitForRole('simple');
-    await orchestrator.cancelTask(task.id);expect(fake.calls).toContainEqual(expect.objectContaining({kind:'interrupt',threadId:turn.threadId,turnId:turn.turnId}));expect(fake.calls.filter(row=>row.kind==='steer')).toHaveLength(0);
-  });
-  it('rejects steering an active DeepSeek worker without saving or waking another turn',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Implement the requested bounded behavior.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'This request needs a worker.'});await waitForRole('orchestrator');await complete('orchestrator',assignment);const worker=await waitForRole('worker');const messageCount=state.getTask(task.id)?.messages.length;const workerTurns=turns('worker').length;
-    await expect(orchestrator.submitTask('Keep the current scope and verify this edge case.',task.id)).rejects.toThrow(/DeepSeek Harness does not support steering/);expect(fake.calls.some(row=>row.kind==='steer'&&row.threadId===worker.threadId)).toBe(false);expect(turns('worker')).toHaveLength(workerTurns);expect(turns('orchestrator')).toHaveLength(1);expect(state.getTask(task.id)?.passes).toHaveLength(1);expect(state.getTask(task.id)?.messages).toHaveLength(messageCount);expect(fake.calls.some(row=>row.kind==='interrupt')).toBe(false);await orchestrator.cancelTask(task.id);
-  });
-  it('marks an unfinished pass needs-attention when the composer arrives before turn/started',async()=>{
-    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('First request before the router turn starts.');
-    await waitForRole('router');await state.mutate((saved:any)=>{const row=saved.tasks.find((item:any)=>item.id===task.id);row.activeTurnId=undefined;row.phase='routing';});
-    await orchestrator.submitTask('A separate request while the first route is still starting.',task.id);const saved=state.getTask(task.id)!;
-    expect(saved.passes).toHaveLength(2);expect(saved.passes![0]).toMatchObject({phase:'needs_attention',activeTurnId:undefined,activeRole:undefined});expect(saved.passes![1].userInputs).toEqual(['A separate request while the first route is still starting.']);
-  });
-  it('escalates a direct answer to Luna simple work without entering the hard flow',async()=>{
-    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Explain then rename one bounded internal label under `src/`.');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'The initial request appears to ask for a brief explanation.'});await waitForRole('direct');await complete('direct',{type:'escalate',answer:null,escalation:'The request includes a bounded implementation.',route:'simple_implementation',justification:'Rename one known internal label and run its focused test.'});const simple=await waitForRole('simple');expect(simple).toMatchObject({model:'gpt-6-luna',effort:'max',writeRoots:[path.join(projectRoot,'src')]});expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);expect(modules.state.getTask(task.id)?.executionEscalation).toMatchObject({from:'direct_answer',to:'simple_implementation'});
-    await complete('simple',{type:'complete',receipt,escalation:null});await waitFor(()=>modules.state.getTask(task.id)?.phase==='accepted');expect(modules.state.getTask(task.id)).toMatchObject({resolution:'simple'});
-  });
-  it('carries completed simple actions and evidence into the hard assignment after escalation',async()=>{
-    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Make the bounded change under `src/` and handle any consequential schema choice.');await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'The initial change is bounded and has focused verification.'});await waitForRole('simple');const completedActions=['Updated the local parser callsite.'];const evidence=['Focused test now exposes a persisted schema mismatch.'];await complete('simple',{type:'escalate',receipt:null,escalation:{decision_needed:'Choose a backward-compatible stored field mapping.',completed_actions:completedActions,evidence}});const sol=await waitForRole('orchestrator');expect(sol).toMatchObject({model:'gpt-6.1-sol',effort:'low'});expect(sol.input).toContain('COMPLETED ACTIONS (preserve; do not repeat)');expect(sol.input).toContain(JSON.stringify(completedActions));expect(sol.input).toContain(JSON.stringify(evidence));expect(modules.state.getTask(task.id)?.executionEscalation).toMatchObject({from:'simple_implementation',to:'hard_task',completedActions,evidence});
-  });
-  it('retires prepared worktrees when a follow-up pass supersedes recruitment preparation',async()=>{
-     const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Implement one bounded worker change.');await waitForRole('router');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs delegated implementation.'});await waitForRole('orchestrator');
-    let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});fake.prepareWorktreeGate={entered:()=>entered(),wait:gate};const oldTurn=lastTurn('orchestrator'),oldPassId=state.getTask(task.id)!.currentPassId!,requestId='stale-recruit-after-follow-up';
-    try{
-      fake.agentInstance.emit('serverRequest',requestId,'item/tool/call',{threadId:oldTurn.threadId,turnId:oldTurn.turnId,namespace:'opnex',tool:'recruit_workers',arguments:{workers:[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]}});await started;const canonicalRoot=canonicalPath(projectRoot),prepared=gitWorktreeRows(projectRoot).filter(row=>row.path!==canonicalRoot);expect(prepared).toHaveLength(2);const taskRoot=path.dirname(prepared[0].path);const preparedBranches=prepared.map(row=>String(row.branch).slice('refs/heads/'.length));
-      fake.agentInstance.emit('disconnected','fixture disconnect while recruitment worktrees are prepared');await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');fake.agentInstance.emit('connected');await orchestrator.submitTask('Continue with a separate follow-up pass.',task.id);await waitFor(()=>turns('router').length===2);await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The follow-up still needs delegated implementation.'});try{await waitFor(()=>state.getTask(task.id)?.phase==='planning'&&state.getTask(task.id)?.activeRole==='orchestrator'&&!!state.getTask(task.id)?.activeTurnId);}catch{const latest=state.getTask(task.id)!;throw new Error(`Follow-up did not reach planning: ${JSON.stringify({phase:latest.phase,error:latest.error,activeRole:latest.activeRole,activeTurnId:latest.activeTurnId,routerThreadId:latest.routerThreadId,orchestratorThreadId:latest.orchestratorThreadId,turns:turns('orchestrator').map(row=>({model:row.model,threadId:row.threadId,turnId:row.turnId}))})}`);}const newTurn=lastTurn('orchestrator'),before=state.getTask(task.id)!;expect(before.currentPassId).not.toBe(oldPassId);expect(before.phase).toBe('planning');
-      release();await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===requestId));
-      const after=state.getTask(task.id)!,oldPass=after.passes?.find((row:any)=>row.id===oldPassId),current=after.passes?.find((row:any)=>row.id===before.currentPassId);expect(fake.calls.find(row=>row.kind==='server-response'&&row.id===requestId)?.result?.success).toBe(false);expect(after.currentPassId).toBe(before.currentPassId);expect(after.phase).toBe('planning');expect(after.orchestratorThreadId).toBe(newTurn.threadId);expect(after.assignment).toEqual(before.assignment);expect(current?.phase).toBe('planning');expect(current?.assignment).toEqual(before.assignment);expect(current?.recruitmentTeam).toBeUndefined();expect(oldPass?.recruitmentTeam).toBeUndefined();expect(turns('worker')).toHaveLength(0);
-      const worktrees=gitWorktreeRows(projectRoot).map(row=>row.path);expect(worktrees).toHaveLength(1);expect(worktrees[0]).toBe(canonicalPath(projectRoot));const branches=execFileSync('git',['for-each-ref','--format=%(refname:short)','refs/heads/recruitment'],{cwd:projectRoot,encoding:'utf8'}).trim();for(const branch of preparedBranches)expect(branches).not.toContain(branch);await expect(lstat(taskRoot)).rejects.toThrow();
-    }finally{release();fake.prepareWorktreeGate=null;await orchestrator.cancelTask(task.id);}
-  });
-  it('does not seal a prepared team when its orchestrator turn is replaced within the same pass',async()=>{
-    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Implement one bounded worker change.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs delegated implementation.'});await waitForRole('orchestrator');
-    let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});fake.prepareWorktreeGate={entered:()=>entered(),wait:gate};const oldTurn=lastTurn('orchestrator'),passId=state.getTask(task.id)!.currentPassId!,requestId='stale-recruit-after-new-turn';
-    try{
-      fake.agentInstance.emit('serverRequest',requestId,'item/tool/call',{threadId:oldTurn.threadId,turnId:oldTurn.turnId,namespace:'opnex',tool:'recruit_workers',arguments:{workers:[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]}});await started;
-       await state.mutate((value:any)=>{const current=value.tasks.find((item:any)=>item.id===task.id);current.activeTurnId=undefined;});const replacement=await fake.agentInstance.startTurn(oldTurn.threadId,'Continue the same pass with a fresh turn.','orchestrator','gpt-6.1-sol','low',projectRoot,[],'full-access');fake.agentInstance.emit('notification','turn/started',{threadId:oldTurn.threadId,turn:{id:replacement.turn.id}});await waitFor(()=>state.getTask(task.id)?.activeTurnId===replacement.turn.id);
-      release();await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===requestId));
-      const current=state.getTask(task.id)!;expect(fake.calls.find(row=>row.kind==='server-response'&&row.id===requestId)?.result?.success).toBe(false);expect(current.currentPassId).toBe(passId);expect(current.phase).toBe('planning');expect(current.orchestratorThreadId).toBe(oldTurn.threadId);expect(current.activeTurnId).toBe(replacement.turn.id);expect(current.passes?.find((row:any)=>row.id===passId)?.recruitmentTeam).toBeUndefined();expect(turns('worker')).toHaveLength(0);
-       const worktrees=gitWorktreeRows(projectRoot).map(row=>row.path);expect(worktrees).toHaveLength(1);expect(worktrees[0]).toBe(canonicalPath(projectRoot));
-    }finally{release();fake.prepareWorktreeGate=null;await orchestrator.cancelTask(task.id);}
-  });
-  it('retires prepared worktrees when cancellation wins during recruitment preparation',async()=>{
-    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Cancel one bounded worker recruitment during setup.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs one delegated worker.'});await waitForRole('orchestrator');
-    let release!:()=>void,entered!:()=>void,taskRoot='';const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});fake.prepareWorktreeGate={entered:()=>entered(),wait:gate};const requestId='cancel-during-recruitment-preparation';
-    try{
-      sendRecruitmentRequest(requestId,[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]);await started;const prepared=gitWorktreeRows(projectRoot).filter(row=>row.path!==canonicalPath(projectRoot));expect(prepared).toHaveLength(2);taskRoot=path.dirname(prepared[0].path);
-      const cancellation=orchestrator.cancelTask(task.id);await waitFor(()=>state.getTask(task.id)?.phase==='cancelled');release();await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===requestId));await cancellation;
-      expect(fake.calls.find(row=>row.kind==='server-response'&&row.id===requestId)?.result?.success).toBe(false);expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam).toBeUndefined();expect(turns('worker')).toHaveLength(0);await expectPreparedRecruitmentRetired(taskRoot);
-    }finally{release();fake.prepareWorktreeGate=null;if(state.getTask(task.id)?.phase!=='cancelled')await orchestrator.cancelTask(task.id);}
-  });
-  it('retires prepared worktrees when the final team-seal state mutation fails',async()=>{
-    let release!:()=>void,intercepted=false,taskRoot='';const gate=new Promise<void>(resolve=>{release=resolve;});const mutationGate:StateMutationGate={match:fn=>!intercepted&&String(fn).includes('sealRecruitmentTeam'),enter:()=>{intercepted=true;},wait:gate,error:new Error('Fixture final recruitment seal persistence failure.')};
-    const {orchestrator,state}=await setup(true,undefined,mutationGate);const task=await orchestrator.submitTask('Retire prepared worktrees when the team cannot be sealed.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs one delegated worker.'});await waitForRole('orchestrator');const requestId='failed-final-recruitment-seal';
-    try{
-      sendRecruitmentRequest(requestId,[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]);await waitFor(()=>intercepted);const prepared=gitWorktreeRows(projectRoot).filter(row=>row.path!==canonicalPath(projectRoot));expect(prepared).toHaveLength(2);taskRoot=path.dirname(prepared[0].path);release();await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===requestId));
-      const result=fake.calls.find(row=>row.kind==='server-response'&&row.id===requestId)?.result;expect(result?.success).toBe(false);expect(result?.contentItems?.[0]?.text).toContain('Fixture final recruitment seal persistence failure');expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam).toBeUndefined();expect(turns('worker')).toHaveLength(0);await expectPreparedRecruitmentRetired(taskRoot);
-    }finally{release();await orchestrator.cancelTask(task.id);}
-  });
-  it('preserves a sealed team when a post-commit state listener fails',async()=>{
-    let release!:()=>void,intercepted=false;const gate=new Promise<void>(resolve=>{release=resolve;});const mutationGate:StateMutationGate={match:fn=>!intercepted&&String(fn).includes('sealRecruitmentTeam'),enter:()=>{intercepted=true;},wait:gate,error:new Error('Fixture state listener failed after persistence.'),afterCommit:true};
-    const {orchestrator,state}=await setupDeepSeek(true,undefined,mutationGate);const task=await orchestrator.submitTask('Keep a persisted team after a post-commit listener error.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs one delegated worker.'});await waitForRole('orchestrator');const requestId='persisted-recruitment-team-after-listener-error';
-    try{
-      sendRecruitmentRequest(requestId,[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]);await waitFor(()=>intercepted);release();await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===requestId));await waitFor(()=>turns('worker').length===1);const result=fake.calls.find(row=>row.kind==='server-response'&&row.id===requestId)?.result,team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(result?.success).toBe(true);expect(team).toMatchObject({sealed:true,status:'running'});expect(gitWorktreeRows(projectRoot)).toHaveLength(3);expect(fake.calls.filter(row=>row.kind==='turn'&&row.server==='deepseek')).toHaveLength(1);
-    }finally{release();await orchestrator.cancelTask(task.id);}
-  });
-  it('deduplicates recruitment with the Codex tool-call ID instead of its JSON-RPC request ID',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Start one bounded delegated worker.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs a worker.'});await waitForRole('orchestrator');const turn=lastTurn('orchestrator'),owner=fake.threadOwners.get(turn.threadId)||fake.agentInstance,toolCallId='model-tool-call-1',firstRequestId='rpc-request-1',secondRequestId='rpc-request-2',params={threadId:turn.threadId,turnId:turn.turnId,callId:toolCallId,namespace:'opnex',tool:'recruit_workers',arguments:{workers:[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]}};
-    try{
-      owner.emit('serverRequest',firstRequestId,'item/tool/call',params);await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===firstRequestId));
-      expect(fake.calls.find(row=>row.kind==='server-response'&&row.id===firstRequestId)?.result?.success).toBe(true);expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.toolCallIds).toEqual([toolCallId]);
-      owner.emit('serverRequest',secondRequestId,'item/tool/call',params);await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===secondRequestId));
-      expect(fake.calls.find(row=>row.kind==='server-response'&&row.id===secondRequestId)?.result?.success).toBe(true);expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.toolCallIds).toEqual([toolCallId]);
-    }finally{await orchestrator.cancelTask(task.id);}
-  });
-  it('reports a failed recruitment service call instead of claiming the planner never called it',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const nonGitRoot=path.join(dataDirectory,'non-git-project');await mkdir(path.join(nonGitRoot,'src'),{recursive:true});await state.mutate((saved:any)=>{const project=saved.projects.find((row:any)=>row.id===saved.selectedProjectId);project.projectRoot=nonGitRoot;});
-    const task=await orchestrator.submitTask('Delegate one bounded worker.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs a worker.'});await waitForRole('orchestrator');
-    const turn=lastTurn('orchestrator'),owner=fake.threadOwners.get(turn.threadId)||fake.agentInstance,requestId='non-git-recruitment';owner.emit('serverRequest',requestId,'item/tool/call',{threadId:turn.threadId,turnId:turn.turnId,namespace:'opnex',tool:'recruit_workers',arguments:{workers:[workerPlan({...assignment,write_scope:[path.join(nonGitRoot,'src')]})]}});
-    try{
-      await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===requestId));const response=fake.calls.find(row=>row.kind==='server-response'&&row.id===requestId)?.result;expect(response?.success).toBe(false);expect(response?.contentItems?.[0]?.text).toMatch(/not a Git worktree/i);
-      owner.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'dynamicToolCall',id:'model-recruit-call',toolName:'recruit_workers',status:'failed'},{type:'agentMessage',text:JSON.stringify(assignment)}]}});
-      await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');expect(state.getTask(task.id)?.error).toMatch(/Recruitment service failed:.*Git worktree/i);expect(state.getTask(task.id)?.error).not.toMatch(/without calling the recruitment service/i);expect(state.getTask(task.id)?.liveActivity?.find((row:any)=>row.itemId==='model-recruit-call')?.detail).toMatch(/Recruitment service failed:.*Git worktree/i);expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam).toBeUndefined();expect(fake.calls.filter(row=>row.kind==='turn'&&row.server==='deepseek')).toHaveLength(0);
-    }finally{await orchestrator.cancelTask(task.id);}
-  });
-  it.each([
-    {label:'non-Git project with Codex',gitMode:'none' as const,provider:'codex' as const},
-    {label:'non-Git project with native DSH',gitMode:'none' as const,provider:'deepseek' as const},
-    {label:'uncommitted Git project with Codex',gitMode:'uninitialized' as const,provider:'codex' as const},
-    {label:'uncommitted Git project with native DSH',gitMode:'uninitialized' as const,provider:'deepseek' as const},
-  ])('completes an answer-only recruitment in a $label without a worktree',async({gitMode,provider})=>{
-    const {orchestrator,state}=await setup(true,undefined,undefined,provider,gitMode),task=await orchestrator.submitTask('Delegate a read-only worker to answer one question.');
-    const answerAssignment:Assignment={...assignment,outcome:'Answer the delegated question without changing files.',deliverable:'A concise answer based on the selected project.',write_scope:[]};
-    const answerWorker:WorkerPlan={name:'Answer worker',step:'Answer without editing files',depends_on:[],assignment:answerAssignment,effort:'max',skill_refs:[]};
-    await complete('router',{route:'hard_task',rule_id:'hard_explicit_worker_delegation',justification:'The user explicitly asked for one delegated worker.'});await waitForRole('orchestrator');
-    expect(lastTurn('orchestrator').input).toContain('Choose mode=read_only');
-    const orchestratorTurn=sendRecruitmentRequest(`read-only-${gitMode}`,[answerWorker],'read_only'),owner=fake.threadOwners.get(orchestratorTurn.threadId)||fake.agentInstance;
-    await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===`read-only-${gitMode}`));
-    const response=fake.calls.find(row=>row.kind==='server-response'&&row.id===`read-only-${gitMode}`)?.result;
-    expect(response?.success).toBe(true);const accepted=JSON.parse(response.contentItems[0].text);expect(accepted).toMatchObject({mode:'read_only',integratorQueued:false,workerCount:1});expect(accepted.workers[0]).not.toHaveProperty('branch');expect(accepted.workers[0]).not.toHaveProperty('worktreeRoot');
-    owner.emit('notification','turn/completed',{threadId:orchestratorTurn.threadId,turn:{id:orchestratorTurn.turnId,status:'completed',items:[{type:'agentMessage',text:'The read-only team is sealed.'}]}});
-    const worker=await waitForRole('worker'),team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam,workerCall=lastTurn('worker');
-    expect(team).toMatchObject({mode:'read_only',status:'running',canonicalProjectRoot:projectRoot,integration:{status:'not_required'}});expect(team).not.toHaveProperty('workspaceParent');expect(team).not.toHaveProperty('baseRef');expect(team).not.toHaveProperty('baseCommit');expect(team?.workers[0]).not.toHaveProperty('branch');expect(team?.workers[0]).not.toHaveProperty('worktreeRoot');
-    expect(workerCall.writeRoots).toEqual([]);if(provider==='deepseek'){const connection=fake.calls.find(row=>row.kind==='dsh-connect'),runtime=fake.dshSessions.get(worker.threadId);expect(connection?.cwd).toBe(projectRoot);expect(runtime?.options.permission).toMatchObject({access:'read-only',permissionMode:'read-only',writeScope:[]});}else{expect(worker.root).toBe(projectRoot);expect(workerCall.root).toBe(projectRoot);expect(workerCall.approvalPolicy).toBe('never');}expect(turns('integrator')).toHaveLength(0);
-    await complete('worker',provider==='deepseek'?receipt:{type:'receipt',receipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});await waitFor(()=>turns('orchestrator').length===2&&state.getTask(task.id)?.phase==='reviewing');
-    const review=lastTurn('orchestrator'),completedTeam=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(completedTeam).toMatchObject({status:'complete',integration:{status:'not_required'},combinedReceipt:{status:provider==='deepseek'?'incomplete':'complete'}});expect(state.getTask(task.id)?.assignment?.outcome).toContain('read-only worker results');expect(review.input).toMatch(/no worker commits, branches, or integration worktree to verify/i);expect(review.input).not.toContain('worker/integrator results');expect(review.input).not.toContain('verify all worker commits');expect(turns('integrator')).toHaveLength(0);
-    const nativeAnswer=completedTeam?.combinedReceipt?.result;await complete('orchestrator',{outcome:'accept',note:'The read-only worker result and provenance meet the request.',assignment:null,decision_required:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');
-    if(provider==='deepseek'){const acceptedPass=state.getTask(task.id)?.passes?.[0];expect(acceptedPass?.publicAnswer).toBe(nativeAnswer);expect(acceptedPass?.receipt?.result).toBe(nativeAnswer);expect(acceptedPass?.receipt?.result).not.toContain('App-owned independent review accepted');expect(acceptedPass?.receipt?.verification).toEqual(expect.arrayContaining([expect.objectContaining({check:'App-owned independent final review',result:'passed'})]));}
-    expect(turns('integrator')).toHaveLength(0);
-  });
-  it('still requires a commit for implementation worktree recruitment',async()=>{
-    const {orchestrator,state}=await setup(true,undefined,undefined,'codex','uninitialized'),task=await orchestrator.submitTask('Make a one-line implementation change.');
-    await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request changes project files.'});await waitForRole('orchestrator');
-    sendRecruitmentRequest('uncommitted-write-team',[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]);
-    await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id==='uncommitted-write-team'));
-    const response=fake.calls.find(row=>row.kind==='server-response'&&row.id==='uncommitted-write-team')?.result;
-    expect(response?.success).toBe(false);expect(response?.contentItems?.[0]?.text).toMatch(/could not be resolved to a commit/i);expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam).toBeUndefined();expect(turns('worker')).toHaveLength(0);
-  });
-  it('completes the recruitment activity when the team is sealed',async()=>{
-    const {orchestrator,state}=await setupDeepSeek(),task=await orchestrator.submitTask('Delegate one read-only answer.');
-    try{
-      await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs a worker.'});await waitForRole('orchestrator');
-      await recruit([workerPlan({...assignment,write_scope:[]})],true);
-      const live=state.getTask(task.id),activity=live?.liveActivity?.find((row:any)=>row.title==='recruit_workers');
-      expect(live?.passes?.[0]?.recruitmentTeam?.sealed).toBe(true);expect(activity?.status).toBe('completed');
-    }finally{await orchestrator.cancelTask(task.id);}
-  });
-  it('keeps the no-call failure message when the planner never submits a recruitment request',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Return an assignment without calling recruitment.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs a worker.'});await waitForRole('orchestrator');const turn=lastTurn('orchestrator'),owner=fake.threadOwners.get(turn.threadId)||fake.agentInstance;
-    try{
-      owner.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'agentMessage',text:JSON.stringify(assignment)}]}});await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');expect(state.getTask(task.id)?.error).toMatch(/finished without calling the recruitment service/i);expect(fake.calls.some(row=>row.kind==='server-response'&&row.result?.success===false)).toBe(false);
-    }finally{await orchestrator.cancelTask(task.id);}
-  });
-  it('hands native assignments to DSH, records raw results, and reviews them without injecting an Opnex DSH role prompt',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Delegate one worker to report its model, provider, and harness.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request explicitly requires a delegated worker.'});await waitForRole('orchestrator');expect(fake.calls.find(row=>row.kind==='thread'&&row.role==='orchestrator')?.dynamicTools).toEqual(expect.arrayContaining([expect.objectContaining({name:'recruit_workers',namespace:'opnex'})]));
-    const assigned={...assignment,write_scope:[path.join(projectRoot,'src')]};await recruit([workerPlan(assigned)]);const worker=await waitForRole('worker'),team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam,workerRoot=team?.workers[0]?.worktreeRoot,workerRuntime=fake.dshSessions.get(worker.threadId);expect(worker).toMatchObject({server:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});expect(worker.schema).toBeUndefined();expect(worker.input).toContain('"outcome": "Perform the requested implementation."');expect(worker.input).not.toContain('COMPLETE ASSIGNMENT');expect(worker.input).not.toContain('receipt_requirements');expect(worker.input).not.toContain('HOST-OBSERVED DSH');expect(worker.writeRoots).toEqual([path.join(workerRoot!,'src')]);expect(team?.workers[0]).toMatchObject({status:'running',workerStage:'execute'});expect(team?.workers[0]?.deepSeekPhaseRuns).toHaveLength(1);expect(fake.calls.find(row=>row.kind==='dsh-connect')).toMatchObject({profileName:'opnex-sdk',profileArgs:expect.arrayContaining(['--profile','opnex-sdk'])});expect(team?.workers[0]?.deepSeekRuntime?.permissionMode).toBe('native-profile');expect(turns('orchestrator')).toHaveLength(1);
-    await writeFile(path.join(workerRoot!,'src','change.ts'),'export const changed = true;\n');workerRuntime.toolCall('write_file',{path:'src/change.ts'},{written:true});execFileSync('git',['add','--','src/change.ts'],{cwd:workerRoot,stdio:'ignore',windowsHide:true});execFileSync('git',['commit','--quiet','-m','worker implementation'],{cwd:workerRoot,stdio:'ignore',windowsHide:true});
-    await complete('worker','The native runtime context identifies model deepseek-v4.1-flash and DeepSeek Harness; provider and effort are not exposed.');await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status==='complete'&&state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status==='running'&&!!state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.activeTurnId);const toolLog=state.getTask(task.id)?.passes?.[0]?.toolCalls;expect(toolLog).toMatchObject({total:1,statusCounts:{started:0,completed:1,failed:0,interrupted:0},omittedCount:0});expect(toolLog?.calls[0]).toMatchObject({name:'write_file',type:'provider tool',status:'completed',sources:['application','model'],agentRole:'worker'});expect(JSON.stringify(toolLog)).not.toContain('src/change.ts');await waitFor(()=>{const integrationId=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.threadId;return !!integrationId&&fake.calls.some(row=>row.kind==='turn'&&row.threadId===integrationId);});const integrationId=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.threadId;const integrator=fake.calls.find(row=>row.kind==='turn'&&row.threadId===integrationId)!;expect(integrator.threadId).not.toBe(worker.threadId);expect(integrator.input).toContain('"outcome": "Integrate 1 worker contributions for the original user request."');expect(integrator.input).toContain('The requested behavior is delivered.');expect(integrator.input).not.toContain('Preserve the exact complete structured receipt');expect(integrator.input).not.toContain('receipt_requirements');expect(integrator.input).not.toContain('COMPLETE ASSIGNMENT');expect(integrator.input).not.toContain('Add a bounded feature.');expect(turns('orchestrator')).toHaveLength(1);
-    fake.dshSessions.get(integrator.threadId)?.complete(integrator.turnId,'The worker contribution is integrated.');await waitFor(()=>turns('orchestrator').length===2&&state.getTask(task.id)?.phase==='reviewing');const review=lastTurn('orchestrator'),finished=state.getTask(task.id)!,finishedTeam=finished.passes?.[0]?.recruitmentTeam;expect(review).toMatchObject({model:'gpt-6.1-sol',effort:'low'});expect(review.input).toContain('APP-RECORDED TEAM RESULTS AND PRODUCER PROVENANCE');expect(review.input).toContain('native DSH roles');expect(review.input).toContain('The native runtime context identifies model deepseek-v4.1-flash and DeepSeek Harness; provider and effort are not exposed.');expect(review.input).toContain('"requestedModel": "gpt-6.1-sol"');expect(review.input).toContain('"providerSelection": "opencode-go"');expect(review.input).toContain('"requestedNativeProviderRoute": "dsh-opencode-go"');expect(review.input).toContain('"modelSelected": "deepseek-v4.1-flash"');expect(review.input).toContain('"reasoningEffortRequested": "max"');expect(review.input).toContain('Do not require a DSH integration report to echo Opnex host metadata');expect(review.input).toContain('serving provider and effective effort remain unknown unless DSH attests them');expect(finishedTeam).toMatchObject({status:'complete',integration:{status:'complete'},combinedReceipt:{status:'incomplete'}});expect(finishedTeam?.workerReceiptBundle?.[0]?.producer?.origin).toBe('application_status');expect(finishedTeam?.integrationReceiptProducer?.origin).toBe('application_status');await complete('orchestrator',{outcome:'accept',note:'The worker identified native DSH context; OpenCode Go and max are host-selected/requested, while effective provider and effort remain unverified.',assignment:null,decision_required:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');expect(state.getTask(task.id)?.receipt).toMatchObject({status:'complete',verification:expect.arrayContaining([expect.objectContaining({check:'App-owned independent final review',result:'passed'})])});
-  });
-  it('starts workers and integrators with the same native SDK profile and no per-task DSH home override',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Delegate one read-only identity check.');
-    try{
-      await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request explicitly requires a delegated worker.'});await waitForRole('orchestrator');await recruit([workerPlan({...assignment,write_scope:[]})]);
-      await complete('worker','This is the selected DSH worker.');
-      await waitFor(()=>fake.calls.filter(row=>row.kind==='dsh-connect').length===2&&state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status==='running');
-      const [workerProfile,integratorProfile]=fake.calls.filter(row=>row.kind==='dsh-connect');
-      expect(workerProfile.profileName).toBe('opnex-sdk');expect(integratorProfile.profileName).toBe('opnex-sdk');expect(workerProfile.profileArgs).toEqual(integratorProfile.profileArgs);expect(workerProfile.launchEnvKeys).not.toEqual(expect.arrayContaining(['DSH_HOME','DSH_AGENTS_HOME']));expect(integratorProfile.launchEnvKeys).not.toEqual(expect.arrayContaining(['DSH_HOME','DSH_AGENTS_HOME']));
-    }finally{await orchestrator.cancelTask(task.id);}
-  });
-  it('keeps workspace Git initialization away from recruited worktree roles',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Initialize the authorized workspace Git repository.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request requires a bounded workspace operation.'});await waitForRole('orchestrator');
-    await recruit([workerPlan({...assignment,write_scope:[projectRoot]})]);const worker=await waitForRole('worker'),team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
-    expect(worker.writeRoots).toEqual([team?.workers[0]?.worktreeRoot]);expect(team?.workers[0]?.deepSeekRuntime?.mcpToolCatalog?.toolNames).not.toContain('mcp__opnex_workspace__initialize_git_repository');expect(fake.calls.find(row=>row.kind==='dsh-connect')?.launchEnvKeys).not.toEqual(expect.arrayContaining(['DSH_HOME','DSH_AGENTS_HOME']));
+  it('discovers and applies the project knowledge skill through generic skill selection', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const skillDirectory = path.join(projectRoot, '.agents', 'skills', 'agentmem-project');
+    await mkdir(skillDirectory, { recursive: true });
+    const skillText = (
+      await readFile(path.resolve('.agents/skills/agentmem-project/SKILL.md'), 'utf8')
+    ).replace(/\r\n?/g, '\n');
+    await writeFile(path.join(skillDirectory, 'SKILL.md'), skillText);
+    const staging = await import('../server/worker-staging.js');
+    const [skill] = await staging.searchConfiguredSkills(
+      'agentmem-project',
+      testCodexHome,
+      projectRoot
+    );
+    expect(skill).toBeTruthy();
+    const task = await orchestrator.submitTask(
+      `Research the project's documented decision about this behavior using the project knowledge skill.\n/skill ${skill.id}`
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_explicit_project_knowledge',
+      justification: 'The request asks for substantive project-specific research.',
+    });
+    const planner = await waitForRole('orchestrator');
+    expect(state.getTask(task.id)?.routeDecision).toMatchObject({
+      route: 'hard_task',
+      effectiveRoute: 'hard_task',
+      rule_id: 'hard_explicit_project_knowledge',
+    });
+    expect(state.getTask(task.id)?.passes?.[0]?.selectedSkills).toContainEqual(
+      expect.objectContaining({
+        id: skill.id,
+        revision: skill.revision,
+        source: expect.stringContaining(
+          path.join('.agents', 'skills', 'agentmem-project', 'SKILL.md')
+        ),
+      })
+    );
+    await complete('orchestrator', assignment);
+    const worker = await waitForRole('worker');
+    expect(planner.input).toContain(skillText.split('\n').slice(4).join('\n').trim());
+    expect(worker.input).toContain('"outcome":');
+    expect(worker.input).not.toContain('EXECUTE.');
+    expect(worker.input).not.toContain(skillText.split('\n').slice(4).join('\n').trim());
+    expect(planner.input).not.toContain('Verified project context');
     await orchestrator.cancelTask(task.id);
   });
-  it('routes a recruited worker and its integrator through the pass-selected Codex profile',async()=>{
-    const {orchestrator,state}=await setup();const task=await orchestrator.submitTask('Implement one bounded Codex worker change.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs a recruited implementation worker.'});await waitForRole('orchestrator');const pass=state.getTask(task.id)?.passes?.[0];expect(pass?.executionProfile).toEqual({provider:'codex',model:'gpt-6-luna',effort:'max'});
-    await complete('orchestrator',{...assignment,write_scope:[path.join(projectRoot,'src')]});const worker=await waitForRole('worker');expect(worker).toMatchObject({model:'gpt-6-luna',effort:'max'});expect(fake.calls.find(row=>row.kind==='thread'&&row.threadId===worker.threadId)).toMatchObject({server:'agent',model:'gpt-6-luna',effort:'max'});expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.executionProfile).toEqual(pass?.executionProfile);
-    fake.agentInstance.emit('notification','turn/completed',{threadId:worker.threadId,turn:{id:worker.turnId,status:'completed',items:[{type:'agentMessage',text:JSON.stringify({type:'receipt',receipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]})}]}});
-    await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status==='complete'&&state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status==='running'&&!!state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.activeTurnId);
-    const integration=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration;expect(integration?.executionProfile).toEqual(pass?.executionProfile);const integrationTurn=turns('integrator').at(-1)!;expect(integrationTurn).toMatchObject({model:'gpt-6-luna',effort:'max'});expect(fake.calls.find(row=>row.kind==='thread'&&row.threadId===integrationTurn.threadId)).toMatchObject({server:'agent',model:'gpt-6-luna',effort:'max'});await orchestrator.cancelTask(task.id);
+  it('passes current-pass image and text content to router/direct, then starts an attachment-free follow-up pass', async () => {
+    const { orchestrator } = await setup();
+    const image = pngAttachment();
+    const text = Buffer.from('The red square is in the upper left.');
+    const file = {
+      name: 'notes.txt',
+      type: 'text/plain',
+      size: text.length,
+      data: text.toString('base64'),
+    };
+    const task = await orchestrator.submitTask('What is in this image?', undefined, [image, file]);
+    const router = lastTurn('router');
+    expect(router.images).toEqual([{ mediaType: 'image/png', data: image.data }]);
+    expect(router.input).toContain('The red square is in the upper left.');
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'Identify the user-provided image.',
+    });
+    const direct = await waitForRole('direct');
+    expect(direct.images).toEqual(router.images);
+    expect(direct.input).toContain('The red square is in the upper left.');
+    await complete('direct', {
+      type: 'answer',
+      answer: 'A red square appears in the upper-left corner.',
+      escalation: null,
+      route: null,
+      justification: null,
+    });
+    await waitFor(() => modules.state.getTask(task.id)?.phase === 'accepted');
+    await orchestrator.submitTask('Handle a new request without an attachment.', task.id);
+    let later = turns('router').at(-1)!;
+    expect(later.images).toEqual([]);
+    expect(later.input).not.toContain('The red square is in the upper left.');
+    await orchestrator.submitTask('An unrelated image-free task.');
+    later = turns('router').at(-1)!;
+    expect(later.images).toEqual([]);
+    expect(later.input).not.toContain('The red square is in the upper left.');
   });
-  it('audits with Terra high, recruits max-effort QA corrections, re-audits clean, and keeps final Sol review independent',async()=>{
-    const {state,task}=await runRecruitedTeamToReview(receipt,receipt,true);const pass=state.getTask(task.id)?.passes?.[0];
-    expect(pass?.qualityLoop).toMatchObject({enabled:true,status:'auditing',rounds:[{index:1,model:'gpt-6.1-terra',requestedEffort:'high',status:'auditing'}]});
-    const firstAudit=turns('orchestrator').find(row=>row.model==='gpt-6.1-terra')!;expect(firstAudit).toMatchObject({model:'gpt-6.1-terra',effort:'high',approvalPolicy:'never'});expect(fake.calls.find(row=>row.kind==='review-turn'&&row.model==='gpt-6.1-terra')).toMatchObject({qaRole:'qa',approvalPolicy:'never'});expect(firstAudit.schema).toMatchObject({required:['type','status','summary','findings']});
-    const auditThread=fake.calls.find(row=>row.kind==='thread'&&row.model==='gpt-6.1-terra');expect(auditThread).toMatchObject({role:'qa',root:expect.stringMatching(/integration/i)});expect(auditThread?.mcpConfig).toBeUndefined();expect(auditThread?.skillsMcpConfig).toBeUndefined();expect(auditThread?.dynamicTools).toBeUndefined();expect(firstAudit.input).toContain('Independently audit the integrated working tree');
-    await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'The audit found one reproducible issue.',findings:[{title:'Example issue',severity:'medium',issue:'A required boundary check is missing.',required_fix:'Add the boundary check and a focused regression.',evidence:['Observed in the current integrated source at server/example.ts:12.'],file:'server/example.ts',line:12}]});
-    await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status==='awaiting_corrections'&&turns('orchestrator').length>=3&&lastTurn('orchestrator').model==='gpt-6.1-sol');
-    const correctionPlan=lastTurn('orchestrator');expect(correctionPlan).toMatchObject({model:'gpt-6.1-sol',effort:'low'});expect(correctionPlan.input).toContain('ACTIONABLE QA FINDINGS TO FIX');expect(correctionPlan.input).toContain('Example issue');
-    await recruit([workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]);await completeCurrentSingleWorkerTeam(receipt,receipt);
-    await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===2&&state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status==='auditing');
-    const secondAudit=turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra')[1];expect(secondAudit.effort).toBe('high');expect(secondAudit.input).toContain('PREVIOUS QA ROUNDS');
-    await complete('orchestrator',{type:'qa_audit',status:'no_actionable_issues',summary:'The corrected integration has no outstanding actionable issues.',findings:[]});
-    await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status==='complete'&&turns('orchestrator').filter(row=>row.model==='gpt-6.1-sol').length>=3);
-    const finalReview=lastTurn('orchestrator');expect(finalReview).toMatchObject({model:'gpt-6.1-sol',effort:'low'});expect(finalReview.input).toContain('QA LOOP STATE');expect(finalReview.input).toContain('"status": "complete"');
-    expect(state.getTask(task.id)?.passes?.[0]?.recruitmentHistory).toHaveLength(1);expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]).toMatchObject({effort:'max',status:'complete'});
-    await complete('orchestrator',{outcome:'accept',note:'Inspected the exact worker receipts, independent Terra audits, and saved model-turn provenance.',assignment:null,decision_required:null});await waitFor(()=>state.getTask(task.id)?.phase==='accepted');
+  it('runs a bounded implementation at the selected maximum effort and does not start Sol review', async () => {
+    const { orchestrator } = await setup();
+    const task = await orchestrator.submitTask(
+      'Fix the known typo under `src/` and run its focused test.'
+    );
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'This is a known localized correction with clear verification.',
+    });
+    const simple = await waitForRole('simple');
+    expect(simple).toMatchObject({
+      model: 'gpt-6-luna',
+      effort: 'max',
+      writeRoots: [path.join(projectRoot, 'src')],
+      serviceTierForTurn: undefined,
+    });
+    expect(fake.calls.some((row) => row.role === 'orchestrator')).toBe(false);
+    await complete('simple', { type: 'complete', receipt, escalation: null });
+    await waitFor(() => modules.state.getTask(task.id)?.phase === 'accepted');
+    expect(modules.state.getTask(task.id)).toMatchObject({
+      phase: 'accepted',
+      resolution: 'simple',
+      reviewNote: expect.stringContaining('No Sol review'),
+    });
   });
-  it('pins a QA correction team to the audited commit while its integration branch moves during preparation',async()=>{
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});let release!:()=>void,entered!:()=>void,observedBaseRef='';const gate=new Promise<void>(resolve=>{release=resolve;}),preparing=new Promise<void>(resolve=>{entered=resolve;});
-    try{
-      await waitFor(()=>turns('orchestrator').some(row=>row.model==='gpt-6.1-terra'));
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One finding needs correction.',findings:[{title:'Pinned-baseline fixture',severity:'medium',issue:'The audited change needs a bounded correction.',required_fix:'Apply the fix to the exact audited integration commit.',evidence:['The finding was returned by the fixture auditor.'],file:'src/fixture.ts',line:1}]});await waitFor(()=>turns('orchestrator').length>=3&&lastTurn('orchestrator').model==='gpt-6.1-sol');
-      const before=context.state.getTask(context.task.id)!,pass=before.passes?.[0],initialTeam=pass?.recruitmentTeam,reviewedHead=pass?.qualityLoop?.rounds.at(-1)?.integrationHead;if(!initialTeam||!reviewedHead)throw new Error('The fixture QA round did not preserve its audited team and integration head.');const integrationRoot=initialTeam.integration.worktreeRoot,originalBranch=initialTeam.integration.branch;
-      expect(reviewedHead).toBeTruthy();expect(execFileSync('git',['rev-parse','HEAD'],{cwd:integrationRoot,encoding:'utf8'}).trim()).toBe(reviewedHead);
-      fake.prepareWorktreeGate={entered:(options:any)=>{observedBaseRef=options.baseRef;entered();},wait:gate};sendRecruitmentRequest('qa-correction-pinned-baseline',[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]})]);await preparing;
-      await writeFile(path.join(integrationRoot,'unaudited-after-audit.ts'),'export const unaudited = true;\n');execFileSync('git',['add','--','unaudited-after-audit.ts'],{cwd:integrationRoot,stdio:'ignore',windowsHide:true});execFileSync('git',['commit','--quiet','-m','Move reviewed integration branch after audit'],{cwd:integrationRoot,stdio:'ignore',windowsHide:true});const movedHead=execFileSync('git',['rev-parse','HEAD'],{cwd:integrationRoot,encoding:'utf8'}).trim();expect(movedHead).not.toBe(reviewedHead);
-      release();await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id==='qa-correction-pinned-baseline'));const response=fake.calls.find(row=>row.kind==='server-response'&&row.id==='qa-correction-pinned-baseline')?.result;expect(response?.success).toBe(true);await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.recruitmentTeam?.teamId!==initialTeam.teamId&&context.state.getTask(context.task.id)?.passes?.[0]?.recruitmentTeam?.sealed);
-      const correction=context.state.getTask(context.task.id)!.passes![0].recruitmentTeam!;expect(observedBaseRef).toBe(reviewedHead);expect(correction.baseCommit).toBe(reviewedHead);expect(execFileSync('git',['rev-parse','HEAD'],{cwd:correction.integration.worktreeRoot,encoding:'utf8'}).trim()).toBe(reviewedHead);expect(execFileSync('git',['rev-parse','HEAD'],{cwd:correction.workers[0].worktreeRoot,encoding:'utf8'}).trim()).toBe(reviewedHead);expect(execFileSync('git',['rev-parse','HEAD'],{cwd:integrationRoot,encoding:'utf8'}).trim()).toBe(movedHead);expect(execFileSync('git',['rev-parse','--verify',`refs/heads/${originalBranch}^{commit}`],{cwd:projectRoot,encoding:'utf8'}).trim()).toBe(movedHead);
-    }finally{release();fake.prepareWorktreeGate=null;await context.orchestrator.cancelTask(context.task.id);}
+  it('steers the exact active role turn in the same pass, then starts a new pass after completion', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask('Fix the known typo under `src/`.');
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'This is a known localized correction with clear verification.',
+    });
+    const firstTurn = await waitForRole('simple');
+    const attachment = pngAttachment();
+    await orchestrator.submitTask('Please check the focused test first.', task.id, [attachment]);
+    const afterSteer = state.getTask(task.id)!;
+    expect(afterSteer.passes).toHaveLength(1);
+    expect(afterSteer.passes![0].userInputs).toEqual([
+      'Fix the known typo under `src/`.',
+      'Please check the focused test first.',
+    ]);
+    expect(afterSteer.passes![0].attachments).toHaveLength(1);
+    expect(afterSteer.messages.at(-1)).toMatchObject({
+      passId: afterSteer.passes![0].id,
+      submissionKind: 'steering',
+      deliveryStatus: 'steered',
+      attachments: [expect.objectContaining({ name: 'shape.png' })],
+    });
+    expect(fake.calls).toContainEqual(
+      expect.objectContaining({
+        kind: 'steer',
+        threadId: firstTurn.threadId,
+        expectedTurnId: firstTurn.turnId,
+        input: 'Please check the focused test first.',
+        images: [expect.objectContaining({ mediaType: 'image/png' })],
+      })
+    );
+    expect(fake.calls.some((row) => row.kind === 'interrupt')).toBe(false);
+    expect(turns('orchestrator')).toHaveLength(0);
+    await complete('simple', { type: 'complete', receipt, escalation: null });
+    await waitFor(() => state.getTask(task.id)?.phase === 'accepted');
+    await orchestrator.submitTask('A separate follow-up after completion.', task.id);
+    const afterCompletion = state.getTask(task.id)!;
+    expect(afterCompletion.passes).toHaveLength(2);
+    expect(afterCompletion.passes![0].userInputs).toEqual([
+      'Fix the known typo under `src/`.',
+      'Please check the focused test first.',
+    ]);
+    expect(afterCompletion.passes![1].userInputs).toEqual([
+      'A separate follow-up after completion.',
+    ]);
   });
-  it('pauses a disconnected QA audit and resumes against a fresh round without recruiting another team',async()=>{
-    const {orchestrator,state,task}=await runRecruitedTeamToReview(receipt,receipt,true);const before=state.getTask(task.id)?.passes?.[0];const teamId=before?.recruitmentTeam?.teamId;const workerCount=before?.recruitmentTeam?.workers.length;
-    fake.agentInstance.emit('disconnected','fixture runtime disconnect');await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status==='paused'&&state.getTask(task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.status==='interrupted');
-    expect(state.getTask(task.id)).toMatchObject({phase:'needs_attention',activeRole:undefined,activeTurnId:undefined});expect(state.getTask(task.id)?.passes?.[0]?.qualityLoop?.resumeAction).toBe('audit');
-    await orchestrator.resumeQualityLoop(task.id);await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===2&&state.getTask(task.id)?.passes?.[0]?.qualityLoop?.rounds[1]?.status==='auditing');
-    const resumed=state.getTask(task.id)?.passes?.[0];expect(resumed?.recruitmentTeam?.teamId).toBe(teamId);expect(resumed?.recruitmentTeam?.workers).toHaveLength(workerCount);expect(resumed?.qualityLoop?.rounds.map((row:any)=>row.index)).toEqual([1,2]);await orchestrator.cancelTask(task.id);
+  it('does not deliver a stale steer to the subsequent active turn', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask('Fix the known typo under `src/`.');
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'This is a known localized correction with clear verification.',
+    });
+    const turn = await waitForRole('simple');
+    fake.steerErrors.push(`expected active turn id \`${turn.turnId}\` but found \`turn-newer\``);
+    await expect(orchestrator.submitTask('Keep this for the next pass.', task.id)).rejects.toThrow(
+      'active turn changed'
+    );
+    const steers = fake.calls.filter((row) => row.kind === 'steer');
+    expect(steers.map((row) => row.expectedTurnId)).toEqual([turn.turnId]);
+    expect(state.getTask(task.id)?.passes).toHaveLength(1);
+    expect(
+      state
+        .getTask(task.id)
+        ?.messages.some((row: any) => row.text === 'Keep this for the next pass.')
+    ).toBe(false);
+    expect(fake.calls.some((row) => row.kind === 'interrupt')).toBe(false);
   });
-  it('resumes correction planning from findings saved at shutdown without repeating the audit or original recruitment',async()=>{
-    let release!:()=>void,entered!:()=>void,intercepted=false;const gate=new Promise<void>(resolve=>{release=resolve;}),plannerPersist=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',stateMutationGate:{match:fn=>!intercepted&&String(fn).includes('persisted'),enter:()=>{intercepted=true;entered();},wait:gate}});
-    try{
-      await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);const before=context.state.getTask(context.task.id)!,passId=before.currentPassId!,originalTeamId=before.passes!.find((row:any)=>row.id===passId).recruitmentTeam.teamId;
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One saved finding requires correction.',findings:[{title:'Restart fixture finding',severity:'medium',issue:'The integration has a verified gap.',required_fix:'Plan one bounded correction from this saved finding.',evidence:['The audit completed and persisted this finding.'],file:'src/fixture.ts',line:4}]});await plannerPersist;
-      const interruptedAt='2026-10-27T13:00:00.000Z';await context.state.mutate((state:any)=>modules.state.pauseActiveTasksForKernelShutdown(state,interruptedAt));
-      const paused=context.state.getTask(context.task.id)!,savedPass=paused.passes!.find((row:any)=>row.id===passId)!;expect(paused.phase).toBe('paused_after_restart');expect(savedPass.qualityLoop).toMatchObject({status:'paused_after_restart',resumeAction:'corrections',rounds:[{status:'awaiting_corrections',findings:[expect.objectContaining({title:'Restart fixture finding'})]}]});
-      release();await new Promise(resolve=>setTimeout(resolve,30));const beforeResumeAuditCount=turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length,beforeResumeRecruitmentCount=fake.calls.filter(row=>row.kind==='server-response'&&String(row.id).startsWith('recruit-')).length;
-      await context.orchestrator.resumeQualityLoop(context.task.id);await waitFor(()=>turns('orchestrator').some(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX')));
-      const resumed=context.state.getTask(context.task.id)!,resumedPass=resumed.passes!.find((row:any)=>row.id===passId)!;expect(resumedPass.qualityLoop).toMatchObject({status:'awaiting_corrections',resumeAction:undefined,rounds:[{roundId:savedPass.qualityLoop.rounds[0].roundId,status:'awaiting_corrections',findings:savedPass.qualityLoop.rounds[0].findings}]});expect(resumedPass.recruitmentTeam.teamId).toBe(originalTeamId);expect(turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra')).toHaveLength(beforeResumeAuditCount);expect(fake.calls.filter(row=>row.kind==='server-response'&&String(row.id).startsWith('recruit-'))).toHaveLength(beforeResumeRecruitmentCount);expect(intercepted).toBe(true);
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('starts a new pass when the active turn completed during submit without interrupting', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask('Fix the known typo under `src/`.');
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'This is a known localized correction with clear verification.',
+    });
+    const turn = await waitForRole('simple');
+    fake.steerErrors.push('no active turn to steer');
+    await orchestrator.submitTask('Save this as a separate follow-up.', task.id);
+    const saved = state.getTask(task.id)!;
+    expect(saved.passes).toHaveLength(2);
+    expect(saved.passes![0]).toMatchObject({ phase: 'needs_attention' });
+    expect(saved.passes![1].userInputs).toEqual(['Save this as a separate follow-up.']);
+    expect(fake.calls).toContainEqual(
+      expect.objectContaining({
+        kind: 'steer',
+        threadId: turn.threadId,
+        expectedTurnId: turn.turnId,
+      })
+    );
+    expect(fake.calls.some((row) => row.kind === 'interrupt')).toBe(false);
   });
-  it('does not start a stale QA turn when pause wins during auditor thread setup',async()=>{
-    let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.startThread.bind(fake.agentInstance);fake.agentInstance.startThread=async(role:string,root:string,model:string,...args:any[])=>{if(model==='gpt-6.1-terra'){entered();await gate;}return original(role,root,model,...args);};}});
-    await started;await context.orchestrator.pauseQualityLoop(context.task.id);release();await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.threadId!==undefined);await new Promise(resolve=>setTimeout(resolve,20));
-    const saved=context.state.getTask(context.task.id)!;expect(saved.passes?.[0]?.qualityLoop).toMatchObject({status:'paused',rounds:[{status:'interrupted',threadId:expect.any(String)}]});expect(saved.passes?.[0]?.qualityLoop?.rounds[0]?.turnId).toBeUndefined();expect(saved).toMatchObject({activeRole:undefined,activeTurnId:undefined});expect(turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra')).toHaveLength(0);await context.orchestrator.cancelTask(context.task.id);
+  it('keeps explicit Stop mapped to turn/interrupt for the current active turn', async () => {
+    const { orchestrator } = await setup();
+    const task = await orchestrator.submitTask('Fix the known typo under `src/`.');
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'This is a known localized correction with clear verification.',
+    });
+    const turn = await waitForRole('simple');
+    await orchestrator.cancelTask(task.id);
+    expect(fake.calls).toContainEqual(
+      expect.objectContaining({ kind: 'interrupt', threadId: turn.threadId, turnId: turn.turnId })
+    );
+    expect(fake.calls.filter((row) => row.kind === 'steer')).toHaveLength(0);
   });
-  it('interrupts a QA turn when its start notification arrives before the paused request returns',async()=>{
-    let release!:()=>void,entered!:()=>void,startedTurnId='';const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.reviewTurn.bind(fake.agentInstance);fake.agentInstance.reviewTurn=async(...args:any[])=>{const response=await original(...args);if(args[2]==='gpt-6.1-terra'){startedTurnId=response.turn.id;fake.agentInstance.emit('notification','turn/started',{threadId:args[0],turn:{id:startedTurnId}});entered();await gate;}return response;};}});
-    await started;await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.turnId===startedTurnId);await context.orchestrator.pauseQualityLoop(context.task.id);await waitFor(()=>fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===startedTurnId));
-    const paused=context.state.getTask(context.task.id)!;expect(paused.phase).toBe('reviewing');expect(paused.passes?.[0]?.qualityLoop).toMatchObject({status:'paused',rounds:[{status:'interrupted',turnId:startedTurnId}]});expect(paused.activeTurnId).toBeUndefined();release();await new Promise(resolve=>setTimeout(resolve,20));expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status).toBe('paused');await context.orchestrator.cancelTask(context.task.id);
+  it('rejects steering an active DeepSeek worker without saving or waking another turn', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask('Implement the requested bounded behavior.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'This request needs a worker.',
+    });
+    await waitForRole('orchestrator');
+    await complete('orchestrator', assignment);
+    const worker = await waitForRole('worker');
+    const messageCount = state.getTask(task.id)?.messages.length;
+    const workerTurns = turns('worker').length;
+    await expect(
+      orchestrator.submitTask('Keep the current scope and verify this edge case.', task.id)
+    ).rejects.toThrow(/DeepSeek Harness does not support steering/);
+    expect(fake.calls.some((row) => row.kind === 'steer' && row.threadId === worker.threadId)).toBe(
+      false
+    );
+    expect(turns('worker')).toHaveLength(workerTurns);
+    expect(turns('orchestrator')).toHaveLength(1);
+    expect(state.getTask(task.id)?.passes).toHaveLength(1);
+    expect(state.getTask(task.id)?.messages).toHaveLength(messageCount);
+    expect(fake.calls.some((row) => row.kind === 'interrupt')).toBe(false);
+    await orchestrator.cancelTask(task.id);
   });
-  it('interrupts a QA turn when its start notification arrives before the cancelled request returns',async()=>{
-    let release!:()=>void,entered!:()=>void,startedTurnId='';const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.reviewTurn.bind(fake.agentInstance);fake.agentInstance.reviewTurn=async(...args:any[])=>{if(args[2]==='gpt-6.1-terra'){entered();await gate;}const response=await original(...args);if(args[2]==='gpt-6.1-terra'){startedTurnId=response.turn.id;fake.agentInstance.emit('notification','turn/started',{threadId:args[0],turn:{id:startedTurnId}});}return response;};}});
-    await started;const cancelling=context.orchestrator.cancelTask(context.task.id);await waitFor(()=>context.state.getTask(context.task.id)?.phase==='cancelled');release();await waitFor(()=>fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===startedTurnId));await cancelling;
-    const saved=context.state.getTask(context.task.id)!;expect(saved.phase).toBe('cancelled');expect(saved.passes?.[0]?.qualityLoop).toMatchObject({status:'cancelled',rounds:[{status:'interrupted',threadId:expect.any(String),turnId:startedTurnId}]});expect(saved.activeTurnId).toBeUndefined();expect(fake.calls.filter(row=>row.kind==='interrupt'&&row.turnId===startedTurnId)).toHaveLength(1);
+  it('marks an unfinished pass needs-attention when the composer arrives before turn/started', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask('First request before the router turn starts.');
+    await waitForRole('router');
+    await state.mutate((saved: any) => {
+      const row = saved.tasks.find((item: any) => item.id === task.id);
+      row.activeTurnId = undefined;
+      row.phase = 'routing';
+    });
+    await orchestrator.submitTask(
+      'A separate request while the first route is still starting.',
+      task.id
+    );
+    const saved = state.getTask(task.id)!;
+    expect(saved.passes).toHaveLength(2);
+    expect(saved.passes![0]).toMatchObject({
+      phase: 'needs_attention',
+      activeTurnId: undefined,
+      activeRole: undefined,
+    });
+    expect(saved.passes![1].userInputs).toEqual([
+      'A separate request while the first route is still starting.',
+    ]);
   });
-  it('interrupts an audit response returned before pause and ignores its late notification after a fresh round starts',async()=>{
-    let release!:()=>void,entered!:()=>void,firstTurnId='';let terraStarts=0;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.reviewTurn.bind(fake.agentInstance);fake.agentInstance.reviewTurn=async(...args:any[])=>{const response=await original(...args);if(args[2]!=='gpt-6.1-terra')return response;if(++terraStarts===1){firstTurnId=response.turn.id;entered();await gate;}else fake.agentInstance.emit('notification','turn/started',{threadId:args[0],turn:{id:response.turn.id}});return response;};}});
-    try{
-      await started;await context.orchestrator.pauseQualityLoop(context.task.id);release();
-      await waitFor(()=>fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===firstTurnId));
-      await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.turnId===firstTurnId);
-      fake.agentInstance.emit('notification','turn/started',{threadId:context.state.getTask(context.task.id)!.passes![0].qualityLoop!.rounds[0].threadId,turn:{id:firstTurnId}});await context.state.mutate(()=>{});
-      await context.orchestrator.resumeQualityLoop(context.task.id);await waitFor(()=>terraStarts===2&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[1]?.status==='auditing'&&context.state.getTask(context.task.id)?.activeTurnId!==undefined);
-      const resumed=context.state.getTask(context.task.id)!,newTurnId=resumed.activeTurnId!;expect(newTurnId).not.toBe(firstTurnId);expect(resumed.passes?.[0]?.qualityLoop?.status).toBe('auditing');
-      fake.agentInstance.emit('notification','turn/started',{threadId:resumed.passes![0].qualityLoop!.rounds[0].threadId,turn:{id:firstTurnId}});await context.state.mutate(()=>{});
-      expect(context.state.getTask(context.task.id)?.activeTurnId).toBe(newTurnId);expect(fake.calls.filter(row=>row.kind==='interrupt'&&row.turnId===firstTurnId)).toHaveLength(1);expect(fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===newTurnId)).toBe(false);
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('escalates a direct answer to Luna simple work without entering the hard flow', async () => {
+    const { orchestrator } = await setup();
+    const task = await orchestrator.submitTask(
+      'Explain then rename one bounded internal label under `src/`.'
+    );
+    await complete('router', {
+      route: 'direct_answer',
+      rule_id: 'direct_explanation_or_transform',
+      justification: 'The initial request appears to ask for a brief explanation.',
+    });
+    await waitForRole('direct');
+    await complete('direct', {
+      type: 'escalate',
+      answer: null,
+      escalation: 'The request includes a bounded implementation.',
+      route: 'simple_implementation',
+      justification: 'Rename one known internal label and run its focused test.',
+    });
+    const simple = await waitForRole('simple');
+    expect(simple).toMatchObject({
+      model: 'gpt-6-luna',
+      effort: 'max',
+      writeRoots: [path.join(projectRoot, 'src')],
+    });
+    expect(fake.calls.some((row) => row.role === 'orchestrator')).toBe(false);
+    expect(modules.state.getTask(task.id)?.executionEscalation).toMatchObject({
+      from: 'direct_answer',
+      to: 'simple_implementation',
+    });
+    await complete('simple', { type: 'complete', receipt, escalation: null });
+    await waitFor(() => modules.state.getTask(task.id)?.phase === 'accepted');
+    expect(modules.state.getTask(task.id)).toMatchObject({ resolution: 'simple' });
   });
-  it('interrupts an audit response returned before cancellation and deduplicates its late notification',async()=>{
-    let release!:()=>void,entered!:()=>void,turnId='';const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.reviewTurn.bind(fake.agentInstance);fake.agentInstance.reviewTurn=async(...args:any[])=>{const response=await original(...args);if(args[2]==='gpt-6.1-terra'){turnId=response.turn.id;entered();await gate;}return response;};}});
-    try{
-      await started;const cancelling=context.orchestrator.cancelTask(context.task.id);await waitFor(()=>context.state.getTask(context.task.id)?.phase==='cancelled');release();await waitFor(()=>fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===turnId));await cancelling;
-      const auditThread=context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.threadId;fake.agentInstance.emit('notification','turn/started',{threadId:auditThread,turn:{id:turnId}});await context.state.mutate(()=>{});
-      expect(context.state.getTask(context.task.id)).toMatchObject({phase:'cancelled',passes:[{qualityLoop:{status:'cancelled',rounds:[{status:'interrupted',turnId}]}}]});expect(fake.calls.filter(row=>row.kind==='interrupt'&&row.turnId===turnId)).toHaveLength(1);
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('carries completed simple actions and evidence into the hard assignment after escalation', async () => {
+    const { orchestrator } = await setup();
+    const task = await orchestrator.submitTask(
+      'Make the bounded change under `src/` and handle any consequential schema choice.'
+    );
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'The initial change is bounded and has focused verification.',
+    });
+    await waitForRole('simple');
+    const completedActions = ['Updated the local parser callsite.'];
+    const evidence = ['Focused test now exposes a persisted schema mismatch.'];
+    await complete('simple', {
+      type: 'escalate',
+      receipt: null,
+      escalation: {
+        decision_needed: 'Choose a backward-compatible stored field mapping.',
+        completed_actions: completedActions,
+        evidence,
+      },
+    });
+    const sol = await waitForRole('orchestrator');
+    expect(sol).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' });
+    expect(sol.input).toContain('COMPLETED ACTIONS (preserve; do not repeat)');
+    expect(sol.input).toContain(JSON.stringify(completedActions));
+    expect(sol.input).toContain(JSON.stringify(evidence));
+    expect(modules.state.getTask(task.id)?.executionEscalation).toMatchObject({
+      from: 'simple_implementation',
+      to: 'hard_task',
+      completedActions,
+      evidence,
+    });
   });
-  it('aborts correction planning if a follow-up replaces its pass while the planner state write is pending',async()=>{
-    let release!:()=>void,entered!:()=>void;let intercepted=false;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',stateMutationGate:{match:fn=>!intercepted&&String(fn).includes('persisted'),enter:()=>{intercepted=true;entered();},wait:gate}});
-    try{
-      await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Fixture finding',severity:'medium',issue:'The behavior is not preserved.',required_fix:'Correct the behavior and add a regression.',evidence:['Observed during the focused audit.'],file:'src/example.ts',line:2}]});await started;
-      const passId=context.state.getTask(context.task.id)!.currentPassId!;const followupPromise=context.orchestrator.submitTask('Fresh follow-up: answer this separately.',context.task.id);
-      await waitFor(()=>context.state.getTask(context.task.id)?.currentPassId!==passId);const freshPass=context.state.getTask(context.task.id)!.currentPassId!;expect(context.state.getTask(context.task.id)?.passes?.find((row:any)=>row.id===freshPass)?.userInputs).toContain('Fresh follow-up: answer this separately.');
-      release();await followupPromise;await waitFor(()=>turns('router').length===2);await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'The follow-up asks for a separate direct answer.'});await waitForRole('direct');await complete('direct',{answer:'Follow-up handled independently.'});await waitFor(()=>context.state.getTask(context.task.id)?.phase==='needs_attention');
-      expect(context.state.getTask(context.task.id)?.currentPassId).toBe(freshPass);expect(turns('orchestrator').some(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toBe(false);expect(intercepted).toBe(true);
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('retires prepared worktrees when a follow-up pass supersedes recruitment preparation', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask('Implement one bounded worker change.');
+    await waitForRole('router');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs delegated implementation.',
+    });
+    await waitForRole('orchestrator');
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    fake.prepareWorktreeGate = { entered: () => entered(), wait: gate };
+    const oldTurn = lastTurn('orchestrator'),
+      oldPassId = state.getTask(task.id)!.currentPassId!,
+      requestId = 'stale-recruit-after-follow-up';
+    try {
+      fake.agentInstance.emit('serverRequest', requestId, 'item/tool/call', {
+        threadId: oldTurn.threadId,
+        turnId: oldTurn.turnId,
+        namespace: 'opnex',
+        tool: 'recruit_workers',
+        arguments: {
+          workers: [workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] })],
+        },
+      });
+      await started;
+      const canonicalRoot = canonicalPath(projectRoot),
+        prepared = gitWorktreeRows(projectRoot).filter((row) => row.path !== canonicalRoot);
+      expect(prepared).toHaveLength(2);
+      const taskRoot = path.dirname(prepared[0].path);
+      const preparedBranches = prepared.map((row) =>
+        String(row.branch).slice('refs/heads/'.length)
+      );
+      fake.agentInstance.emit(
+        'disconnected',
+        'fixture disconnect while recruitment worktrees are prepared'
+      );
+      await waitFor(() => state.getTask(task.id)?.phase === 'needs_attention');
+      fake.agentInstance.emit('connected');
+      await orchestrator.submitTask('Continue with a separate follow-up pass.', task.id);
+      await waitFor(() => turns('router').length === 2);
+      await complete('router', {
+        route: 'hard_task',
+        rule_id: 'hard_new_feature',
+        justification: 'The follow-up still needs delegated implementation.',
+      });
+      try {
+        await waitFor(
+          () =>
+            state.getTask(task.id)?.phase === 'planning' &&
+            state.getTask(task.id)?.activeRole === 'orchestrator' &&
+            !!state.getTask(task.id)?.activeTurnId
+        );
+      } catch {
+        const latest = state.getTask(task.id)!;
+        throw new Error(
+          `Follow-up did not reach planning: ${JSON.stringify({ phase: latest.phase, error: latest.error, activeRole: latest.activeRole, activeTurnId: latest.activeTurnId, routerThreadId: latest.routerThreadId, orchestratorThreadId: latest.orchestratorThreadId, turns: turns('orchestrator').map((row) => ({ model: row.model, threadId: row.threadId, turnId: row.turnId })) })}`
+        );
+      }
+      const newTurn = lastTurn('orchestrator'),
+        before = state.getTask(task.id)!;
+      expect(before.currentPassId).not.toBe(oldPassId);
+      expect(before.phase).toBe('planning');
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === requestId)
+      );
+      const after = state.getTask(task.id)!,
+        oldPass = after.passes?.find((row: any) => row.id === oldPassId),
+        current = after.passes?.find((row: any) => row.id === before.currentPassId);
+      expect(
+        fake.calls.find((row) => row.kind === 'server-response' && row.id === requestId)?.result
+          ?.success
+      ).toBe(false);
+      expect(after.currentPassId).toBe(before.currentPassId);
+      expect(after.phase).toBe('planning');
+      expect(after.orchestratorThreadId).toBe(newTurn.threadId);
+      expect(after.assignment).toEqual(before.assignment);
+      expect(current?.phase).toBe('planning');
+      expect(current?.assignment).toEqual(before.assignment);
+      expect(current?.recruitmentTeam).toBeUndefined();
+      expect(oldPass?.recruitmentTeam).toBeUndefined();
+      expect(turns('worker')).toHaveLength(0);
+      const worktrees = gitWorktreeRows(projectRoot).map((row) => row.path);
+      expect(worktrees).toHaveLength(1);
+      expect(worktrees[0]).toBe(canonicalPath(projectRoot));
+      const branches = execFileSync(
+        'git',
+        ['for-each-ref', '--format=%(refname:short)', 'refs/heads/recruitment'],
+        { cwd: projectRoot, encoding: 'utf8' }
+      ).trim();
+      for (const branch of preparedBranches) expect(branches).not.toContain(branch);
+      await expect(lstat(taskRoot)).rejects.toThrow();
+    } finally {
+      release();
+      fake.prepareWorktreeGate = null;
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('keeps a user pause that lands while the audit-result state write completes',async()=>{
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);let pausePromise:Promise<unknown>|undefined,paused=false;
-    const unsubscribe=context.state.subscribe((snapshot:any)=>{const task=snapshot.tasks.find((row:any)=>row.id===context.task.id),loop=task?.passes?.find((row:any)=>row.id===task.currentPassId)?.qualityLoop;if(!paused&&loop?.status==='awaiting_corrections'&&loop.rounds.at(-1)?.status==='awaiting_corrections'){paused=true;pausePromise=context.orchestrator.pauseQualityLoop(context.task.id);}});
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Pause race finding',severity:'medium',issue:'The behavior is not preserved.',required_fix:'Correct the behavior and add a regression.',evidence:['Observed during the focused audit.'],file:'src/example.ts',line:2}]});await waitFor(()=>paused&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='paused');await pausePromise;
-      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({status:'paused',resumeAction:'corrections'});expect(turns('orchestrator').some(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toBe(false);
-      await context.orchestrator.resumeQualityLoop(context.task.id);await waitFor(()=>turns('orchestrator').some(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX')));expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status).toBe('awaiting_corrections');
-    }finally{unsubscribe();await context.orchestrator.cancelTask(context.task.id);}
+  it('does not seal a prepared team when its orchestrator turn is replaced within the same pass', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask('Implement one bounded worker change.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs delegated implementation.',
+    });
+    await waitForRole('orchestrator');
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    fake.prepareWorktreeGate = { entered: () => entered(), wait: gate };
+    const oldTurn = lastTurn('orchestrator'),
+      passId = state.getTask(task.id)!.currentPassId!,
+      requestId = 'stale-recruit-after-new-turn';
+    try {
+      fake.agentInstance.emit('serverRequest', requestId, 'item/tool/call', {
+        threadId: oldTurn.threadId,
+        turnId: oldTurn.turnId,
+        namespace: 'opnex',
+        tool: 'recruit_workers',
+        arguments: {
+          workers: [workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] })],
+        },
+      });
+      await started;
+      await state.mutate((value: any) => {
+        const current = value.tasks.find((item: any) => item.id === task.id);
+        current.activeTurnId = undefined;
+      });
+      const replacement = await fake.agentInstance.startTurn(
+        oldTurn.threadId,
+        'Continue the same pass with a fresh turn.',
+        'orchestrator',
+        'gpt-6.1-sol',
+        'low',
+        projectRoot,
+        [],
+        'full-access'
+      );
+      fake.agentInstance.emit('notification', 'turn/started', {
+        threadId: oldTurn.threadId,
+        turn: { id: replacement.turn.id },
+      });
+      await waitFor(() => state.getTask(task.id)?.activeTurnId === replacement.turn.id);
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === requestId)
+      );
+      const current = state.getTask(task.id)!;
+      expect(
+        fake.calls.find((row) => row.kind === 'server-response' && row.id === requestId)?.result
+          ?.success
+      ).toBe(false);
+      expect(current.currentPassId).toBe(passId);
+      expect(current.phase).toBe('planning');
+      expect(current.orchestratorThreadId).toBe(oldTurn.threadId);
+      expect(current.activeTurnId).toBe(replacement.turn.id);
+      expect(
+        current.passes?.find((row: any) => row.id === passId)?.recruitmentTeam
+      ).toBeUndefined();
+      expect(turns('worker')).toHaveLength(0);
+      const worktrees = gitWorktreeRows(projectRoot).map((row) => row.path);
+      expect(worktrees).toHaveLength(1);
+      expect(worktrees[0]).toBe(canonicalPath(projectRoot));
+    } finally {
+      release();
+      fake.prepareWorktreeGate = null;
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('preserves and resumes saved QA corrections once after disconnect during authentication preflight',async()=>{
-    let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>turns('orchestrator').some(row=>row.model==='gpt-6.1-terra'));fake.agentInstance.emit('connected');const originalExport=fake.instance.exportChatGPTAuthTokens.bind(fake.instance);fake.instance.exportChatGPTAuthTokens=async()=>{entered();await gate;return originalExport();};const auditCount=turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length,recruitmentCount=fake.calls.filter(row=>row.kind==='server-response'&&String(row.id).startsWith('recruit-')).length;
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Disconnect auth finding',severity:'medium',issue:'The behavior is not preserved.',required_fix:'Correct the behavior and add a regression.',evidence:['Observed during the focused QA audit.'],file:'src/example.ts',line:2}]});await started;fake.agentInstance.emit('disconnected','fixture disconnect during correction authentication preflight');await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='paused'&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.resumeAction==='corrections');const saved=context.state.getTask(context.task.id)!.passes![0].qualityLoop!.rounds.at(-1)!;const retry=context.orchestrator.resumeQualityLoop(context.task.id);release();await retry;await waitFor(()=>turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX')).length===1);
-      const resumed=context.state.getTask(context.task.id)!.passes![0].qualityLoop!;expect(resumed).toMatchObject({status:'awaiting_corrections',rounds:[{roundId:saved.roundId,status:'awaiting_corrections',findings:saved.findings}]});expect(turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra')).toHaveLength(auditCount);expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(1);expect(fake.calls.filter(row=>row.kind==='server-response'&&String(row.id).startsWith('recruit-'))).toHaveLength(recruitmentCount);
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('retires prepared worktrees when cancellation wins during recruitment preparation', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask(
+      'Cancel one bounded worker recruitment during setup.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs one delegated worker.',
+    });
+    await waitForRole('orchestrator');
+    let release!: () => void,
+      entered!: () => void,
+      taskRoot = '';
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    fake.prepareWorktreeGate = { entered: () => entered(), wait: gate };
+    const requestId = 'cancel-during-recruitment-preparation';
+    try {
+      sendRecruitmentRequest(requestId, [
+        workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+      ]);
+      await started;
+      const prepared = gitWorktreeRows(projectRoot).filter(
+        (row) => row.path !== canonicalPath(projectRoot)
+      );
+      expect(prepared).toHaveLength(2);
+      taskRoot = path.dirname(prepared[0].path);
+      const cancellation = orchestrator.cancelTask(task.id);
+      await waitFor(() => state.getTask(task.id)?.phase === 'cancelled');
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === requestId)
+      );
+      await cancellation;
+      expect(
+        fake.calls.find((row) => row.kind === 'server-response' && row.id === requestId)?.result
+          ?.success
+      ).toBe(false);
+      expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam).toBeUndefined();
+      expect(turns('worker')).toHaveLength(0);
+      await expectPreparedRecruitmentRetired(taskRoot);
+    } finally {
+      release();
+      fake.prepareWorktreeGate = null;
+      if (state.getTask(task.id)?.phase !== 'cancelled') await orchestrator.cancelTask(task.id);
+    }
   });
-  it('does not make a correction planner retryable after disconnect once turn start may have been sent',async()=>{
-    let release!:()=>void,entered!:()=>void,plannerTurnId='';const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.startTurn.bind(fake.agentInstance);fake.agentInstance.startTurn=async(...args:any[])=>{const response=await original(...args);if(String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')){plannerTurnId=response.turn.id;entered();await gate;}return response;};}});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Dispatched planner finding',severity:'medium',issue:'The behavior is not preserved.',required_fix:'Correct the behavior and add a regression.',evidence:['Observed during the focused QA audit.'],file:'src/example.ts',line:2}]});await started;fake.agentInstance.emit('disconnected','fixture disconnect after correction turn start');await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='needs_attention');release();await waitFor(()=>fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===plannerTurnId));const saved=context.state.getTask(context.task.id)!.passes![0].qualityLoop!;expect(saved).toMatchObject({status:'needs_attention',resumeAction:'corrections',correctionPlanner:{status:'active',turnId:plannerTurnId},rounds:[{status:'awaiting_corrections',findings:[expect.objectContaining({title:'Dispatched planner finding'})]}]});expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(1);await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow('may still be running');
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('retires prepared worktrees when the final team-seal state mutation fails', async () => {
+    let release!: () => void,
+      intercepted = false,
+      taskRoot = '';
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mutationGate: StateMutationGate = {
+      match: (fn) => !intercepted && String(fn).includes('sealRecruitmentTeam'),
+      enter: () => {
+        intercepted = true;
+      },
+      wait: gate,
+      error: new Error('Fixture final recruitment seal persistence failure.'),
+    };
+    const { orchestrator, state } = await setup(true, undefined, mutationGate);
+    const task = await orchestrator.submitTask(
+      'Retire prepared worktrees when the team cannot be sealed.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs one delegated worker.',
+    });
+    await waitForRole('orchestrator');
+    const requestId = 'failed-final-recruitment-seal';
+    try {
+      sendRecruitmentRequest(requestId, [
+        workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+      ]);
+      await waitFor(() => intercepted);
+      const prepared = gitWorktreeRows(projectRoot).filter(
+        (row) => row.path !== canonicalPath(projectRoot)
+      );
+      expect(prepared).toHaveLength(2);
+      taskRoot = path.dirname(prepared[0].path);
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === requestId)
+      );
+      const result = fake.calls.find(
+        (row) => row.kind === 'server-response' && row.id === requestId
+      )?.result;
+      expect(result?.success).toBe(false);
+      expect(result?.contentItems?.[0]?.text).toContain(
+        'Fixture final recruitment seal persistence failure'
+      );
+      expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam).toBeUndefined();
+      expect(turns('worker')).toHaveLength(0);
+      await expectPreparedRecruitmentRetired(taskRoot);
+    } finally {
+      release();
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('keeps an ambiguous correction dispatch blocked through pause, disconnect, and a lost turn/start response',async()=>{
-    let release!:(error?:Error)=>void,entered!:()=>void;const gate=new Promise<void>((resolve,reject)=>{release=(error?:Error)=>error?reject(error):resolve();}),started=new Promise<void>(resolve=>{entered=resolve;});const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.startTurn.bind(fake.agentInstance);fake.agentInstance.startTurn=async(...args:any[])=>{const response=await original(...args);if(String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')){entered();await gate;}return response;};}});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Lost planner response',severity:'medium',issue:'The correction request outcome is unknown.',required_fix:'Do not send another plan until the first is confirmed stopped.',evidence:['The runtime accepted the turn before its response was lost.']}]});await started;await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner?.status==='dispatch_unknown');
-      await context.orchestrator.pauseQualityLoop(context.task.id);fake.agentInstance.emit('disconnected','fixture disconnect after accepted correction turn');await waitFor(()=>context.state.getTask(context.task.id)?.phase==='needs_attention');
-      const paused=context.state.getTask(context.task.id)!.passes![0].qualityLoop!;expect(paused).toMatchObject({status:'paused',resumeAction:'corrections',correctionPlanner:{roundId:paused.rounds.at(-1)!.roundId,status:'dispatch_unknown',threadId:expect.any(String)}});await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow('may still be running');
-      const staleAuditTurnId=paused.rounds.at(-1)!.turnId!,plannerThreadId=paused.correctionPlanner!.threadId!;fake.agentInstance.emit('notification','turn/started',{threadId:plannerThreadId,turn:{id:staleAuditTurnId}});fake.agentInstance.emit('notification','turn/completed',{threadId:plannerThreadId,turn:{id:staleAuditTurnId,status:'completed',items:[]}});await new Promise(resolve=>setTimeout(resolve,20));const stillAmbiguous=context.state.getTask(context.task.id)!.passes![0].qualityLoop?.correctionPlanner;expect(stillAmbiguous).toMatchObject({status:'dispatch_unknown',threadId:plannerThreadId});expect(stillAmbiguous?.turnId).toBeUndefined();await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow('may still be running');
-      release(new Error('fixture lost the turn/start response after server acceptance'));await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='paused');const saved=context.state.getTask(context.task.id)!.passes![0].qualityLoop!;expect(saved.correctionPlanner).toMatchObject({status:'dispatch_unknown',roundId:saved.rounds.at(-1)!.roundId});expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(1);await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow('may still be running');
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('preserves a sealed team when a post-commit state listener fails', async () => {
+    let release!: () => void,
+      intercepted = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mutationGate: StateMutationGate = {
+      match: (fn) => !intercepted && String(fn).includes('sealRecruitmentTeam'),
+      enter: () => {
+        intercepted = true;
+      },
+      wait: gate,
+      error: new Error('Fixture state listener failed after persistence.'),
+      afterCommit: true,
+    };
+    const { orchestrator, state } = await setupDeepSeek(true, undefined, mutationGate);
+    const task = await orchestrator.submitTask(
+      'Keep a persisted team after a post-commit listener error.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs one delegated worker.',
+    });
+    await waitForRole('orchestrator');
+    const requestId = 'persisted-recruitment-team-after-listener-error';
+    try {
+      sendRecruitmentRequest(requestId, [
+        workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+      ]);
+      await waitFor(() => intercepted);
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === requestId)
+      );
+      await waitFor(() => turns('worker').length === 1);
+      const result = fake.calls.find(
+          (row) => row.kind === 'server-response' && row.id === requestId
+        )?.result,
+        team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+      expect(result?.success).toBe(true);
+      expect(team).toMatchObject({ sealed: true, status: 'running' });
+      expect(gitWorktreeRows(projectRoot)).toHaveLength(3);
+      expect(
+        fake.calls.filter((row) => row.kind === 'turn' && row.server === 'deepseek')
+      ).toHaveLength(1);
+    } finally {
+      release();
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('does not accept QA findings while a correction planner dispatch is unresolved',async()=>{
-    let release!:(error?:Error)=>void,entered!:()=>void;const gate=new Promise<void>((resolve,reject)=>{release=(error?:Error)=>error?reject(error):resolve();}),started=new Promise<void>(resolve=>{entered=resolve;});const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.startTurn.bind(fake.agentInstance);fake.agentInstance.startTurn=async(...args:any[])=>{const response=await original(...args);if(String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')){entered();await gate;}return response;};}});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One finding remains while planner outcome is unknown.',findings:[{title:'Unresolved planner finding',severity:'medium',issue:'The correction planner has not returned.',required_fix:'Wait for an authoritative planner outcome before acceptance.',evidence:['The planner request was accepted but its response is pending.']}]});await started;fake.agentInstance.emit('disconnected','fixture disconnect during correction planner dispatch');await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='needs_attention'&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner?.status==='dispatch_unknown');
-      await expect(context.orchestrator.acceptQualityFindings(context.task.id)).rejects.toThrow('Wait for its confirmed outcome');expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({status:'needs_attention',resumeAction:'corrections',correctionPlanner:{status:'dispatch_unknown'}});expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(1);
-      release(new Error('fixture lost the correction turn/start response'));await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='needs_attention');await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow('may still be running');
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('deduplicates recruitment with the Codex tool-call ID instead of its JSON-RPC request ID', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask('Start one bounded delegated worker.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs a worker.',
+    });
+    await waitForRole('orchestrator');
+    const turn = lastTurn('orchestrator'),
+      owner = fake.threadOwners.get(turn.threadId) || fake.agentInstance,
+      toolCallId = 'model-tool-call-1',
+      firstRequestId = 'rpc-request-1',
+      secondRequestId = 'rpc-request-2',
+      params = {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        callId: toolCallId,
+        namespace: 'opnex',
+        tool: 'recruit_workers',
+        arguments: {
+          workers: [workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] })],
+        },
+      };
+    try {
+      owner.emit('serverRequest', firstRequestId, 'item/tool/call', params);
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === firstRequestId)
+      );
+      expect(
+        fake.calls.find((row) => row.kind === 'server-response' && row.id === firstRequestId)
+          ?.result?.success
+      ).toBe(true);
+      expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.toolCallIds).toEqual([
+        toolCallId,
+      ]);
+      owner.emit('serverRequest', secondRequestId, 'item/tool/call', params);
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === secondRequestId)
+      );
+      expect(
+        fake.calls.find((row) => row.kind === 'server-response' && row.id === secondRequestId)
+          ?.result?.success
+      ).toBe(true);
+      expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.toolCallIds).toEqual([
+        toolCallId,
+      ]);
+    } finally {
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it.each(['completed','interrupted'] as const)('accepts saved findings after a confirmed %s planner outcome and starts independent review',async(status)=>{
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>{const audit=turns('orchestrator').find(row=>row.model==='gpt-6.1-terra');return !!audit&&context.state.getTask(context.task.id)?.activeTurnId===audit.turnId;});
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One finding remains after the independent audit.',findings:[{title:`${status} planner finding`,severity:'medium',issue:'The integrated behavior needs a correction.',required_fix:'Correct the behavior in the saved findings.',evidence:['The QA result is persisted before the planner starts.']}]});
-      await waitFor(()=>turns('orchestrator').some(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX')));const planner=lastTurn('orchestrator');await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner?.status==='active'&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner?.turnId===planner.turnId);fake.agentInstance.emit('notification','turn/started',{threadId:planner.threadId,turn:{id:planner.turnId}});
-      fake.agentInstance.emit('notification','turn/completed',{threadId:planner.threadId,turn:{id:planner.turnId,status,items:[]}});await waitFor(()=>{const task=context.state.getTask(context.task.id),loop=task?.passes?.[0]?.qualityLoop;return loop?.correctionPlanner?.status===status&&loop.status==='paused'&&task?.activeTurnId===undefined;});
-      const saved=context.state.getTask(context.task.id)!.passes![0].qualityLoop!,reviewCount=fake.calls.filter(row=>row.kind==='review-turn').length;expect(saved.rounds.at(-1)?.findings).toHaveLength(1);await context.orchestrator.acceptQualityFindings(context.task.id,'I accept this unresolved QA finding.');await waitFor(()=>{const review=lastTurn('orchestrator');return fake.calls.filter(row=>row.kind==='review-turn').length===reviewCount+1&&review.model==='gpt-6.1-sol'&&context.state.getTask(context.task.id)?.activeTurnId===review.turnId;});
-      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({status:'user_accepted',userAcceptanceNote:'I accept this unresolved QA finding.',correctionPlanner:{status}});expect(fake.calls.filter(row=>row.kind==='review-turn')).toHaveLength(reviewCount+1);expect(fake.calls.filter(row=>row.kind==='review-turn').at(-1)).toMatchObject({model:'gpt-6.1-sol',qaRole:'orchestrator'});expect(turns('worker').length).toBeGreaterThan(0);
-    }finally{await context.orchestrator.cancelTask(context.task.id);}
+  it('reports a failed recruitment service call instead of claiming the planner never called it', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const nonGitRoot = path.join(dataDirectory, 'non-git-project');
+    await mkdir(path.join(nonGitRoot, 'src'), { recursive: true });
+    await state.mutate((saved: any) => {
+      const project = saved.projects.find((row: any) => row.id === saved.selectedProjectId);
+      project.projectRoot = nonGitRoot;
+    });
+    const task = await orchestrator.submitTask('Delegate one bounded worker.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs a worker.',
+    });
+    await waitForRole('orchestrator');
+    const turn = lastTurn('orchestrator'),
+      owner = fake.threadOwners.get(turn.threadId) || fake.agentInstance,
+      requestId = 'non-git-recruitment';
+    owner.emit('serverRequest', requestId, 'item/tool/call', {
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      namespace: 'opnex',
+      tool: 'recruit_workers',
+      arguments: {
+        workers: [workerPlan({ ...assignment, write_scope: [path.join(nonGitRoot, 'src')] })],
+      },
+    });
+    try {
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === requestId)
+      );
+      const response = fake.calls.find(
+        (row) => row.kind === 'server-response' && row.id === requestId
+      )?.result;
+      expect(response?.success).toBe(false);
+      expect(response?.contentItems?.[0]?.text).toMatch(/not a Git worktree/i);
+      owner.emit('notification', 'turn/completed', {
+        threadId: turn.threadId,
+        turn: {
+          id: turn.turnId,
+          status: 'completed',
+          items: [
+            {
+              type: 'dynamicToolCall',
+              id: 'model-recruit-call',
+              toolName: 'recruit_workers',
+              status: 'failed',
+            },
+            { type: 'agentMessage', text: JSON.stringify(assignment) },
+          ],
+        },
+      });
+      await waitFor(() => state.getTask(task.id)?.phase === 'needs_attention');
+      expect(state.getTask(task.id)?.error).toMatch(/Recruitment service failed:.*Git worktree/i);
+      expect(state.getTask(task.id)?.error).not.toMatch(/without calling the recruitment service/i);
+      expect(
+        state
+          .getTask(task.id)
+          ?.liveActivity?.find((row: any) => row.itemId === 'model-recruit-call')?.detail
+      ).toMatch(/Recruitment service failed:.*Git worktree/i);
+      expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam).toBeUndefined();
+      expect(
+        fake.calls.filter((row) => row.kind === 'turn' && row.server === 'deepseek')
+      ).toHaveLength(0);
+    } finally {
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('accepts findings after correction setup is confirmed to fail before turn dispatch',async()=>{
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>turns('orchestrator').some(row=>row.model==='gpt-6.1-terra'));
-    try{
-      fake.mcpStatusFailureCount=1;await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One actionable finding remains.',findings:[{title:'Correction preflight failure',severity:'medium',issue:'The integrated change lacks one required behavior.',required_fix:'Apply the saved correction once the setup failure is resolved.',evidence:['The independent QA round saved this finding before planner startup.']}]});
-      await waitFor(()=>{const loop=context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop;return loop?.status==='paused'&&!loop.correctionPlanner;});
-      const saved=context.state.getTask(context.task.id)!.passes![0].qualityLoop!,round=saved.rounds.at(-1)!;expect(saved).toMatchObject({resumeAction:'corrections',correctionPlannerNotDispatchedRoundId:round.roundId,rounds:[{status:'awaiting_corrections',findings:[expect.objectContaining({title:'Correction preflight failure'})]}]});expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(0);
-      const before=fake.calls.filter(row=>row.kind==='review-turn').length;await context.orchestrator.acceptQualityFindings(context.task.id,'Accept the recorded finding after the known setup failure.');await waitFor(()=>fake.calls.filter(row=>row.kind==='review-turn').length===before+1&&lastTurn('orchestrator').model==='gpt-6.1-sol'&&context.state.getTask(context.task.id)?.activeTurnId===lastTurn('orchestrator').turnId);
-      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({status:'user_accepted',userAcceptanceNote:'Accept the recorded finding after the known setup failure.',correctionPlannerNotDispatchedRoundId:round.roundId});expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(0);
-    }finally{await context.orchestrator.cancelTask(context.task.id);}
+  it.each([
+    { label: 'non-Git project with Codex', gitMode: 'none' as const, provider: 'codex' as const },
+    {
+      label: 'non-Git project with native DSH',
+      gitMode: 'none' as const,
+      provider: 'deepseek' as const,
+    },
+    {
+      label: 'uncommitted Git project with Codex',
+      gitMode: 'uninitialized' as const,
+      provider: 'codex' as const,
+    },
+    {
+      label: 'uncommitted Git project with native DSH',
+      gitMode: 'uninitialized' as const,
+      provider: 'deepseek' as const,
+    },
+  ])(
+    'completes an answer-only recruitment in a $label without a worktree',
+    async ({ gitMode, provider }) => {
+      const { orchestrator, state } = await setup(true, undefined, undefined, provider, gitMode),
+        task = await orchestrator.submitTask('Delegate a read-only worker to answer one question.');
+      const answerAssignment: Assignment = {
+        ...assignment,
+        outcome: 'Answer the delegated question without changing files.',
+        deliverable: 'A concise answer based on the selected project.',
+        write_scope: [],
+      };
+      const answerWorker: WorkerPlan = {
+        name: 'Answer worker',
+        step: 'Answer without editing files',
+        depends_on: [],
+        assignment: answerAssignment,
+        effort: 'max',
+        skill_refs: [],
+      };
+      await complete('router', {
+        route: 'hard_task',
+        rule_id: 'hard_explicit_worker_delegation',
+        justification: 'The user explicitly asked for one delegated worker.',
+      });
+      await waitForRole('orchestrator');
+      expect(lastTurn('orchestrator').input).toContain('Choose mode=read_only');
+      const orchestratorTurn = sendRecruitmentRequest(
+          `read-only-${gitMode}`,
+          [answerWorker],
+          'read_only'
+        ),
+        owner = fake.threadOwners.get(orchestratorTurn.threadId) || fake.agentInstance;
+      await waitFor(() =>
+        fake.calls.some(
+          (row) => row.kind === 'server-response' && row.id === `read-only-${gitMode}`
+        )
+      );
+      const response = fake.calls.find(
+        (row) => row.kind === 'server-response' && row.id === `read-only-${gitMode}`
+      )?.result;
+      expect(response?.success).toBe(true);
+      const accepted = JSON.parse(response.contentItems[0].text);
+      expect(accepted).toMatchObject({
+        mode: 'read_only',
+        integratorQueued: false,
+        workerCount: 1,
+      });
+      expect(accepted.workers[0]).not.toHaveProperty('branch');
+      expect(accepted.workers[0]).not.toHaveProperty('worktreeRoot');
+      owner.emit('notification', 'turn/completed', {
+        threadId: orchestratorTurn.threadId,
+        turn: {
+          id: orchestratorTurn.turnId,
+          status: 'completed',
+          items: [{ type: 'agentMessage', text: 'The read-only team is sealed.' }],
+        },
+      });
+      const worker = await waitForRole('worker'),
+        team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam,
+        workerCall = lastTurn('worker');
+      expect(team).toMatchObject({
+        mode: 'read_only',
+        status: 'running',
+        canonicalProjectRoot: projectRoot,
+        integration: { status: 'not_required' },
+      });
+      expect(team).not.toHaveProperty('workspaceParent');
+      expect(team).not.toHaveProperty('baseRef');
+      expect(team).not.toHaveProperty('baseCommit');
+      expect(team?.workers[0]).not.toHaveProperty('branch');
+      expect(team?.workers[0]).not.toHaveProperty('worktreeRoot');
+      expect(workerCall.writeRoots).toEqual([]);
+      if (provider === 'deepseek') {
+        const connection = fake.calls.find((row) => row.kind === 'dsh-connect'),
+          runtime = fake.dshSessions.get(worker.threadId);
+        expect(connection?.cwd).toBe(projectRoot);
+        expect(runtime?.options.permission).toMatchObject({
+          access: 'read-only',
+          permissionMode: 'read-only',
+          writeScope: [],
+        });
+      } else {
+        expect(worker.root).toBe(projectRoot);
+        expect(workerCall.root).toBe(projectRoot);
+        expect(workerCall.approvalPolicy).toBe('never');
+      }
+      expect(turns('integrator')).toHaveLength(0);
+      await complete(
+        'worker',
+        provider === 'deepseek'
+          ? receipt
+          : {
+              type: 'receipt',
+              receipt,
+              decision_needed: null,
+              evidence: [],
+              options: [],
+              recommendation: null,
+              consequences: [],
+            }
+      );
+      await waitFor(
+        () => turns('orchestrator').length === 2 && state.getTask(task.id)?.phase === 'reviewing'
+      );
+      const review = lastTurn('orchestrator'),
+        completedTeam = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+      expect(completedTeam).toMatchObject({
+        status: 'complete',
+        integration: { status: 'not_required' },
+        combinedReceipt: { status: provider === 'deepseek' ? 'incomplete' : 'complete' },
+      });
+      expect(state.getTask(task.id)?.assignment?.outcome).toContain('read-only worker results');
+      expect(review.input).toMatch(
+        /no worker commits, branches, or integration worktree to verify/i
+      );
+      expect(review.input).not.toContain('worker/integrator results');
+      expect(review.input).not.toContain('verify all worker commits');
+      expect(turns('integrator')).toHaveLength(0);
+      const nativeAnswer = completedTeam?.combinedReceipt?.result;
+      await complete('orchestrator', {
+        outcome: 'accept',
+        note: 'The read-only worker result and provenance meet the request.',
+        assignment: null,
+        decision_required: null,
+      });
+      await waitFor(() => state.getTask(task.id)?.phase === 'accepted');
+      if (provider === 'deepseek') {
+        const acceptedPass = state.getTask(task.id)?.passes?.[0];
+        expect(acceptedPass?.publicAnswer).toBe(nativeAnswer);
+        expect(acceptedPass?.receipt?.result).toBe(nativeAnswer);
+        expect(acceptedPass?.receipt?.result).not.toContain(
+          'App-owned independent review accepted'
+        );
+        expect(acceptedPass?.receipt?.verification).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              check: 'App-owned independent final review',
+              result: 'passed',
+            }),
+          ])
+        );
+      }
+      expect(turns('integrator')).toHaveLength(0);
+    }
+  );
+  it('still requires a commit for implementation worktree recruitment', async () => {
+    const { orchestrator, state } = await setup(
+        true,
+        undefined,
+        undefined,
+        'codex',
+        'uninitialized'
+      ),
+      task = await orchestrator.submitTask('Make a one-line implementation change.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request changes project files.',
+    });
+    await waitForRole('orchestrator');
+    sendRecruitmentRequest('uncommitted-write-team', [
+      workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+    ]);
+    await waitFor(() =>
+      fake.calls.some(
+        (row) => row.kind === 'server-response' && row.id === 'uncommitted-write-team'
+      )
+    );
+    const response = fake.calls.find(
+      (row) => row.kind === 'server-response' && row.id === 'uncommitted-write-team'
+    )?.result;
+    expect(response?.success).toBe(false);
+    expect(response?.contentItems?.[0]?.text).toMatch(/could not be resolved to a commit/i);
+    expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam).toBeUndefined();
+    expect(turns('worker')).toHaveLength(0);
   });
-  it('accepts actionable findings from a stopped round-limit audit and starts independent review',async()=>{
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);await context.state.mutate((state:any)=>{const task=state.tasks.find((row:any)=>row.id===context.task.id);task.passes[0].qualityLoop.maxRounds=1;});
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'The one-round QA limit left one actionable finding.',findings:[{title:'Round-limit finding',severity:'medium',issue:'The integrated behavior does not meet the stated acceptance criterion.',required_fix:'The user may accept this saved result or start a deliberate follow-up.',evidence:['The app stopped the loop after its configured round limit.']}]});
-      await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='needs_attention'&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1)?.status==='completed'&&fake.calls.filter(row=>row.kind==='review-turn').length>=2);
-      const saved=context.state.getTask(context.task.id)!.passes![0].qualityLoop!,round=saved.rounds.at(-1)!;expect(saved).toMatchObject({status:'needs_attention',correctionPlannerNotDispatchedRoundId:round.roundId,rounds:[{resultStatus:'issues_found',findings:[expect.objectContaining({title:'Round-limit finding'})]}]});const reviewCount=fake.calls.filter(row=>row.kind==='review-turn').length;
-      await context.orchestrator.acceptQualityFindings(context.task.id,'Accept this round-limit finding.');await waitFor(()=>fake.calls.filter(row=>row.kind==='review-turn').length===reviewCount+1&&lastTurn('orchestrator').model==='gpt-6.1-sol'&&context.state.getTask(context.task.id)?.activeTurnId===lastTurn('orchestrator').turnId);
-      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({status:'user_accepted',userAcceptanceNote:'Accept this round-limit finding.'});expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(0);
-    }finally{await context.orchestrator.cancelTask(context.task.id);}
+  it('completes the recruitment activity when the team is sealed', async () => {
+    const { orchestrator, state } = await setupDeepSeek(),
+      task = await orchestrator.submitTask('Delegate one read-only answer.');
+    try {
+      await complete('router', {
+        route: 'hard_task',
+        rule_id: 'hard_new_feature',
+        justification: 'The request needs a worker.',
+      });
+      await waitForRole('orchestrator');
+      await recruit([workerPlan({ ...assignment, write_scope: [] })], true);
+      const live = state.getTask(task.id),
+        activity = live?.liveActivity?.find((row: any) => row.title === 'recruit_workers');
+      expect(live?.passes?.[0]?.recruitmentTeam?.sealed).toBe(true);
+      expect(activity?.status).toBe('completed');
+    } finally {
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('makes a correction plan retryable only after the known planner turn reports interruption',async()=>{
-    let release!:()=>void,entered!:()=>void,plannerTurnId='';const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.startTurn.bind(fake.agentInstance);fake.agentInstance.startTurn=async(...args:any[])=>{const response=await original(...args);if(String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')&&!plannerTurnId){plannerTurnId=response.turn.id;fake.agentInstance.emit('notification','turn/started',{threadId:args[0],turn:{id:plannerTurnId}});entered();await gate;}return response;};}});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Interrupted planner',severity:'medium',issue:'The correction request was interrupted safely.',required_fix:'Resume only after the runtime confirms interruption.',evidence:['A matching started turn ID was saved.']}]});await started;await waitFor(()=>context.state.getTask(context.task.id)?.activeTurnId===plannerTurnId);await context.orchestrator.pauseQualityLoop(context.task.id);await waitFor(()=>fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===plannerTurnId));
-      const threadId=fake.calls.find(row=>row.kind==='turn'&&row.turnId===plannerTurnId)?.threadId;fake.agentInstance.emit('notification','turn/completed',{threadId,turn:{id:plannerTurnId,status:'interrupted',items:[]}});await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner?.status==='interrupted');
-      const terminal=context.state.getTask(context.task.id)!.passes![0].qualityLoop!;expect(terminal).toMatchObject({status:'paused',resumeAction:'corrections',correctionPlanner:{status:'interrupted',threadId,turnId:plannerTurnId}});const retry=context.orchestrator.resumeQualityLoop(context.task.id);release();await retry;await waitFor(()=>turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX')).length===2);expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status).toBe('awaiting_corrections');
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('keeps the no-call failure message when the planner never submits a recruitment request', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask('Return an assignment without calling recruitment.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs a worker.',
+    });
+    await waitForRole('orchestrator');
+    const turn = lastTurn('orchestrator'),
+      owner = fake.threadOwners.get(turn.threadId) || fake.agentInstance;
+    try {
+      owner.emit('notification', 'turn/completed', {
+        threadId: turn.threadId,
+        turn: {
+          id: turn.turnId,
+          status: 'completed',
+          items: [{ type: 'agentMessage', text: JSON.stringify(assignment) }],
+        },
+      });
+      await waitFor(() => state.getTask(task.id)?.phase === 'needs_attention');
+      expect(state.getTask(task.id)?.error).toMatch(
+        /finished without calling the recruitment service/i
+      );
+      expect(
+        fake.calls.some((row) => row.kind === 'server-response' && row.result?.success === false)
+      ).toBe(false);
+    } finally {
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('preserves cancellation across a late correction-turn response and interrupts the exact late turn',async()=>{
-    let release!:()=>void,entered!:()=>void,plannerTurnId='';const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting',beforeStart:()=>{const original=fake.agentInstance.startTurn.bind(fake.agentInstance);fake.agentInstance.startTurn=async(...args:any[])=>{const response=await original(...args);if(String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')){plannerTurnId=response.turn.id;entered();await gate;}return response;};}});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Cancelled planner',severity:'medium',issue:'The sent correction planner has not returned.',required_fix:'Do not restart it after cancellation.',evidence:['Cancellation happened while the turn/start response was pending.']}]});await started;await context.orchestrator.cancelTask(context.task.id);release();await waitFor(()=>fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===plannerTurnId));
-      const saved=context.state.getTask(context.task.id)!.passes![0].qualityLoop!;expect(context.state.getTask(context.task.id)?.phase).toBe('cancelled');expect(saved).toMatchObject({status:'cancelled',correctionPlanner:{status:'active',turnId:plannerTurnId}});expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(1);
-    }finally{release();if(context.state.getTask(context.task.id)?.phase!=='cancelled')await context.orchestrator.cancelTask(context.task.id);}
+  it('hands native assignments to DSH, records raw results, and reviews them without injecting an Opnex DSH role prompt', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask(
+      'Delegate one worker to report its model, provider, and harness.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request explicitly requires a delegated worker.',
+    });
+    await waitForRole('orchestrator');
+    expect(
+      fake.calls.find((row) => row.kind === 'thread' && row.role === 'orchestrator')?.dynamicTools
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'recruit_workers', namespace: 'opnex' }),
+      ])
+    );
+    const assigned = { ...assignment, write_scope: [path.join(projectRoot, 'src')] };
+    await recruit([workerPlan(assigned)]);
+    const worker = await waitForRole('worker'),
+      team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam,
+      workerRoot = team?.workers[0]?.worktreeRoot,
+      workerRuntime = fake.dshSessions.get(worker.threadId);
+    expect(worker).toMatchObject({
+      server: 'deepseek',
+      model: 'deepseek-v4.1-flash',
+      effort: 'max',
+    });
+    expect(worker.schema).toBeUndefined();
+    expect(worker.input).toContain('"outcome": "Perform the requested implementation."');
+    expect(worker.input).not.toContain('COMPLETE ASSIGNMENT');
+    expect(worker.input).not.toContain('receipt_requirements');
+    expect(worker.input).not.toContain('HOST-OBSERVED DSH');
+    expect(worker.writeRoots).toEqual([path.join(workerRoot!, 'src')]);
+    expect(team?.workers[0]).toMatchObject({ status: 'running', workerStage: 'execute' });
+    expect(team?.workers[0]?.deepSeekPhaseRuns).toHaveLength(1);
+    expect(fake.calls.find((row) => row.kind === 'dsh-connect')).toMatchObject({
+      profileName: 'opnex-sdk',
+      profileArgs: expect.arrayContaining(['--profile', 'opnex-sdk']),
+    });
+    expect(team?.workers[0]?.deepSeekRuntime?.permissionMode).toBe('native-profile');
+    expect(turns('orchestrator')).toHaveLength(1);
+    await writeFile(path.join(workerRoot!, 'src', 'change.ts'), 'export const changed = true;\n');
+    workerRuntime.toolCall('write_file', { path: 'src/change.ts' }, { written: true });
+    execFileSync('git', ['add', '--', 'src/change.ts'], {
+      cwd: workerRoot,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    execFileSync('git', ['commit', '--quiet', '-m', 'worker implementation'], {
+      cwd: workerRoot,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    await complete(
+      'worker',
+      'The native runtime context identifies model deepseek-v4.1-flash and DeepSeek Harness; provider and effort are not exposed.'
+    );
+    await waitFor(
+      () =>
+        state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status === 'complete' &&
+        state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status === 'running' &&
+        !!state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.activeTurnId
+    );
+    const toolLog = state.getTask(task.id)?.passes?.[0]?.toolCalls;
+    expect(toolLog).toMatchObject({
+      total: 1,
+      statusCounts: { started: 0, completed: 1, failed: 0, interrupted: 0 },
+      omittedCount: 0,
+    });
+    expect(toolLog?.calls[0]).toMatchObject({
+      name: 'write_file',
+      type: 'provider tool',
+      status: 'completed',
+      sources: ['application', 'model'],
+      agentRole: 'worker',
+    });
+    expect(JSON.stringify(toolLog)).not.toContain('src/change.ts');
+    await waitFor(() => {
+      const integrationId = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration
+        .threadId;
+      return (
+        !!integrationId &&
+        fake.calls.some((row) => row.kind === 'turn' && row.threadId === integrationId)
+      );
+    });
+    const integrationId = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration
+      .threadId;
+    const integrator = fake.calls.find(
+      (row) => row.kind === 'turn' && row.threadId === integrationId
+    )!;
+    expect(integrator.threadId).not.toBe(worker.threadId);
+    expect(integrator.input).toContain(
+      '"outcome": "Integrate 1 worker contributions for the original user request."'
+    );
+    expect(integrator.input).toContain('The requested behavior is delivered.');
+    expect(integrator.input).not.toContain('Preserve the exact complete structured receipt');
+    expect(integrator.input).not.toContain('receipt_requirements');
+    expect(integrator.input).not.toContain('COMPLETE ASSIGNMENT');
+    expect(integrator.input).not.toContain('Add a bounded feature.');
+    expect(turns('orchestrator')).toHaveLength(1);
+    fake.dshSessions
+      .get(integrator.threadId)
+      ?.complete(integrator.turnId, 'The worker contribution is integrated.');
+    await waitFor(
+      () => turns('orchestrator').length === 2 && state.getTask(task.id)?.phase === 'reviewing'
+    );
+    const review = lastTurn('orchestrator'),
+      finished = state.getTask(task.id)!,
+      finishedTeam = finished.passes?.[0]?.recruitmentTeam;
+    expect(review).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' });
+    expect(review.input).toContain('APP-RECORDED TEAM RESULTS AND PRODUCER PROVENANCE');
+    expect(review.input).toContain('native DSH roles');
+    expect(review.input).toContain(
+      'The native runtime context identifies model deepseek-v4.1-flash and DeepSeek Harness; provider and effort are not exposed.'
+    );
+    expect(review.input).toContain('"requestedModel": "gpt-6.1-sol"');
+    expect(review.input).toContain('"providerSelection": "opencode-go"');
+    expect(review.input).toContain('"requestedNativeProviderRoute": "dsh-opencode-go"');
+    expect(review.input).toContain('"modelSelected": "deepseek-v4.1-flash"');
+    expect(review.input).toContain('"reasoningEffortRequested": "max"');
+    expect(review.input).toContain(
+      'Do not require a DSH integration report to echo Opnex host metadata'
+    );
+    expect(review.input).toContain(
+      'serving provider and effective effort remain unknown unless DSH attests them'
+    );
+    expect(finishedTeam).toMatchObject({
+      status: 'complete',
+      integration: { status: 'complete' },
+      combinedReceipt: { status: 'incomplete' },
+    });
+    expect(finishedTeam?.workerReceiptBundle?.[0]?.producer?.origin).toBe('application_status');
+    expect(finishedTeam?.integrationReceiptProducer?.origin).toBe('application_status');
+    await complete('orchestrator', {
+      outcome: 'accept',
+      note: 'The worker identified native DSH context; OpenCode Go and max are host-selected/requested, while effective provider and effort remain unverified.',
+      assignment: null,
+      decision_required: null,
+    });
+    await waitFor(() => state.getTask(task.id)?.phase === 'accepted');
+    expect(state.getTask(task.id)?.receipt).toMatchObject({
+      status: 'complete',
+      verification: expect.arrayContaining([
+        expect.objectContaining({ check: 'App-owned independent final review', result: 'passed' }),
+      ]),
+    });
   });
-  it('preserves and resumes saved QA corrections once after disconnect during thread setup',async()=>{
-    let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>turns('orchestrator').some(row=>row.model==='gpt-6.1-terra'));const saved=await saveAndPauseQaFinding(context,'Disconnect thread finding'),auditCount=turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length,recruitmentCount=fake.calls.filter(row=>row.kind==='server-response'&&String(row.id).startsWith('recruit-')).length;fake.agentInstance.emit('disconnected','detach the task thread before QA correction resume');await waitFor(()=>context.state.getTask(context.task.id)?.phase==='needs_attention');const originalResume=fake.agentInstance.resumeThread.bind(fake.agentInstance);let resumeAttempts=0;fake.agentInstance.resumeThread=async(...args:any[])=>{if(++resumeAttempts===1){entered();await gate;}return originalResume(...args);};
-    try{
-      const first=context.orchestrator.resumeQualityLoop(context.task.id);await started;fake.agentInstance.emit('disconnected','fixture disconnect during correction thread setup');await waitFor(()=>context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status==='paused'&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.resumeAction==='corrections');const second=context.orchestrator.resumeQualityLoop(context.task.id);release();await Promise.all([first,second]);await waitFor(()=>turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX')).length===1);
-      const task=context.state.getTask(context.task.id)!,pass=task.passes!.find((row:any)=>row.id===saved.passId)!,loop=pass.qualityLoop!;expect(loop).toMatchObject({status:'awaiting_corrections',rounds:[{roundId:saved.roundId,integrationHead:saved.integrationHead,status:'awaiting_corrections',findings:saved.findings}]});expect(resumeAttempts).toBe(2);expect(turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra')).toHaveLength(auditCount);expect(turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toHaveLength(1);expect(fake.calls.filter(row=>row.kind==='server-response'&&String(row.id).startsWith('recruit-'))).toHaveLength(recruitmentCount);
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('starts workers and integrators with the same native SDK profile and no per-task DSH home override', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask('Delegate one read-only identity check.');
+    try {
+      await complete('router', {
+        route: 'hard_task',
+        rule_id: 'hard_new_feature',
+        justification: 'The request explicitly requires a delegated worker.',
+      });
+      await waitForRole('orchestrator');
+      await recruit([workerPlan({ ...assignment, write_scope: [] })]);
+      await complete('worker', 'This is the selected DSH worker.');
+      await waitFor(
+        () =>
+          fake.calls.filter((row) => row.kind === 'dsh-connect').length === 2 &&
+          state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status === 'running'
+      );
+      const [workerProfile, integratorProfile] = fake.calls.filter(
+        (row) => row.kind === 'dsh-connect'
+      );
+      expect(workerProfile.profileName).toBe('opnex-sdk');
+      expect(integratorProfile.profileName).toBe('opnex-sdk');
+      expect(workerProfile.profileArgs).toEqual(integratorProfile.profileArgs);
+      expect(workerProfile.launchEnvKeys).not.toEqual(
+        expect.arrayContaining(['DSH_HOME', 'DSH_AGENTS_HOME'])
+      );
+      expect(integratorProfile.launchEnvKeys).not.toEqual(
+        expect.arrayContaining(['DSH_HOME', 'DSH_AGENTS_HOME'])
+      );
+    } finally {
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('keeps correction findings resumable when thread setup fails before a planner turn is sent',async()=>{
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>turns('orchestrator').some(row=>row.model==='gpt-6.1-terra'));const saved=await saveAndPauseQaFinding(context,'Setup failure finding'),auditCount=turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length,recruitmentCount=fake.calls.filter(row=>row.kind==='server-response'&&String(row.id).startsWith('recruit-')).length,orchestratorTurnCount=turns('orchestrator').length;fake.agentInstance.emit('disconnected','detach the task thread before QA correction resume');await waitFor(()=>context.state.getTask(context.task.id)?.phase==='needs_attention');const originalResume=fake.agentInstance.resumeThread.bind(fake.agentInstance);let resumeAttempts=0;fake.agentInstance.resumeThread=async(...args:any[])=>{if(++resumeAttempts===1)throw new Error('Temporary correction thread setup failure.');return originalResume(...args);};
-    try{
-      await context.orchestrator.resumeQualityLoop(context.task.id);const paused=context.state.getTask(context.task.id)!.passes!.find((row:any)=>row.id===saved.passId)!;expect(paused.qualityLoop).toMatchObject({status:'paused',resumeAction:'corrections',rounds:[{roundId:saved.roundId,integrationHead:saved.integrationHead,status:'awaiting_corrections',findings:saved.findings}]});expect(paused.activeTurnId).toBeUndefined();expect(turns('orchestrator')).toHaveLength(orchestratorTurnCount);
-      await context.orchestrator.resumeQualityLoop(context.task.id);await waitFor(()=>turns('orchestrator').filter(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX')).length===1);const resumed=context.state.getTask(context.task.id)!.passes!.find((row:any)=>row.id===saved.passId)!;expect(resumed.qualityLoop?.status).toBe('awaiting_corrections');expect(resumed.qualityLoop?.rounds.at(-1)?.findings).toEqual(saved.findings);expect(resumeAttempts).toBe(2);expect(turns('orchestrator')).toHaveLength(orchestratorTurnCount+1);expect(turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra')).toHaveLength(auditCount);expect(fake.calls.filter(row=>row.kind==='server-response'&&String(row.id).startsWith('recruit-'))).toHaveLength(recruitmentCount);
-    }finally{await context.orchestrator.cancelTask(context.task.id);}
+  it('keeps workspace Git initialization away from recruited worktree roles', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask(
+      'Initialize the authorized workspace Git repository.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request requires a bounded workspace operation.',
+    });
+    await waitForRole('orchestrator');
+    await recruit([workerPlan({ ...assignment, write_scope: [projectRoot] })]);
+    const worker = await waitForRole('worker'),
+      team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    expect(worker.writeRoots).toEqual([team?.workers[0]?.worktreeRoot]);
+    expect(team?.workers[0]?.deepSeekRuntime?.mcpToolCatalog?.toolNames).not.toContain(
+      'mcp__opnex_workspace__initialize_git_repository'
+    );
+    expect(fake.calls.find((row) => row.kind === 'dsh-connect')?.launchEnvKeys).not.toEqual(
+      expect.arrayContaining(['DSH_HOME', 'DSH_AGENTS_HOME'])
+    );
+    await orchestrator.cancelTask(task.id);
   });
-  it.each(['pause','follow-up'] as const)('revalidates a QA correction launch after its shared authentication await (%s)',async(action)=>{
-    let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);fake.agentInstance.emit('connected');const originalExport=fake.instance.exportChatGPTAuthTokens.bind(fake.instance);fake.instance.exportChatGPTAuthTokens=async()=>{entered();await gate;return originalExport();};
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Auth race finding',severity:'medium',issue:'The behavior is not preserved.',required_fix:'Correct the behavior and add a regression.',evidence:['Observed during the focused audit.'],file:'src/example.ts',line:2}]});const reached=await Promise.race([started.then(()=>true),new Promise<boolean>(resolve=>setTimeout(()=>resolve(false),2500))]);if(!reached)throw new Error(`Authentication gate did not run: ${JSON.stringify(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop)}`);
-      const passId=context.state.getTask(context.task.id)!.currentPassId!;let followupPromise:Promise<any>|undefined;
-      if(action==='pause')await context.orchestrator.pauseQualityLoop(context.task.id);else{followupPromise=context.orchestrator.submitTask('Fresh follow-up: answer this separately.',context.task.id);await waitFor(()=>context.state.getTask(context.task.id)?.currentPassId!==passId);}
-      release();if(followupPromise)await followupPromise;
-      if(action==='follow-up'){await waitFor(()=>turns('router').length===2);await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'The follow-up asks for a separate direct answer.'});await waitForRole('direct');await complete('direct',{answer:'Follow-up handled independently.'});await waitFor(()=>context.state.getTask(context.task.id)?.phase==='needs_attention');expect(context.state.getTask(context.task.id)?.passes?.find((row:any)=>row.id===context.state.getTask(context.task.id)?.currentPassId)?.userInputs).toContain('Fresh follow-up: answer this separately.');}
-      else expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({status:'paused',resumeAction:'corrections'});
-      expect(turns('orchestrator').some(row=>row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))).toBe(false);
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('routes a recruited worker and its integrator through the pass-selected Codex profile', async () => {
+    const { orchestrator, state } = await setup();
+    const task = await orchestrator.submitTask('Implement one bounded Codex worker change.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs a recruited implementation worker.',
+    });
+    await waitForRole('orchestrator');
+    const pass = state.getTask(task.id)?.passes?.[0];
+    expect(pass?.executionProfile).toEqual({
+      provider: 'codex',
+      model: 'gpt-6-luna',
+      effort: 'max',
+    });
+    await complete('orchestrator', { ...assignment, write_scope: [path.join(projectRoot, 'src')] });
+    const worker = await waitForRole('worker');
+    expect(worker).toMatchObject({ model: 'gpt-6-luna', effort: 'max' });
+    expect(
+      fake.calls.find((row) => row.kind === 'thread' && row.threadId === worker.threadId)
+    ).toMatchObject({ server: 'agent', model: 'gpt-6-luna', effort: 'max' });
+    expect(
+      state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.executionProfile
+    ).toEqual(pass?.executionProfile);
+    fake.agentInstance.emit('notification', 'turn/completed', {
+      threadId: worker.threadId,
+      turn: {
+        id: worker.turnId,
+        status: 'completed',
+        items: [
+          {
+            type: 'agentMessage',
+            text: JSON.stringify({
+              type: 'receipt',
+              receipt,
+              decision_needed: null,
+              evidence: [],
+              options: [],
+              recommendation: null,
+              consequences: [],
+            }),
+          },
+        ],
+      },
+    });
+    await waitFor(
+      () =>
+        state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status === 'complete' &&
+        state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status === 'running' &&
+        !!state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.activeTurnId
+    );
+    const integration = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration;
+    expect(integration?.executionProfile).toEqual(pass?.executionProfile);
+    const integrationTurn = turns('integrator').at(-1)!;
+    expect(integrationTurn).toMatchObject({ model: 'gpt-6-luna', effort: 'max' });
+    expect(
+      fake.calls.find((row) => row.kind === 'thread' && row.threadId === integrationTurn.threadId)
+    ).toMatchObject({ server: 'agent', model: 'gpt-6-luna', effort: 'max' });
+    await orchestrator.cancelTask(task.id);
   });
-  it.each(['pause','follow-up'] as const)('interrupts a correction turn returned after %s and preserves a newer pass',async(action)=>{
-    let release!:()=>void,entered!:()=>void,staleTurnId='';const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;});
-    const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-starting'});await waitFor(()=>turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra').length===1);const original=fake.agentInstance.startTurn.bind(fake.agentInstance);fake.agentInstance.startTurn=async(...args:any[])=>{const response=await original(...args);if(String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')){staleTurnId=response.turn.id;entered();await gate;}return response;};
-    try{
-      await complete('orchestrator',{type:'qa_audit',status:'issues_found',summary:'One evidence-backed issue remains.',findings:[{title:'Late start finding',severity:'medium',issue:'The behavior is not preserved.',required_fix:'Correct the behavior and add a regression.',evidence:['Observed during the focused audit.'],file:'src/example.ts',line:2}]});await started;const oldPassId=context.state.getTask(context.task.id)!.currentPassId!;let followup:Promise<any>|undefined;if(action==='pause')await context.orchestrator.pauseQualityLoop(context.task.id);else{followup=context.orchestrator.submitTask('Fresh follow-up: answer this separately.',context.task.id);await waitFor(()=>context.state.getTask(context.task.id)?.currentPassId!==oldPassId);await followup;}
-      release();await waitFor(()=>fake.calls.some(row=>row.kind==='interrupt'&&row.turnId===staleTurnId));const threadId=fake.calls.find(row=>row.kind==='turn'&&row.turnId===staleTurnId)?.threadId;expect(threadId).toBeTruthy();
-      if(action==='pause')expect(context.state.getTask(context.task.id)).toMatchObject({phase:'reviewing',activeRole:undefined,activeTurnId:undefined,passes:[{qualityLoop:{status:'paused',resumeAction:'corrections'}}]});
-      else{await waitFor(()=>turns('router').length===2);expect(context.state.getTask(context.task.id)?.passes?.find((row:any)=>row.id===context.state.getTask(context.task.id)?.currentPassId)?.userInputs).toContain('Fresh follow-up: answer this separately.');await complete('router',{route:'direct_answer',rule_id:'direct_explanation_or_transform',justification:'The follow-up asks for a separate direct answer.'});await waitForRole('direct');}
-      const newPassTurn=context.state.getTask(context.task.id)?.activeTurnId,newPassRole=context.state.getTask(context.task.id)?.activeRole;fake.agentInstance.emit('notification','turn/started',{threadId,turn:{id:staleTurnId}});await context.state.mutate(()=>{});expect(context.state.getTask(context.task.id)?.activeTurnId).toBe(newPassTurn);expect(context.state.getTask(context.task.id)?.activeRole).toBe(newPassRole);expect(fake.calls.filter(row=>row.kind==='interrupt'&&row.turnId===staleTurnId)).toHaveLength(1);
-      if(action==='follow-up'){await complete('direct',{answer:'Follow-up handled independently.'});await waitFor(()=>context.state.getTask(context.task.id)?.phase==='needs_attention');}
-    }finally{release();await context.orchestrator.cancelTask(context.task.id);}
+  it('audits with Terra high, recruits max-effort QA corrections, re-audits clean, and keeps final Sol review independent', async () => {
+    const { state, task } = await runRecruitedTeamToReview(receipt, receipt, true);
+    const pass = state.getTask(task.id)?.passes?.[0];
+    expect(pass?.qualityLoop).toMatchObject({
+      enabled: true,
+      status: 'auditing',
+      rounds: [{ index: 1, model: 'gpt-6.1-terra', requestedEffort: 'high', status: 'auditing' }],
+    });
+    const firstAudit = turns('orchestrator').find((row) => row.model === 'gpt-6.1-terra')!;
+    expect(firstAudit).toMatchObject({
+      model: 'gpt-6.1-terra',
+      effort: 'high',
+      approvalPolicy: 'never',
+    });
+    expect(
+      fake.calls.find((row) => row.kind === 'review-turn' && row.model === 'gpt-6.1-terra')
+    ).toMatchObject({ qaRole: 'qa', approvalPolicy: 'never' });
+    expect(firstAudit.schema).toMatchObject({
+      required: ['type', 'status', 'summary', 'findings'],
+    });
+    const auditThread = fake.calls.find(
+      (row) => row.kind === 'thread' && row.model === 'gpt-6.1-terra'
+    );
+    expect(auditThread).toMatchObject({ role: 'qa', root: expect.stringMatching(/integration/i) });
+    expect(auditThread?.mcpConfig).toBeUndefined();
+    expect(auditThread?.skillsMcpConfig).toBeUndefined();
+    expect(auditThread?.dynamicTools).toBeUndefined();
+    expect(firstAudit.input).toContain('Independently audit the integrated working tree');
+    await complete('orchestrator', {
+      type: 'qa_audit',
+      status: 'issues_found',
+      summary: 'The audit found one reproducible issue.',
+      findings: [
+        {
+          title: 'Example issue',
+          severity: 'medium',
+          issue: 'A required boundary check is missing.',
+          required_fix: 'Add the boundary check and a focused regression.',
+          evidence: ['Observed in the current integrated source at server/example.ts:12.'],
+          file: 'server/example.ts',
+          line: 12,
+        },
+      ],
+    });
+    await waitFor(
+      () =>
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status === 'awaiting_corrections' &&
+        turns('orchestrator').length >= 3 &&
+        lastTurn('orchestrator').model === 'gpt-6.1-sol'
+    );
+    const correctionPlan = lastTurn('orchestrator');
+    expect(correctionPlan).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' });
+    expect(correctionPlan.input).toContain('ACTIONABLE QA FINDINGS TO FIX');
+    expect(correctionPlan.input).toContain('Example issue');
+    await recruit([workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] })]);
+    await completeCurrentSingleWorkerTeam(receipt, receipt);
+    await waitFor(
+      () =>
+        turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 2 &&
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status === 'auditing'
+    );
+    const secondAudit = turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra')[1];
+    expect(secondAudit.effort).toBe('high');
+    expect(secondAudit.input).toContain('PREVIOUS QA ROUNDS');
+    await complete('orchestrator', {
+      type: 'qa_audit',
+      status: 'no_actionable_issues',
+      summary: 'The corrected integration has no outstanding actionable issues.',
+      findings: [],
+    });
+    await waitFor(
+      () =>
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status === 'complete' &&
+        turns('orchestrator').filter((row) => row.model === 'gpt-6.1-sol').length >= 3
+    );
+    const finalReview = lastTurn('orchestrator');
+    expect(finalReview).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' });
+    expect(finalReview.input).toContain('QA LOOP STATE');
+    expect(finalReview.input).toContain('"status": "complete"');
+    expect(state.getTask(task.id)?.passes?.[0]?.recruitmentHistory).toHaveLength(1);
+    expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]).toMatchObject({
+      effort: 'max',
+      status: 'complete',
+    });
+    await complete('orchestrator', {
+      outcome: 'accept',
+      note: 'Inspected the exact worker receipts, independent Terra audits, and saved model-turn provenance.',
+      assignment: null,
+      decision_required: null,
+    });
+    await waitFor(() => state.getTask(task.id)?.phase === 'accepted');
   });
-  it('retries a pre-turn QA startup failure using the same saved round without duplicate audits',async()=>{
-    let attempts=0;const context=await runRecruitedTeamToReview(receipt,receipt,true,{until:'audit-needs-attention',beforeStart:()=>{const original=fake.agentInstance.startThread.bind(fake.agentInstance);fake.agentInstance.startThread=async(role:string,root:string,model:string,...args:any[])=>{if(model==='gpt-6.1-terra'&&attempts++===0)throw new Error('Temporary Terra thread setup failure.');return original(role,root,model,...args);};}});
-    const before=context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1);expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({status:'needs_attention',resumeAction:'audit',rounds:[{status:'failed'}]});expect(before?.turnId).toBeUndefined();expect(turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra')).toHaveLength(0);
-    await context.orchestrator.resumeQualityLoop(context.task.id);await waitFor(()=>turns('orchestrator').some(row=>row.model==='gpt-6.1-terra')&&context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1)?.status==='auditing');
-    const after=context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1);expect(after).toMatchObject({roundId:before?.roundId,index:before?.index,createdAt:before?.createdAt,integrationHead:before?.integrationHead,model:'gpt-6.1-terra',requestedEffort:'high'});expect(attempts).toBe(2);expect(turns('orchestrator').filter(row=>row.model==='gpt-6.1-terra')).toHaveLength(1);await context.orchestrator.cancelTask(context.task.id);
+  it('pins a QA correction team to the audited commit while its integration branch moves during preparation', async () => {
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+    });
+    let release!: () => void,
+      entered!: () => void,
+      observedBaseRef = '';
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      preparing = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    try {
+      await waitFor(() => turns('orchestrator').some((row) => row.model === 'gpt-6.1-terra'));
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One finding needs correction.',
+        findings: [
+          {
+            title: 'Pinned-baseline fixture',
+            severity: 'medium',
+            issue: 'The audited change needs a bounded correction.',
+            required_fix: 'Apply the fix to the exact audited integration commit.',
+            evidence: ['The finding was returned by the fixture auditor.'],
+            file: 'src/fixture.ts',
+            line: 1,
+          },
+        ],
+      });
+      await waitFor(
+        () => turns('orchestrator').length >= 3 && lastTurn('orchestrator').model === 'gpt-6.1-sol'
+      );
+      const before = context.state.getTask(context.task.id)!,
+        pass = before.passes?.[0],
+        initialTeam = pass?.recruitmentTeam,
+        reviewedHead = pass?.qualityLoop?.rounds.at(-1)?.integrationHead;
+      if (!initialTeam || !reviewedHead)
+        throw new Error(
+          'The fixture QA round did not preserve its audited team and integration head.'
+        );
+      const integrationRoot = initialTeam.integration.worktreeRoot,
+        originalBranch = initialTeam.integration.branch;
+      expect(reviewedHead).toBeTruthy();
+      expect(
+        execFileSync('git', ['rev-parse', 'HEAD'], {
+          cwd: integrationRoot,
+          encoding: 'utf8',
+        }).trim()
+      ).toBe(reviewedHead);
+      fake.prepareWorktreeGate = {
+        entered: (options: any) => {
+          observedBaseRef = options.baseRef;
+          entered();
+        },
+        wait: gate,
+      };
+      sendRecruitmentRequest('qa-correction-pinned-baseline', [
+        workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+      ]);
+      await preparing;
+      await writeFile(
+        path.join(integrationRoot, 'unaudited-after-audit.ts'),
+        'export const unaudited = true;\n'
+      );
+      execFileSync('git', ['add', '--', 'unaudited-after-audit.ts'], {
+        cwd: integrationRoot,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      execFileSync(
+        'git',
+        ['commit', '--quiet', '-m', 'Move reviewed integration branch after audit'],
+        { cwd: integrationRoot, stdio: 'ignore', windowsHide: true }
+      );
+      const movedHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: integrationRoot,
+        encoding: 'utf8',
+      }).trim();
+      expect(movedHead).not.toBe(reviewedHead);
+      release();
+      await waitFor(() =>
+        fake.calls.some(
+          (row) => row.kind === 'server-response' && row.id === 'qa-correction-pinned-baseline'
+        )
+      );
+      const response = fake.calls.find(
+        (row) => row.kind === 'server-response' && row.id === 'qa-correction-pinned-baseline'
+      )?.result;
+      expect(response?.success).toBe(true);
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.recruitmentTeam?.teamId !==
+            initialTeam.teamId &&
+          context.state.getTask(context.task.id)?.passes?.[0]?.recruitmentTeam?.sealed
+      );
+      const correction = context.state.getTask(context.task.id)!.passes![0].recruitmentTeam!;
+      expect(observedBaseRef).toBe(reviewedHead);
+      expect(correction.baseCommit).toBe(reviewedHead);
+      expect(
+        execFileSync('git', ['rev-parse', 'HEAD'], {
+          cwd: correction.integration.worktreeRoot,
+          encoding: 'utf8',
+        }).trim()
+      ).toBe(reviewedHead);
+      expect(
+        execFileSync('git', ['rev-parse', 'HEAD'], {
+          cwd: correction.workers[0].worktreeRoot,
+          encoding: 'utf8',
+        }).trim()
+      ).toBe(reviewedHead);
+      expect(
+        execFileSync('git', ['rev-parse', 'HEAD'], {
+          cwd: integrationRoot,
+          encoding: 'utf8',
+        }).trim()
+      ).toBe(movedHead);
+      expect(
+        execFileSync('git', ['rev-parse', '--verify', `refs/heads/${originalBranch}^{commit}`], {
+          cwd: projectRoot,
+          encoding: 'utf8',
+        }).trim()
+      ).toBe(movedHead);
+    } finally {
+      release();
+      fake.prepareWorktreeGate = null;
+      await context.orchestrator.cancelTask(context.task.id);
+    }
   });
-  it('fails closed instead of truncating worker receipts when the combined result exceeds its limit',async()=>{
-    const largeReceipt={...receipt,result:'x'.repeat(11_700)};const {orchestrator,state,task}=await runRecruitedTeamToReview(largeReceipt,receipt);const team:any=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
-    expect(team?.combinedReceipt).toMatchObject({status:'incomplete',verification:expect.arrayContaining([expect.objectContaining({check:'The combined integration result preserves every complete original worker receipt',result:'failed'})])});expect(team?.combinedReceipt?.result).not.toContain('x'.repeat(1000));
-    await complete('orchestrator',{outcome:'accept',note:'Accept the result.',assignment:null,decision_required:null});await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');expect(state.getTask(task.id)?.error).toMatch(/did not prove successful, fully verified completion/i);await orchestrator.cancelTask(task.id);
+  it('pauses a disconnected QA audit and resumes against a fresh round without recruiting another team', async () => {
+    const { orchestrator, state, task } = await runRecruitedTeamToReview(receipt, receipt, true);
+    const before = state.getTask(task.id)?.passes?.[0];
+    const teamId = before?.recruitmentTeam?.teamId;
+    const workerCount = before?.recruitmentTeam?.workers.length;
+    fake.agentInstance.emit('disconnected', 'fixture runtime disconnect');
+    await waitFor(
+      () =>
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.status === 'paused' &&
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.status === 'interrupted'
+    );
+    expect(state.getTask(task.id)).toMatchObject({
+      phase: 'needs_attention',
+      activeRole: undefined,
+      activeTurnId: undefined,
+    });
+    expect(state.getTask(task.id)?.passes?.[0]?.qualityLoop?.resumeAction).toBe('audit');
+    await orchestrator.resumeQualityLoop(task.id);
+    await waitFor(
+      () =>
+        turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 2 &&
+        state.getTask(task.id)?.passes?.[0]?.qualityLoop?.rounds[1]?.status === 'auditing'
+    );
+    const resumed = state.getTask(task.id)?.passes?.[0];
+    expect(resumed?.recruitmentTeam?.teamId).toBe(teamId);
+    expect(resumed?.recruitmentTeam?.workers).toHaveLength(workerCount);
+    expect(resumed?.qualityLoop?.rounds.map((row: any) => row.index)).toEqual([1, 2]);
+    await orchestrator.cancelTask(task.id);
   });
-  it('rejects final acceptance when a recruited worker receipt is not fully verified',async()=>{
-    const invalidWorkerReceipt={...receipt,verification:[{check:'Focused behavior check',result:'not_run' as const,evidence:null}]};const {state,task}=await runRecruitedTeamToReview(invalidWorkerReceipt,receipt);const team:any=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(team?.workers[0]).toMatchObject({status:'failed',error:expect.stringContaining('did not prove successful')});expect(team?.integration.status).toBe('complete');expect(team?.combinedReceipt?.status).toBe('incomplete');expect(team?.status).toBe('needs_attention');
-    await complete('orchestrator',{outcome:'accept',note:'Accept this task.',assignment:null,decision_required:null});await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');expect(state.getTask(task.id)?.error).toMatch(/did not prove successful, fully verified completion/i);
+  it('resumes correction planning from findings saved at shutdown without repeating the audit or original recruitment', async () => {
+    let release!: () => void,
+      entered!: () => void,
+      intercepted = false;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      plannerPersist = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      stateMutationGate: {
+        match: (fn) => !intercepted && String(fn).includes('persisted'),
+        enter: () => {
+          intercepted = true;
+          entered();
+        },
+        wait: gate,
+      },
+    });
+    try {
+      await waitFor(
+        () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+      );
+      const before = context.state.getTask(context.task.id)!,
+        passId = before.currentPassId!,
+        originalTeamId = before.passes!.find((row: any) => row.id === passId).recruitmentTeam
+          .teamId;
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One saved finding requires correction.',
+        findings: [
+          {
+            title: 'Restart fixture finding',
+            severity: 'medium',
+            issue: 'The integration has a verified gap.',
+            required_fix: 'Plan one bounded correction from this saved finding.',
+            evidence: ['The audit completed and persisted this finding.'],
+            file: 'src/fixture.ts',
+            line: 4,
+          },
+        ],
+      });
+      await plannerPersist;
+      const interruptedAt = '2026-10-27T13:00:00.000Z';
+      await context.state.mutate((state: any) =>
+        modules.state.pauseActiveTasksForKernelShutdown(state, interruptedAt)
+      );
+      const paused = context.state.getTask(context.task.id)!,
+        savedPass = paused.passes!.find((row: any) => row.id === passId)!;
+      expect(paused.phase).toBe('paused_after_restart');
+      expect(savedPass.qualityLoop).toMatchObject({
+        status: 'paused_after_restart',
+        resumeAction: 'corrections',
+        rounds: [
+          {
+            status: 'awaiting_corrections',
+            findings: [expect.objectContaining({ title: 'Restart fixture finding' })],
+          },
+        ],
+      });
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const beforeResumeAuditCount = turns('orchestrator').filter(
+          (row) => row.model === 'gpt-6.1-terra'
+        ).length,
+        beforeResumeRecruitmentCount = fake.calls.filter(
+          (row) => row.kind === 'server-response' && String(row.id).startsWith('recruit-')
+        ).length;
+      await context.orchestrator.resumeQualityLoop(context.task.id);
+      await waitFor(() =>
+        turns('orchestrator').some((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      );
+      const resumed = context.state.getTask(context.task.id)!,
+        resumedPass = resumed.passes!.find((row: any) => row.id === passId)!;
+      expect(resumedPass.qualityLoop).toMatchObject({
+        status: 'awaiting_corrections',
+        resumeAction: undefined,
+        rounds: [
+          {
+            roundId: savedPass.qualityLoop.rounds[0].roundId,
+            status: 'awaiting_corrections',
+            findings: savedPass.qualityLoop.rounds[0].findings,
+          },
+        ],
+      });
+      expect(resumedPass.recruitmentTeam.teamId).toBe(originalTeamId);
+      expect(turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra')).toHaveLength(
+        beforeResumeAuditCount
+      );
+      expect(
+        fake.calls.filter(
+          (row) => row.kind === 'server-response' && String(row.id).startsWith('recruit-')
+        )
+      ).toHaveLength(beforeResumeRecruitmentCount);
+      expect(intercepted).toBe(true);
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
   });
-  it('rejects final acceptance when an integration receipt reports unmet criteria',async()=>{
-    const invalidIntegrationReceipt={...receipt,acceptance:{met:receipt.acceptance.met,unmet:['The complete team outcome was not proven.']}};const {state,task}=await runRecruitedTeamToReview(receipt,invalidIntegrationReceipt);const team:any=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(team?.workers[0]?.status).toBe('complete');expect(team?.integration.status).toBe('complete');expect(team?.combinedReceipt).toMatchObject({status:'incomplete',acceptance:{unmet:expect.arrayContaining(['The complete team outcome was not proven.','Every complete worker and integrator receipt has matching model-turn provenance.'])}});expect(team?.status).toBe('needs_attention');
-    await complete('orchestrator',{outcome:'accept',note:'Accept this task.',assignment:null,decision_required:null});await waitFor(()=>state.getTask(task.id)?.phase==='needs_attention');expect(state.getTask(task.id)?.error).toMatch(/did not prove successful, fully verified completion/i);
+  it('does not start a stale QA turn when pause wins during auditor thread setup', async () => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.startThread.bind(fake.agentInstance);
+        fake.agentInstance.startThread = async (
+          role: string,
+          root: string,
+          model: string,
+          ...args: any[]
+        ) => {
+          if (model === 'gpt-6.1-terra') {
+            entered();
+            await gate;
+          }
+          return original(role, root, model, ...args);
+        };
+      },
+    });
+    await started;
+    await context.orchestrator.pauseQualityLoop(context.task.id);
+    release();
+    await waitFor(
+      () =>
+        context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.threadId !==
+        undefined
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const saved = context.state.getTask(context.task.id)!;
+    expect(saved.passes?.[0]?.qualityLoop).toMatchObject({
+      status: 'paused',
+      rounds: [{ status: 'interrupted', threadId: expect.any(String) }],
+    });
+    expect(saved.passes?.[0]?.qualityLoop?.rounds[0]?.turnId).toBeUndefined();
+    expect(saved).toMatchObject({ activeRole: undefined, activeTurnId: undefined });
+    expect(turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra')).toHaveLength(0);
+    await context.orchestrator.cancelTask(context.task.id);
   });
-  it('observes native DSH tools without adding an app gateway and rejects tools absent from the native profile',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();fake.dshNativeTools=['mcp__native_profile__lookup'];const task=await orchestrator.submitTask('Audit the project with one isolated read-only worker.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'This audit needs an isolated worker.'});await waitForRole('orchestrator');await complete('orchestrator',assignment);const worker=await waitForRole('worker'),runtime=fake.dshSessions.get(worker.threadId);
-    runtime.toolCall('mcp__native_profile__lookup',{query:'bounded'},{found:true});runtime.toolCall('mcp__unexpected__read_secret',{path:'outside-selected-gateways'},{});
-    await complete('worker','The native profile lookup completed.');await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status==='failed');
-    const failed=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0],events=failed?.deepSeekPhaseRuns?.[0]?.providerEvents||[];expect(failed?.error).toContain('MCP call absent from its observed native profile catalog');expect(events.some((event:any)=>event.toolName==='mcp__native_profile__lookup')).toBe(true);expect(events.some((event:any)=>event.toolName==='mcp__unexpected__read_secret')).toBe(true);expect(JSON.stringify(events)).not.toContain('outside-selected-gateways');expect(turns('orchestrator')).toHaveLength(1);await orchestrator.cancelTask(task.id);
+  it('interrupts a QA turn when its start notification arrives before the paused request returns', async () => {
+    let release!: () => void,
+      entered!: () => void,
+      startedTurnId = '';
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.reviewTurn.bind(fake.agentInstance);
+        fake.agentInstance.reviewTurn = async (...args: any[]) => {
+          const response = await original(...args);
+          if (args[2] === 'gpt-6.1-terra') {
+            startedTurnId = response.turn.id;
+            fake.agentInstance.emit('notification', 'turn/started', {
+              threadId: args[0],
+              turn: { id: startedTurnId },
+            });
+            entered();
+            await gate;
+          }
+          return response;
+        };
+      },
+    });
+    await started;
+    await waitFor(
+      () =>
+        context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.turnId ===
+        startedTurnId
+    );
+    await context.orchestrator.pauseQualityLoop(context.task.id);
+    await waitFor(() =>
+      fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === startedTurnId)
+    );
+    const paused = context.state.getTask(context.task.id)!;
+    expect(paused.phase).toBe('reviewing');
+    expect(paused.passes?.[0]?.qualityLoop).toMatchObject({
+      status: 'paused',
+      rounds: [{ status: 'interrupted', turnId: startedTurnId }],
+    });
+    expect(paused.activeTurnId).toBeUndefined();
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status).toBe('paused');
+    await context.orchestrator.cancelTask(context.task.id);
   });
-  it('waits for owned DeepSeek stage completions after cancellation before shutdown cleanup',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Audit the project with one isolated read-only worker.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'This audit needs an isolated worker.'});await waitForRole('orchestrator');await complete('orchestrator',assignment);const worker=await waitForRole('worker');
-    let releaseWait!:()=>void;fake.dshWaitBarrier=new Promise<void>(resolve=>{releaseWait=resolve;});
-    const cancellation=orchestrator.cancelTask(task.id);let cancellationFinished=false;void cancellation.then(()=>{cancellationFinished=true;});await waitFor(()=>state.getTask(task.id)?.phase==='cancelled');await new Promise(resolve=>setImmediate(resolve));expect(cancellationFinished).toBe(false);
-    releaseWait();await cancellation;expect(cancellationFinished).toBe(true);expect(state.getTask(task.id)?.phase).toBe('cancelled');expect(fake.calls).toContainEqual(expect.objectContaining({kind:'dsh-cancel',sessionId:worker.threadId}));
+  it('interrupts a QA turn when its start notification arrives before the cancelled request returns', async () => {
+    let release!: () => void,
+      entered!: () => void,
+      startedTurnId = '';
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.reviewTurn.bind(fake.agentInstance);
+        fake.agentInstance.reviewTurn = async (...args: any[]) => {
+          if (args[2] === 'gpt-6.1-terra') {
+            entered();
+            await gate;
+          }
+          const response = await original(...args);
+          if (args[2] === 'gpt-6.1-terra') {
+            startedTurnId = response.turn.id;
+            fake.agentInstance.emit('notification', 'turn/started', {
+              threadId: args[0],
+              turn: { id: startedTurnId },
+            });
+          }
+          return response;
+        };
+      },
+    });
+    await started;
+    const cancelling = context.orchestrator.cancelTask(context.task.id);
+    await waitFor(() => context.state.getTask(context.task.id)?.phase === 'cancelled');
+    release();
+    await waitFor(() =>
+      fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === startedTurnId)
+    );
+    await cancelling;
+    const saved = context.state.getTask(context.task.id)!;
+    expect(saved.phase).toBe('cancelled');
+    expect(saved.passes?.[0]?.qualityLoop).toMatchObject({
+      status: 'cancelled',
+      rounds: [{ status: 'interrupted', threadId: expect.any(String), turnId: startedTurnId }],
+    });
+    expect(saved.activeTurnId).toBeUndefined();
+    expect(
+      fake.calls.filter((row) => row.kind === 'interrupt' && row.turnId === startedTurnId)
+    ).toHaveLength(1);
   });
-  it('starts two workers concurrently in distinct worktrees and reuses the sealed roster on duplicate calls',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Implement two independent project changes.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request has two independent implementation areas.'});await waitForRole('orchestrator');
-    const plans=[workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]}),workerPlan({...assignment,write_scope:[path.join(projectRoot,'tests')]})].map((row,index)=>({...row,name:`Worker ${index+1}`}));await recruit(plans);
-    const team:any=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(team?.workers).toHaveLength(2);expect(new Set(team?.workers.map((row:any)=>row.branch)).size).toBe(2);expect(new Set(team?.workers.map((row:any)=>row.worktreeRoot)).size).toBe(2);expect(new Set(team?.workers.map((row:any)=>row.threadId)).size).toBe(2);expect(team?.workers.map((row:any)=>({status:row.status,active:!!row.activeTurnId,error:row.error}))).toEqual([{status:'running',active:true,error:undefined},{status:'running',active:true,error:undefined}]);expect(team?.integration.status).toBe('queued');expect(turns('orchestrator')).toHaveLength(1);
-    const turn=lastTurn('orchestrator');fake.agentInstance.emit('serverRequest','duplicate-recruitment','item/tool/call',{threadId:turn.threadId,turnId:turn.turnId,namespace:'pseudoharness',tool:'recruit_workers',arguments:{workers:plans}});await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id==='duplicate-recruitment'));expect(fake.calls.find(row=>row.kind==='server-response'&&row.id==='duplicate-recruitment')?.result?.success).toBe(true);expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers).toHaveLength(2);expect(fake.calls.filter(row=>row.kind==='turn'&&row.server==='deepseek')).toHaveLength(2);await orchestrator.cancelTask(task.id);const cancelled=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(cancelled?.workers.map((row:any)=>row.deepSeekPhaseRuns?.[0]?.status)).toEqual(['interrupted','interrupted']);expect(fake.calls.filter(row=>row.kind==='dsh-cancel')).toHaveLength(2);
+  it('interrupts an audit response returned before pause and ignores its late notification after a fresh round starts', async () => {
+    let release!: () => void,
+      entered!: () => void,
+      firstTurnId = '';
+    let terraStarts = 0;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.reviewTurn.bind(fake.agentInstance);
+        fake.agentInstance.reviewTurn = async (...args: any[]) => {
+          const response = await original(...args);
+          if (args[2] !== 'gpt-6.1-terra') return response;
+          if (++terraStarts === 1) {
+            firstTurnId = response.turn.id;
+            entered();
+            await gate;
+          } else
+            fake.agentInstance.emit('notification', 'turn/started', {
+              threadId: args[0],
+              turn: { id: response.turn.id },
+            });
+          return response;
+        };
+      },
+    });
+    try {
+      await started;
+      await context.orchestrator.pauseQualityLoop(context.task.id);
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === firstTurnId)
+      );
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[0]?.turnId ===
+          firstTurnId
+      );
+      fake.agentInstance.emit('notification', 'turn/started', {
+        threadId: context.state.getTask(context.task.id)!.passes![0].qualityLoop!.rounds[0]
+          .threadId,
+        turn: { id: firstTurnId },
+      });
+      await context.state.mutate(() => {});
+      await context.orchestrator.resumeQualityLoop(context.task.id);
+      await waitFor(
+        () =>
+          terraStarts === 2 &&
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds[1]?.status ===
+            'auditing' &&
+          context.state.getTask(context.task.id)?.activeTurnId !== undefined
+      );
+      const resumed = context.state.getTask(context.task.id)!,
+        newTurnId = resumed.activeTurnId!;
+      expect(newTurnId).not.toBe(firstTurnId);
+      expect(resumed.passes?.[0]?.qualityLoop?.status).toBe('auditing');
+      fake.agentInstance.emit('notification', 'turn/started', {
+        threadId: resumed.passes![0].qualityLoop!.rounds[0].threadId,
+        turn: { id: firstTurnId },
+      });
+      await context.state.mutate(() => {});
+      expect(context.state.getTask(context.task.id)?.activeTurnId).toBe(newTurnId);
+      expect(
+        fake.calls.filter((row) => row.kind === 'interrupt' && row.turnId === firstTurnId)
+      ).toHaveLength(1);
+      expect(fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === newTurnId)).toBe(
+        false
+      );
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
   });
-  it('blocks a dependent and integrates when a native DSH session fails to connect',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Implement two ordered steps with a setup-failure-safe integration.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request has dependent implementation steps.'});await waitForRole('orchestrator');
-    const plans=[{...workerPlan(),name:'Prerequisite',step:'Complete the required first step.'},{...workerPlan(),name:'Dependent',step:'Continue only after the prerequisite succeeds.',depends_on:['Prerequisite']}];fake.dshConnectHook=async(runtime:any)=>{const worker=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers.find((row:any)=>path.resolve(row.worktreeRoot)===path.resolve(runtime.cwd));if(worker?.name==='Prerequisite')throw new Error('Fixture native DSH startup failure.');};await expect(recruit(plans)).rejects.toThrow('Fixture native DSH startup failure.');
-    await waitFor(()=>{const team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;return team?.workers[0]?.status==='failed'&&team.workers[1]?.status==='blocked'&&team.integration.status==='running';});
-    let team:any=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;await waitFor(()=>turns('worker').length===1);team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(team.workers.map((row:any)=>row.status)).toEqual(['failed','blocked']);expect(team.integration.threadId).toBeTruthy();expect(turns('worker')[0].threadId).toBe(team.integration.threadId);expect(fake.calls.some(row=>row.kind==='turn'&&row.threadId===team.workers[0].threadId)).toBe(false);
-    await complete('worker','Integration completed for the available contributions.');
-    await waitFor(()=>turns('orchestrator').length===2&&state.getTask(task.id)?.phase==='reviewing');team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(team.integration.status).toBe('complete');expect(team.combinedReceipt.status).toBe('incomplete');expect(team.workerReceiptBundle.map((row:any)=>({status:row.status,receiptStatus:row.receipt.status,producer:row.producer}))).toEqual([{status:'failed',receiptStatus:'failed',producer:null},{status:'blocked',receiptStatus:'failed',producer:null}]);await orchestrator.cancelTask(task.id);
+  it('interrupts an audit response returned before cancellation and deduplicates its late notification', async () => {
+    let release!: () => void,
+      entered!: () => void,
+      turnId = '';
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.reviewTurn.bind(fake.agentInstance);
+        fake.agentInstance.reviewTurn = async (...args: any[]) => {
+          const response = await original(...args);
+          if (args[2] === 'gpt-6.1-terra') {
+            turnId = response.turn.id;
+            entered();
+            await gate;
+          }
+          return response;
+        };
+      },
+    });
+    try {
+      await started;
+      const cancelling = context.orchestrator.cancelTask(context.task.id);
+      await waitFor(() => context.state.getTask(context.task.id)?.phase === 'cancelled');
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === turnId)
+      );
+      await cancelling;
+      const auditThread = context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop
+        ?.rounds[0]?.threadId;
+      fake.agentInstance.emit('notification', 'turn/started', {
+        threadId: auditThread,
+        turn: { id: turnId },
+      });
+      await context.state.mutate(() => {});
+      expect(context.state.getTask(context.task.id)).toMatchObject({
+        phase: 'cancelled',
+        passes: [
+          { qualityLoop: { status: 'cancelled', rounds: [{ status: 'interrupted', turnId }] } },
+        ],
+      });
+      expect(
+        fake.calls.filter((row) => row.kind === 'interrupt' && row.turnId === turnId)
+      ).toHaveLength(1);
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
   });
-  it('propagates asynchronous provider startup failures after the scheduler claim releases',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Start independent workers once and unblock integration after a provider startup failure.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request has independent and dependent implementation steps.'});await waitForRole('orchestrator');
-    const plans=[{...workerPlan(),name:'Prerequisite',step:'Complete the prerequisite.'},{...workerPlan(),name:'Dependent',step:'Continue only after the prerequisite succeeds.',depends_on:['Prerequisite']},{...workerPlan(),name:'Chained dependent',step:'Continue only after the dependent succeeds.',depends_on:['Dependent']},{...workerPlan(),name:'Independent',step:'Complete an independent step.'}];let releaseIndependent!:()=>void;const holdIndependent=new Promise<void>(resolve=>{releaseIndependent=resolve;});
-    fake.dshConnectHook=async(runtime:any)=>{const team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam,worker=team?.workers.find((row:any)=>path.resolve(row.worktreeRoot)===path.resolve(runtime.cwd));if(worker?.name==='Prerequisite')throw new Error('Fixture asynchronous DSH connect failure.');if(worker?.name==='Independent'){await holdIndependent;throw new Error('Fixture gated DSH connect failure.');}};
-    try{
-      const turn=lastTurn('orchestrator'),owner=fake.threadOwners.get(turn.threadId)||fake.agentInstance,id=`async-recruit-${fake.turnCount}`;owner.emit('serverRequest',id,'item/tool/call',{threadId:turn.threadId,turnId:turn.turnId,namespace:'opnex',tool:'recruit_workers',arguments:{workers:plans}});await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===id));expect(fake.calls.find(row=>row.kind==='server-response'&&row.id===id)?.result?.success).toBe(true);owner.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'agentMessage',text:'The complete team is sealed; I will wait for its result.'}]}});
-      await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.sealed);let team:any=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;await waitFor(()=>fake.calls.filter(row=>row.kind==='dsh-connect').length===2);await waitFor(()=>{const current=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;return current?.workers.find((row:any)=>row.name==='Prerequisite')?.status==='failed'&&current.workers.find((row:any)=>row.name==='Dependent')?.status==='blocked'&&current.workers.find((row:any)=>row.name==='Chained dependent')?.status==='blocked';});
-      team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;expect(team.workers.find((row:any)=>row.name==='Dependent')?.status).toBe('blocked');expect(team.workers.find((row:any)=>row.name==='Chained dependent')?.status).toBe('blocked');expect(team.integration.status).toBe('queued');expect(fake.calls.filter(row=>row.kind==='turn'&&row.server==='deepseek')).toHaveLength(0);
+  it('aborts correction planning if a follow-up replaces its pass while the planner state write is pending', async () => {
+    let release!: () => void, entered!: () => void;
+    let intercepted = false;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      stateMutationGate: {
+        match: (fn) => !intercepted && String(fn).includes('persisted'),
+        enter: () => {
+          intercepted = true;
+          entered();
+        },
+        wait: gate,
+      },
+    });
+    try {
+      await waitFor(
+        () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+      );
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One evidence-backed issue remains.',
+        findings: [
+          {
+            title: 'Fixture finding',
+            severity: 'medium',
+            issue: 'The behavior is not preserved.',
+            required_fix: 'Correct the behavior and add a regression.',
+            evidence: ['Observed during the focused audit.'],
+            file: 'src/example.ts',
+            line: 2,
+          },
+        ],
+      });
+      await started;
+      const passId = context.state.getTask(context.task.id)!.currentPassId!;
+      const followupPromise = context.orchestrator.submitTask(
+        'Fresh follow-up: answer this separately.',
+        context.task.id
+      );
+      await waitFor(() => context.state.getTask(context.task.id)?.currentPassId !== passId);
+      const freshPass = context.state.getTask(context.task.id)!.currentPassId!;
+      expect(
+        context.state.getTask(context.task.id)?.passes?.find((row: any) => row.id === freshPass)
+          ?.userInputs
+      ).toContain('Fresh follow-up: answer this separately.');
+      release();
+      await followupPromise;
+      await waitFor(() => turns('router').length === 2);
+      await complete('router', {
+        route: 'direct_answer',
+        rule_id: 'direct_explanation_or_transform',
+        justification: 'The follow-up asks for a separate direct answer.',
+      });
+      await waitForRole('direct');
+      await complete('direct', { answer: 'Follow-up handled independently.' });
+      await waitFor(() => context.state.getTask(context.task.id)?.phase === 'needs_attention');
+      expect(context.state.getTask(context.task.id)?.currentPassId).toBe(freshPass);
+      expect(
+        turns('orchestrator').some((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toBe(false);
+      expect(intercepted).toBe(true);
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('keeps a user pause that lands while the audit-result state write completes', async () => {
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+    });
+    await waitFor(
+      () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+    );
+    let pausePromise: Promise<unknown> | undefined,
+      paused = false;
+    const unsubscribe = context.state.subscribe((snapshot: any) => {
+      const task = snapshot.tasks.find((row: any) => row.id === context.task.id),
+        loop = task?.passes?.find((row: any) => row.id === task.currentPassId)?.qualityLoop;
+      if (
+        !paused &&
+        loop?.status === 'awaiting_corrections' &&
+        loop.rounds.at(-1)?.status === 'awaiting_corrections'
+      ) {
+        paused = true;
+        pausePromise = context.orchestrator.pauseQualityLoop(context.task.id);
+      }
+    });
+    try {
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One evidence-backed issue remains.',
+        findings: [
+          {
+            title: 'Pause race finding',
+            severity: 'medium',
+            issue: 'The behavior is not preserved.',
+            required_fix: 'Correct the behavior and add a regression.',
+            evidence: ['Observed during the focused audit.'],
+            file: 'src/example.ts',
+            line: 2,
+          },
+        ],
+      });
+      await waitFor(
+        () =>
+          paused &&
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status === 'paused'
+      );
+      await pausePromise;
+      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({
+        status: 'paused',
+        resumeAction: 'corrections',
+      });
+      expect(
+        turns('orchestrator').some((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toBe(false);
+      await context.orchestrator.resumeQualityLoop(context.task.id);
+      await waitFor(() =>
+        turns('orchestrator').some((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      );
+      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status).toBe(
+        'awaiting_corrections'
+      );
+    } finally {
+      unsubscribe();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('preserves and resumes saved QA corrections once after disconnect during authentication preflight', async () => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+    });
+    await waitFor(() => turns('orchestrator').some((row) => row.model === 'gpt-6.1-terra'));
+    fake.agentInstance.emit('connected');
+    const originalExport = fake.instance.exportChatGPTAuthTokens.bind(fake.instance);
+    fake.instance.exportChatGPTAuthTokens = async () => {
+      entered();
+      await gate;
+      return originalExport();
+    };
+    const auditCount = turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length,
+      recruitmentCount = fake.calls.filter(
+        (row) => row.kind === 'server-response' && String(row.id).startsWith('recruit-')
+      ).length;
+    try {
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One evidence-backed issue remains.',
+        findings: [
+          {
+            title: 'Disconnect auth finding',
+            severity: 'medium',
+            issue: 'The behavior is not preserved.',
+            required_fix: 'Correct the behavior and add a regression.',
+            evidence: ['Observed during the focused QA audit.'],
+            file: 'src/example.ts',
+            line: 2,
+          },
+        ],
+      });
+      await started;
+      fake.agentInstance.emit(
+        'disconnected',
+        'fixture disconnect during correction authentication preflight'
+      );
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status === 'paused' &&
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.resumeAction ===
+            'corrections'
+      );
+      const saved = context.state.getTask(context.task.id)!.passes![0].qualityLoop!.rounds.at(-1)!;
+      const retry = context.orchestrator.resumeQualityLoop(context.task.id);
+      release();
+      await retry;
+      await waitFor(
+        () =>
+          turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+            .length === 1
+      );
+      const resumed = context.state.getTask(context.task.id)!.passes![0].qualityLoop!;
+      expect(resumed).toMatchObject({
+        status: 'awaiting_corrections',
+        rounds: [
+          { roundId: saved.roundId, status: 'awaiting_corrections', findings: saved.findings },
+        ],
+      });
+      expect(turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra')).toHaveLength(
+        auditCount
+      );
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(1);
+      expect(
+        fake.calls.filter(
+          (row) => row.kind === 'server-response' && String(row.id).startsWith('recruit-')
+        )
+      ).toHaveLength(recruitmentCount);
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('does not make a correction planner retryable after disconnect once turn start may have been sent', async () => {
+    let release!: () => void,
+      entered!: () => void,
+      plannerTurnId = '';
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.startTurn.bind(fake.agentInstance);
+        fake.agentInstance.startTurn = async (...args: any[]) => {
+          const response = await original(...args);
+          if (String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')) {
+            plannerTurnId = response.turn.id;
+            entered();
+            await gate;
+          }
+          return response;
+        };
+      },
+    });
+    await waitFor(
+      () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+    );
+    try {
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One evidence-backed issue remains.',
+        findings: [
+          {
+            title: 'Dispatched planner finding',
+            severity: 'medium',
+            issue: 'The behavior is not preserved.',
+            required_fix: 'Correct the behavior and add a regression.',
+            evidence: ['Observed during the focused QA audit.'],
+            file: 'src/example.ts',
+            line: 2,
+          },
+        ],
+      });
+      await started;
+      fake.agentInstance.emit('disconnected', 'fixture disconnect after correction turn start');
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status ===
+          'needs_attention'
+      );
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === plannerTurnId)
+      );
+      const saved = context.state.getTask(context.task.id)!.passes![0].qualityLoop!;
+      expect(saved).toMatchObject({
+        status: 'needs_attention',
+        resumeAction: 'corrections',
+        correctionPlanner: { status: 'active', turnId: plannerTurnId },
+        rounds: [
+          {
+            status: 'awaiting_corrections',
+            findings: [expect.objectContaining({ title: 'Dispatched planner finding' })],
+          },
+        ],
+      });
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(1);
+      await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow(
+        'may still be running'
+      );
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('keeps an ambiguous correction dispatch blocked through pause, disconnect, and a lost turn/start response', async () => {
+    let release!: (error?: Error) => void, entered!: () => void;
+    const gate = new Promise<void>((resolve, reject) => {
+        release = (error?: Error) => (error ? reject(error) : resolve());
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.startTurn.bind(fake.agentInstance);
+        fake.agentInstance.startTurn = async (...args: any[]) => {
+          const response = await original(...args);
+          if (String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')) {
+            entered();
+            await gate;
+          }
+          return response;
+        };
+      },
+    });
+    await waitFor(
+      () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+    );
+    try {
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One evidence-backed issue remains.',
+        findings: [
+          {
+            title: 'Lost planner response',
+            severity: 'medium',
+            issue: 'The correction request outcome is unknown.',
+            required_fix: 'Do not send another plan until the first is confirmed stopped.',
+            evidence: ['The runtime accepted the turn before its response was lost.'],
+          },
+        ],
+      });
+      await started;
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner
+            ?.status === 'dispatch_unknown'
+      );
+      await context.orchestrator.pauseQualityLoop(context.task.id);
+      fake.agentInstance.emit('disconnected', 'fixture disconnect after accepted correction turn');
+      await waitFor(() => context.state.getTask(context.task.id)?.phase === 'needs_attention');
+      const paused = context.state.getTask(context.task.id)!.passes![0].qualityLoop!;
+      expect(paused).toMatchObject({
+        status: 'paused',
+        resumeAction: 'corrections',
+        correctionPlanner: {
+          roundId: paused.rounds.at(-1)!.roundId,
+          status: 'dispatch_unknown',
+          threadId: expect.any(String),
+        },
+      });
+      await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow(
+        'may still be running'
+      );
+      const staleAuditTurnId = paused.rounds.at(-1)!.turnId!,
+        plannerThreadId = paused.correctionPlanner!.threadId!;
+      fake.agentInstance.emit('notification', 'turn/started', {
+        threadId: plannerThreadId,
+        turn: { id: staleAuditTurnId },
+      });
+      fake.agentInstance.emit('notification', 'turn/completed', {
+        threadId: plannerThreadId,
+        turn: { id: staleAuditTurnId, status: 'completed', items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const stillAmbiguous = context.state.getTask(context.task.id)!.passes![0].qualityLoop
+        ?.correctionPlanner;
+      expect(stillAmbiguous).toMatchObject({
+        status: 'dispatch_unknown',
+        threadId: plannerThreadId,
+      });
+      expect(stillAmbiguous?.turnId).toBeUndefined();
+      await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow(
+        'may still be running'
+      );
+      release(new Error('fixture lost the turn/start response after server acceptance'));
+      await waitFor(
+        () => context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status === 'paused'
+      );
+      const saved = context.state.getTask(context.task.id)!.passes![0].qualityLoop!;
+      expect(saved.correctionPlanner).toMatchObject({
+        status: 'dispatch_unknown',
+        roundId: saved.rounds.at(-1)!.roundId,
+      });
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(1);
+      await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow(
+        'may still be running'
+      );
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('does not accept QA findings while a correction planner dispatch is unresolved', async () => {
+    let release!: (error?: Error) => void, entered!: () => void;
+    const gate = new Promise<void>((resolve, reject) => {
+        release = (error?: Error) => (error ? reject(error) : resolve());
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.startTurn.bind(fake.agentInstance);
+        fake.agentInstance.startTurn = async (...args: any[]) => {
+          const response = await original(...args);
+          if (String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')) {
+            entered();
+            await gate;
+          }
+          return response;
+        };
+      },
+    });
+    await waitFor(
+      () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+    );
+    try {
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One finding remains while planner outcome is unknown.',
+        findings: [
+          {
+            title: 'Unresolved planner finding',
+            severity: 'medium',
+            issue: 'The correction planner has not returned.',
+            required_fix: 'Wait for an authoritative planner outcome before acceptance.',
+            evidence: ['The planner request was accepted but its response is pending.'],
+          },
+        ],
+      });
+      await started;
+      fake.agentInstance.emit(
+        'disconnected',
+        'fixture disconnect during correction planner dispatch'
+      );
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status ===
+            'needs_attention' &&
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner
+            ?.status === 'dispatch_unknown'
+      );
+      await expect(context.orchestrator.acceptQualityFindings(context.task.id)).rejects.toThrow(
+        'Wait for its confirmed outcome'
+      );
+      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({
+        status: 'needs_attention',
+        resumeAction: 'corrections',
+        correctionPlanner: { status: 'dispatch_unknown' },
+      });
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(1);
+      release(new Error('fixture lost the correction turn/start response'));
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status ===
+          'needs_attention'
+      );
+      await expect(context.orchestrator.resumeQualityLoop(context.task.id)).rejects.toThrow(
+        'may still be running'
+      );
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it.each(['completed', 'interrupted'] as const)(
+    'accepts saved findings after a confirmed %s planner outcome and starts independent review',
+    async (status) => {
+      const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+        until: 'audit-starting',
+      });
+      await waitFor(() => {
+        const audit = turns('orchestrator').find((row) => row.model === 'gpt-6.1-terra');
+        return !!audit && context.state.getTask(context.task.id)?.activeTurnId === audit.turnId;
+      });
+      try {
+        await complete('orchestrator', {
+          type: 'qa_audit',
+          status: 'issues_found',
+          summary: 'One finding remains after the independent audit.',
+          findings: [
+            {
+              title: `${status} planner finding`,
+              severity: 'medium',
+              issue: 'The integrated behavior needs a correction.',
+              required_fix: 'Correct the behavior in the saved findings.',
+              evidence: ['The QA result is persisted before the planner starts.'],
+            },
+          ],
+        });
+        await waitFor(() =>
+          turns('orchestrator').some((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+        );
+        const planner = lastTurn('orchestrator');
+        await waitFor(
+          () =>
+            context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner
+              ?.status === 'active' &&
+            context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner
+              ?.turnId === planner.turnId
+        );
+        fake.agentInstance.emit('notification', 'turn/started', {
+          threadId: planner.threadId,
+          turn: { id: planner.turnId },
+        });
+        fake.agentInstance.emit('notification', 'turn/completed', {
+          threadId: planner.threadId,
+          turn: { id: planner.turnId, status, items: [] },
+        });
+        await waitFor(() => {
+          const task = context.state.getTask(context.task.id),
+            loop = task?.passes?.[0]?.qualityLoop;
+          return (
+            loop?.correctionPlanner?.status === status &&
+            loop.status === 'paused' &&
+            task?.activeTurnId === undefined
+          );
+        });
+        const saved = context.state.getTask(context.task.id)!.passes![0].qualityLoop!,
+          reviewCount = fake.calls.filter((row) => row.kind === 'review-turn').length;
+        expect(saved.rounds.at(-1)?.findings).toHaveLength(1);
+        await context.orchestrator.acceptQualityFindings(
+          context.task.id,
+          'I accept this unresolved QA finding.'
+        );
+        await waitFor(() => {
+          const review = lastTurn('orchestrator');
+          return (
+            fake.calls.filter((row) => row.kind === 'review-turn').length === reviewCount + 1 &&
+            review.model === 'gpt-6.1-sol' &&
+            context.state.getTask(context.task.id)?.activeTurnId === review.turnId
+          );
+        });
+        expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({
+          status: 'user_accepted',
+          userAcceptanceNote: 'I accept this unresolved QA finding.',
+          correctionPlanner: { status },
+        });
+        expect(fake.calls.filter((row) => row.kind === 'review-turn')).toHaveLength(
+          reviewCount + 1
+        );
+        expect(fake.calls.filter((row) => row.kind === 'review-turn').at(-1)).toMatchObject({
+          model: 'gpt-6.1-sol',
+          qaRole: 'orchestrator',
+        });
+        expect(turns('worker').length).toBeGreaterThan(0);
+      } finally {
+        await context.orchestrator.cancelTask(context.task.id);
+      }
+    }
+  );
+  it('accepts findings after correction setup is confirmed to fail before turn dispatch', async () => {
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+    });
+    await waitFor(() => turns('orchestrator').some((row) => row.model === 'gpt-6.1-terra'));
+    try {
+      fake.mcpStatusFailureCount = 1;
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One actionable finding remains.',
+        findings: [
+          {
+            title: 'Correction preflight failure',
+            severity: 'medium',
+            issue: 'The integrated change lacks one required behavior.',
+            required_fix: 'Apply the saved correction once the setup failure is resolved.',
+            evidence: ['The independent QA round saved this finding before planner startup.'],
+          },
+        ],
+      });
+      await waitFor(() => {
+        const loop = context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop;
+        return loop?.status === 'paused' && !loop.correctionPlanner;
+      });
+      const saved = context.state.getTask(context.task.id)!.passes![0].qualityLoop!,
+        round = saved.rounds.at(-1)!;
+      expect(saved).toMatchObject({
+        resumeAction: 'corrections',
+        correctionPlannerNotDispatchedRoundId: round.roundId,
+        rounds: [
+          {
+            status: 'awaiting_corrections',
+            findings: [expect.objectContaining({ title: 'Correction preflight failure' })],
+          },
+        ],
+      });
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(0);
+      const before = fake.calls.filter((row) => row.kind === 'review-turn').length;
+      await context.orchestrator.acceptQualityFindings(
+        context.task.id,
+        'Accept the recorded finding after the known setup failure.'
+      );
+      await waitFor(
+        () =>
+          fake.calls.filter((row) => row.kind === 'review-turn').length === before + 1 &&
+          lastTurn('orchestrator').model === 'gpt-6.1-sol' &&
+          context.state.getTask(context.task.id)?.activeTurnId === lastTurn('orchestrator').turnId
+      );
+      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({
+        status: 'user_accepted',
+        userAcceptanceNote: 'Accept the recorded finding after the known setup failure.',
+        correctionPlannerNotDispatchedRoundId: round.roundId,
+      });
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(0);
+    } finally {
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('accepts actionable findings from a stopped round-limit audit and starts independent review', async () => {
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+    });
+    await waitFor(
+      () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+    );
+    await context.state.mutate((state: any) => {
+      const task = state.tasks.find((row: any) => row.id === context.task.id);
+      task.passes[0].qualityLoop.maxRounds = 1;
+    });
+    try {
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'The one-round QA limit left one actionable finding.',
+        findings: [
+          {
+            title: 'Round-limit finding',
+            severity: 'medium',
+            issue: 'The integrated behavior does not meet the stated acceptance criterion.',
+            required_fix: 'The user may accept this saved result or start a deliberate follow-up.',
+            evidence: ['The app stopped the loop after its configured round limit.'],
+          },
+        ],
+      });
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status ===
+            'needs_attention' &&
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1)
+            ?.status === 'completed' &&
+          fake.calls.filter((row) => row.kind === 'review-turn').length >= 2
+      );
+      const saved = context.state.getTask(context.task.id)!.passes![0].qualityLoop!,
+        round = saved.rounds.at(-1)!;
+      expect(saved).toMatchObject({
+        status: 'needs_attention',
+        correctionPlannerNotDispatchedRoundId: round.roundId,
+        rounds: [
+          {
+            resultStatus: 'issues_found',
+            findings: [expect.objectContaining({ title: 'Round-limit finding' })],
+          },
+        ],
+      });
+      const reviewCount = fake.calls.filter((row) => row.kind === 'review-turn').length;
+      await context.orchestrator.acceptQualityFindings(
+        context.task.id,
+        'Accept this round-limit finding.'
+      );
+      await waitFor(
+        () =>
+          fake.calls.filter((row) => row.kind === 'review-turn').length === reviewCount + 1 &&
+          lastTurn('orchestrator').model === 'gpt-6.1-sol' &&
+          context.state.getTask(context.task.id)?.activeTurnId === lastTurn('orchestrator').turnId
+      );
+      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({
+        status: 'user_accepted',
+        userAcceptanceNote: 'Accept this round-limit finding.',
+      });
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(0);
+    } finally {
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('makes a correction plan retryable only after the known planner turn reports interruption', async () => {
+    let release!: () => void,
+      entered!: () => void,
+      plannerTurnId = '';
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.startTurn.bind(fake.agentInstance);
+        fake.agentInstance.startTurn = async (...args: any[]) => {
+          const response = await original(...args);
+          if (String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX') && !plannerTurnId) {
+            plannerTurnId = response.turn.id;
+            fake.agentInstance.emit('notification', 'turn/started', {
+              threadId: args[0],
+              turn: { id: plannerTurnId },
+            });
+            entered();
+            await gate;
+          }
+          return response;
+        };
+      },
+    });
+    await waitFor(
+      () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+    );
+    try {
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One evidence-backed issue remains.',
+        findings: [
+          {
+            title: 'Interrupted planner',
+            severity: 'medium',
+            issue: 'The correction request was interrupted safely.',
+            required_fix: 'Resume only after the runtime confirms interruption.',
+            evidence: ['A matching started turn ID was saved.'],
+          },
+        ],
+      });
+      await started;
+      await waitFor(() => context.state.getTask(context.task.id)?.activeTurnId === plannerTurnId);
+      await context.orchestrator.pauseQualityLoop(context.task.id);
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === plannerTurnId)
+      );
+      const threadId = fake.calls.find(
+        (row) => row.kind === 'turn' && row.turnId === plannerTurnId
+      )?.threadId;
+      fake.agentInstance.emit('notification', 'turn/completed', {
+        threadId,
+        turn: { id: plannerTurnId, status: 'interrupted', items: [] },
+      });
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.correctionPlanner
+            ?.status === 'interrupted'
+      );
+      const terminal = context.state.getTask(context.task.id)!.passes![0].qualityLoop!;
+      expect(terminal).toMatchObject({
+        status: 'paused',
+        resumeAction: 'corrections',
+        correctionPlanner: { status: 'interrupted', threadId, turnId: plannerTurnId },
+      });
+      const retry = context.orchestrator.resumeQualityLoop(context.task.id);
+      release();
+      await retry;
+      await waitFor(
+        () =>
+          turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+            .length === 2
+      );
+      expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status).toBe(
+        'awaiting_corrections'
+      );
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('preserves cancellation across a late correction-turn response and interrupts the exact late turn', async () => {
+    let release!: () => void,
+      entered!: () => void,
+      plannerTurnId = '';
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+      beforeStart: () => {
+        const original = fake.agentInstance.startTurn.bind(fake.agentInstance);
+        fake.agentInstance.startTurn = async (...args: any[]) => {
+          const response = await original(...args);
+          if (String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')) {
+            plannerTurnId = response.turn.id;
+            entered();
+            await gate;
+          }
+          return response;
+        };
+      },
+    });
+    await waitFor(
+      () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+    );
+    try {
+      await complete('orchestrator', {
+        type: 'qa_audit',
+        status: 'issues_found',
+        summary: 'One evidence-backed issue remains.',
+        findings: [
+          {
+            title: 'Cancelled planner',
+            severity: 'medium',
+            issue: 'The sent correction planner has not returned.',
+            required_fix: 'Do not restart it after cancellation.',
+            evidence: ['Cancellation happened while the turn/start response was pending.'],
+          },
+        ],
+      });
+      await started;
+      await context.orchestrator.cancelTask(context.task.id);
+      release();
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === plannerTurnId)
+      );
+      const saved = context.state.getTask(context.task.id)!.passes![0].qualityLoop!;
+      expect(context.state.getTask(context.task.id)?.phase).toBe('cancelled');
+      expect(saved).toMatchObject({
+        status: 'cancelled',
+        correctionPlanner: { status: 'active', turnId: plannerTurnId },
+      });
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(1);
+    } finally {
+      release();
+      if (context.state.getTask(context.task.id)?.phase !== 'cancelled')
+        await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('preserves and resumes saved QA corrections once after disconnect during thread setup', async () => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+    });
+    await waitFor(() => turns('orchestrator').some((row) => row.model === 'gpt-6.1-terra'));
+    const saved = await saveAndPauseQaFinding(context, 'Disconnect thread finding'),
+      auditCount = turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length,
+      recruitmentCount = fake.calls.filter(
+        (row) => row.kind === 'server-response' && String(row.id).startsWith('recruit-')
+      ).length;
+    fake.agentInstance.emit('disconnected', 'detach the task thread before QA correction resume');
+    await waitFor(() => context.state.getTask(context.task.id)?.phase === 'needs_attention');
+    const originalResume = fake.agentInstance.resumeThread.bind(fake.agentInstance);
+    let resumeAttempts = 0;
+    fake.agentInstance.resumeThread = async (...args: any[]) => {
+      if (++resumeAttempts === 1) {
+        entered();
+        await gate;
+      }
+      return originalResume(...args);
+    };
+    try {
+      const first = context.orchestrator.resumeQualityLoop(context.task.id);
+      await started;
+      fake.agentInstance.emit('disconnected', 'fixture disconnect during correction thread setup');
+      await waitFor(
+        () =>
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.status === 'paused' &&
+          context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.resumeAction ===
+            'corrections'
+      );
+      const second = context.orchestrator.resumeQualityLoop(context.task.id);
+      release();
+      await Promise.all([first, second]);
+      await waitFor(
+        () =>
+          turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+            .length === 1
+      );
+      const task = context.state.getTask(context.task.id)!,
+        pass = task.passes!.find((row: any) => row.id === saved.passId)!,
+        loop = pass.qualityLoop!;
+      expect(loop).toMatchObject({
+        status: 'awaiting_corrections',
+        rounds: [
+          {
+            roundId: saved.roundId,
+            integrationHead: saved.integrationHead,
+            status: 'awaiting_corrections',
+            findings: saved.findings,
+          },
+        ],
+      });
+      expect(resumeAttempts).toBe(2);
+      expect(turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra')).toHaveLength(
+        auditCount
+      );
+      expect(
+        turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+      ).toHaveLength(1);
+      expect(
+        fake.calls.filter(
+          (row) => row.kind === 'server-response' && String(row.id).startsWith('recruit-')
+        )
+      ).toHaveLength(recruitmentCount);
+    } finally {
+      release();
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it('keeps correction findings resumable when thread setup fails before a planner turn is sent', async () => {
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-starting',
+    });
+    await waitFor(() => turns('orchestrator').some((row) => row.model === 'gpt-6.1-terra'));
+    const saved = await saveAndPauseQaFinding(context, 'Setup failure finding'),
+      auditCount = turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length,
+      recruitmentCount = fake.calls.filter(
+        (row) => row.kind === 'server-response' && String(row.id).startsWith('recruit-')
+      ).length,
+      orchestratorTurnCount = turns('orchestrator').length;
+    fake.agentInstance.emit('disconnected', 'detach the task thread before QA correction resume');
+    await waitFor(() => context.state.getTask(context.task.id)?.phase === 'needs_attention');
+    const originalResume = fake.agentInstance.resumeThread.bind(fake.agentInstance);
+    let resumeAttempts = 0;
+    fake.agentInstance.resumeThread = async (...args: any[]) => {
+      if (++resumeAttempts === 1) throw new Error('Temporary correction thread setup failure.');
+      return originalResume(...args);
+    };
+    try {
+      await context.orchestrator.resumeQualityLoop(context.task.id);
+      const paused = context.state
+        .getTask(context.task.id)!
+        .passes!.find((row: any) => row.id === saved.passId)!;
+      expect(paused.qualityLoop).toMatchObject({
+        status: 'paused',
+        resumeAction: 'corrections',
+        rounds: [
+          {
+            roundId: saved.roundId,
+            integrationHead: saved.integrationHead,
+            status: 'awaiting_corrections',
+            findings: saved.findings,
+          },
+        ],
+      });
+      expect(paused.activeTurnId).toBeUndefined();
+      expect(turns('orchestrator')).toHaveLength(orchestratorTurnCount);
+      await context.orchestrator.resumeQualityLoop(context.task.id);
+      await waitFor(
+        () =>
+          turns('orchestrator').filter((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+            .length === 1
+      );
+      const resumed = context.state
+        .getTask(context.task.id)!
+        .passes!.find((row: any) => row.id === saved.passId)!;
+      expect(resumed.qualityLoop?.status).toBe('awaiting_corrections');
+      expect(resumed.qualityLoop?.rounds.at(-1)?.findings).toEqual(saved.findings);
+      expect(resumeAttempts).toBe(2);
+      expect(turns('orchestrator')).toHaveLength(orchestratorTurnCount + 1);
+      expect(turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra')).toHaveLength(
+        auditCount
+      );
+      expect(
+        fake.calls.filter(
+          (row) => row.kind === 'server-response' && String(row.id).startsWith('recruit-')
+        )
+      ).toHaveLength(recruitmentCount);
+    } finally {
+      await context.orchestrator.cancelTask(context.task.id);
+    }
+  });
+  it.each(['pause', 'follow-up'] as const)(
+    'revalidates a QA correction launch after its shared authentication await (%s)',
+    async (action) => {
+      let release!: () => void, entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+        started = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+      const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+        until: 'audit-starting',
+      });
+      await waitFor(
+        () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+      );
+      fake.agentInstance.emit('connected');
+      const originalExport = fake.instance.exportChatGPTAuthTokens.bind(fake.instance);
+      fake.instance.exportChatGPTAuthTokens = async () => {
+        entered();
+        await gate;
+        return originalExport();
+      };
+      try {
+        await complete('orchestrator', {
+          type: 'qa_audit',
+          status: 'issues_found',
+          summary: 'One evidence-backed issue remains.',
+          findings: [
+            {
+              title: 'Auth race finding',
+              severity: 'medium',
+              issue: 'The behavior is not preserved.',
+              required_fix: 'Correct the behavior and add a regression.',
+              evidence: ['Observed during the focused audit.'],
+              file: 'src/example.ts',
+              line: 2,
+            },
+          ],
+        });
+        const reached = await Promise.race([
+          started.then(() => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500)),
+        ]);
+        if (!reached)
+          throw new Error(
+            `Authentication gate did not run: ${JSON.stringify(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop)}`
+          );
+        const passId = context.state.getTask(context.task.id)!.currentPassId!;
+        let followupPromise: Promise<any> | undefined;
+        if (action === 'pause') await context.orchestrator.pauseQualityLoop(context.task.id);
+        else {
+          followupPromise = context.orchestrator.submitTask(
+            'Fresh follow-up: answer this separately.',
+            context.task.id
+          );
+          await waitFor(() => context.state.getTask(context.task.id)?.currentPassId !== passId);
+        }
+        release();
+        if (followupPromise) await followupPromise;
+        if (action === 'follow-up') {
+          await waitFor(() => turns('router').length === 2);
+          await complete('router', {
+            route: 'direct_answer',
+            rule_id: 'direct_explanation_or_transform',
+            justification: 'The follow-up asks for a separate direct answer.',
+          });
+          await waitForRole('direct');
+          await complete('direct', { answer: 'Follow-up handled independently.' });
+          await waitFor(() => context.state.getTask(context.task.id)?.phase === 'needs_attention');
+          expect(
+            context.state
+              .getTask(context.task.id)
+              ?.passes?.find(
+                (row: any) => row.id === context.state.getTask(context.task.id)?.currentPassId
+              )?.userInputs
+          ).toContain('Fresh follow-up: answer this separately.');
+        } else
+          expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({
+            status: 'paused',
+            resumeAction: 'corrections',
+          });
+        expect(
+          turns('orchestrator').some((row) => row.input.includes('ACTIONABLE QA FINDINGS TO FIX'))
+        ).toBe(false);
+      } finally {
+        release();
+        await context.orchestrator.cancelTask(context.task.id);
+      }
+    }
+  );
+  it.each(['pause', 'follow-up'] as const)(
+    'interrupts a correction turn returned after %s and preserves a newer pass',
+    async (action) => {
+      let release!: () => void,
+        entered!: () => void,
+        staleTurnId = '';
+      const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+        started = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+      const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+        until: 'audit-starting',
+      });
+      await waitFor(
+        () => turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra').length === 1
+      );
+      const original = fake.agentInstance.startTurn.bind(fake.agentInstance);
+      fake.agentInstance.startTurn = async (...args: any[]) => {
+        const response = await original(...args);
+        if (String(args[1]).includes('ACTIONABLE QA FINDINGS TO FIX')) {
+          staleTurnId = response.turn.id;
+          entered();
+          await gate;
+        }
+        return response;
+      };
+      try {
+        await complete('orchestrator', {
+          type: 'qa_audit',
+          status: 'issues_found',
+          summary: 'One evidence-backed issue remains.',
+          findings: [
+            {
+              title: 'Late start finding',
+              severity: 'medium',
+              issue: 'The behavior is not preserved.',
+              required_fix: 'Correct the behavior and add a regression.',
+              evidence: ['Observed during the focused audit.'],
+              file: 'src/example.ts',
+              line: 2,
+            },
+          ],
+        });
+        await started;
+        const oldPassId = context.state.getTask(context.task.id)!.currentPassId!;
+        let followup: Promise<any> | undefined;
+        if (action === 'pause') await context.orchestrator.pauseQualityLoop(context.task.id);
+        else {
+          followup = context.orchestrator.submitTask(
+            'Fresh follow-up: answer this separately.',
+            context.task.id
+          );
+          await waitFor(() => context.state.getTask(context.task.id)?.currentPassId !== oldPassId);
+          await followup;
+        }
+        release();
+        await waitFor(() =>
+          fake.calls.some((row) => row.kind === 'interrupt' && row.turnId === staleTurnId)
+        );
+        const threadId = fake.calls.find(
+          (row) => row.kind === 'turn' && row.turnId === staleTurnId
+        )?.threadId;
+        expect(threadId).toBeTruthy();
+        if (action === 'pause')
+          expect(context.state.getTask(context.task.id)).toMatchObject({
+            phase: 'reviewing',
+            activeRole: undefined,
+            activeTurnId: undefined,
+            passes: [{ qualityLoop: { status: 'paused', resumeAction: 'corrections' } }],
+          });
+        else {
+          await waitFor(() => turns('router').length === 2);
+          expect(
+            context.state
+              .getTask(context.task.id)
+              ?.passes?.find(
+                (row: any) => row.id === context.state.getTask(context.task.id)?.currentPassId
+              )?.userInputs
+          ).toContain('Fresh follow-up: answer this separately.');
+          await complete('router', {
+            route: 'direct_answer',
+            rule_id: 'direct_explanation_or_transform',
+            justification: 'The follow-up asks for a separate direct answer.',
+          });
+          await waitForRole('direct');
+        }
+        const newPassTurn = context.state.getTask(context.task.id)?.activeTurnId,
+          newPassRole = context.state.getTask(context.task.id)?.activeRole;
+        fake.agentInstance.emit('notification', 'turn/started', {
+          threadId,
+          turn: { id: staleTurnId },
+        });
+        await context.state.mutate(() => {});
+        expect(context.state.getTask(context.task.id)?.activeTurnId).toBe(newPassTurn);
+        expect(context.state.getTask(context.task.id)?.activeRole).toBe(newPassRole);
+        expect(
+          fake.calls.filter((row) => row.kind === 'interrupt' && row.turnId === staleTurnId)
+        ).toHaveLength(1);
+        if (action === 'follow-up') {
+          await complete('direct', { answer: 'Follow-up handled independently.' });
+          await waitFor(() => context.state.getTask(context.task.id)?.phase === 'needs_attention');
+        }
+      } finally {
+        release();
+        await context.orchestrator.cancelTask(context.task.id);
+      }
+    }
+  );
+  it('retries a pre-turn QA startup failure using the same saved round without duplicate audits', async () => {
+    let attempts = 0;
+    const context = await runRecruitedTeamToReview(receipt, receipt, true, {
+      until: 'audit-needs-attention',
+      beforeStart: () => {
+        const original = fake.agentInstance.startThread.bind(fake.agentInstance);
+        fake.agentInstance.startThread = async (
+          role: string,
+          root: string,
+          model: string,
+          ...args: any[]
+        ) => {
+          if (model === 'gpt-6.1-terra' && attempts++ === 0)
+            throw new Error('Temporary Terra thread setup failure.');
+          return original(role, root, model, ...args);
+        };
+      },
+    });
+    const before = context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1);
+    expect(context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop).toMatchObject({
+      status: 'needs_attention',
+      resumeAction: 'audit',
+      rounds: [{ status: 'failed' }],
+    });
+    expect(before?.turnId).toBeUndefined();
+    expect(turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra')).toHaveLength(0);
+    await context.orchestrator.resumeQualityLoop(context.task.id);
+    await waitFor(
+      () =>
+        turns('orchestrator').some((row) => row.model === 'gpt-6.1-terra') &&
+        context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1)?.status ===
+          'auditing'
+    );
+    const after = context.state.getTask(context.task.id)?.passes?.[0]?.qualityLoop?.rounds.at(-1);
+    expect(after).toMatchObject({
+      roundId: before?.roundId,
+      index: before?.index,
+      createdAt: before?.createdAt,
+      integrationHead: before?.integrationHead,
+      model: 'gpt-6.1-terra',
+      requestedEffort: 'high',
+    });
+    expect(attempts).toBe(2);
+    expect(turns('orchestrator').filter((row) => row.model === 'gpt-6.1-terra')).toHaveLength(1);
+    await context.orchestrator.cancelTask(context.task.id);
+  });
+  it('fails closed instead of truncating worker receipts when the combined result exceeds its limit', async () => {
+    const largeReceipt = { ...receipt, result: 'x'.repeat(11_700) };
+    const { orchestrator, state, task } = await runRecruitedTeamToReview(largeReceipt, receipt);
+    const team: any = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    expect(team?.combinedReceipt).toMatchObject({
+      status: 'incomplete',
+      verification: expect.arrayContaining([
+        expect.objectContaining({
+          check: 'The combined integration result preserves every complete original worker receipt',
+          result: 'failed',
+        }),
+      ]),
+    });
+    expect(team?.combinedReceipt?.result).not.toContain('x'.repeat(1000));
+    await complete('orchestrator', {
+      outcome: 'accept',
+      note: 'Accept the result.',
+      assignment: null,
+      decision_required: null,
+    });
+    await waitFor(() => state.getTask(task.id)?.phase === 'needs_attention');
+    expect(state.getTask(task.id)?.error).toMatch(
+      /did not prove successful, fully verified completion/i
+    );
+    await orchestrator.cancelTask(task.id);
+  });
+  it('rejects final acceptance when a recruited worker receipt is not fully verified', async () => {
+    const invalidWorkerReceipt = {
+      ...receipt,
+      verification: [
+        { check: 'Focused behavior check', result: 'not_run' as const, evidence: null },
+      ],
+    };
+    const { state, task } = await runRecruitedTeamToReview(invalidWorkerReceipt, receipt);
+    const team: any = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    expect(team?.workers[0]).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('did not prove successful'),
+    });
+    expect(team?.integration.status).toBe('complete');
+    expect(team?.combinedReceipt?.status).toBe('incomplete');
+    expect(team?.status).toBe('needs_attention');
+    await complete('orchestrator', {
+      outcome: 'accept',
+      note: 'Accept this task.',
+      assignment: null,
+      decision_required: null,
+    });
+    await waitFor(() => state.getTask(task.id)?.phase === 'needs_attention');
+    expect(state.getTask(task.id)?.error).toMatch(
+      /did not prove successful, fully verified completion/i
+    );
+  });
+  it('rejects final acceptance when an integration receipt reports unmet criteria', async () => {
+    const invalidIntegrationReceipt = {
+      ...receipt,
+      acceptance: {
+        met: receipt.acceptance.met,
+        unmet: ['The complete team outcome was not proven.'],
+      },
+    };
+    const { state, task } = await runRecruitedTeamToReview(receipt, invalidIntegrationReceipt);
+    const team: any = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    expect(team?.workers[0]?.status).toBe('complete');
+    expect(team?.integration.status).toBe('complete');
+    expect(team?.combinedReceipt).toMatchObject({
+      status: 'incomplete',
+      acceptance: {
+        unmet: expect.arrayContaining([
+          'The complete team outcome was not proven.',
+          'Every complete worker and integrator receipt has matching model-turn provenance.',
+        ]),
+      },
+    });
+    expect(team?.status).toBe('needs_attention');
+    await complete('orchestrator', {
+      outcome: 'accept',
+      note: 'Accept this task.',
+      assignment: null,
+      decision_required: null,
+    });
+    await waitFor(() => state.getTask(task.id)?.phase === 'needs_attention');
+    expect(state.getTask(task.id)?.error).toMatch(
+      /did not prove successful, fully verified completion/i
+    );
+  });
+  it('observes native DSH tools without adding an app gateway and rejects tools absent from the native profile', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    fake.dshNativeTools = ['mcp__native_profile__lookup'];
+    const task = await orchestrator.submitTask(
+      'Audit the project with one isolated read-only worker.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'This audit needs an isolated worker.',
+    });
+    await waitForRole('orchestrator');
+    await complete('orchestrator', assignment);
+    const worker = await waitForRole('worker'),
+      runtime = fake.dshSessions.get(worker.threadId);
+    runtime.toolCall('mcp__native_profile__lookup', { query: 'bounded' }, { found: true });
+    runtime.toolCall('mcp__unexpected__read_secret', { path: 'outside-selected-gateways' }, {});
+    await complete('worker', 'The native profile lookup completed.');
+    await waitFor(
+      () => state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status === 'failed'
+    );
+    const failed = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0],
+      events = failed?.deepSeekPhaseRuns?.[0]?.providerEvents || [];
+    expect(failed?.error).toContain('MCP call absent from its observed native profile catalog');
+    expect(events.some((event: any) => event.toolName === 'mcp__native_profile__lookup')).toBe(
+      true
+    );
+    expect(events.some((event: any) => event.toolName === 'mcp__unexpected__read_secret')).toBe(
+      true
+    );
+    expect(JSON.stringify(events)).not.toContain('outside-selected-gateways');
+    expect(turns('orchestrator')).toHaveLength(1);
+    await orchestrator.cancelTask(task.id);
+  });
+  it('waits for owned DeepSeek stage completions after cancellation before shutdown cleanup', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask(
+      'Audit the project with one isolated read-only worker.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'This audit needs an isolated worker.',
+    });
+    await waitForRole('orchestrator');
+    await complete('orchestrator', assignment);
+    const worker = await waitForRole('worker');
+    let releaseWait!: () => void;
+    fake.dshWaitBarrier = new Promise<void>((resolve) => {
+      releaseWait = resolve;
+    });
+    const cancellation = orchestrator.cancelTask(task.id);
+    let cancellationFinished = false;
+    void cancellation.then(() => {
+      cancellationFinished = true;
+    });
+    await waitFor(() => state.getTask(task.id)?.phase === 'cancelled');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(cancellationFinished).toBe(false);
+    releaseWait();
+    await cancellation;
+    expect(cancellationFinished).toBe(true);
+    expect(state.getTask(task.id)?.phase).toBe('cancelled');
+    expect(fake.calls).toContainEqual(
+      expect.objectContaining({ kind: 'dsh-cancel', sessionId: worker.threadId })
+    );
+  });
+  it('starts two workers concurrently in distinct worktrees and reuses the sealed roster on duplicate calls', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask('Implement two independent project changes.');
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request has two independent implementation areas.',
+    });
+    await waitForRole('orchestrator');
+    const plans = [
+      workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+      workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'tests')] }),
+    ].map((row, index) => ({ ...row, name: `Worker ${index + 1}` }));
+    await recruit(plans);
+    const team: any = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    expect(team?.workers).toHaveLength(2);
+    expect(new Set(team?.workers.map((row: any) => row.branch)).size).toBe(2);
+    expect(new Set(team?.workers.map((row: any) => row.worktreeRoot)).size).toBe(2);
+    expect(new Set(team?.workers.map((row: any) => row.threadId)).size).toBe(2);
+    expect(
+      team?.workers.map((row: any) => ({
+        status: row.status,
+        active: !!row.activeTurnId,
+        error: row.error,
+      }))
+    ).toEqual([
+      { status: 'running', active: true, error: undefined },
+      { status: 'running', active: true, error: undefined },
+    ]);
+    expect(team?.integration.status).toBe('queued');
+    expect(turns('orchestrator')).toHaveLength(1);
+    const turn = lastTurn('orchestrator');
+    fake.agentInstance.emit('serverRequest', 'duplicate-recruitment', 'item/tool/call', {
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      namespace: 'pseudoharness',
+      tool: 'recruit_workers',
+      arguments: { workers: plans },
+    });
+    await waitFor(() =>
+      fake.calls.some((row) => row.kind === 'server-response' && row.id === 'duplicate-recruitment')
+    );
+    expect(
+      fake.calls.find((row) => row.kind === 'server-response' && row.id === 'duplicate-recruitment')
+        ?.result?.success
+    ).toBe(true);
+    expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers).toHaveLength(2);
+    expect(
+      fake.calls.filter((row) => row.kind === 'turn' && row.server === 'deepseek')
+    ).toHaveLength(2);
+    await orchestrator.cancelTask(task.id);
+    const cancelled = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    expect(cancelled?.workers.map((row: any) => row.deepSeekPhaseRuns?.[0]?.status)).toEqual([
+      'interrupted',
+      'interrupted',
+    ]);
+    expect(fake.calls.filter((row) => row.kind === 'dsh-cancel')).toHaveLength(2);
+  });
+  it('blocks a dependent and integrates when a native DSH session fails to connect', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask(
+      'Implement two ordered steps with a setup-failure-safe integration.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request has dependent implementation steps.',
+    });
+    await waitForRole('orchestrator');
+    const plans = [
+      { ...workerPlan(), name: 'Prerequisite', step: 'Complete the required first step.' },
+      {
+        ...workerPlan(),
+        name: 'Dependent',
+        step: 'Continue only after the prerequisite succeeds.',
+        depends_on: ['Prerequisite'],
+      },
+    ];
+    fake.dshConnectHook = async (runtime: any) => {
+      const worker = state
+        .getTask(task.id)
+        ?.passes?.[0]?.recruitmentTeam?.workers.find(
+          (row: any) => path.resolve(row.worktreeRoot) === path.resolve(runtime.cwd)
+        );
+      if (worker?.name === 'Prerequisite') throw new Error('Fixture native DSH startup failure.');
+    };
+    await expect(recruit(plans)).rejects.toThrow('Fixture native DSH startup failure.');
+    await waitFor(() => {
+      const team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+      return (
+        team?.workers[0]?.status === 'failed' &&
+        team.workers[1]?.status === 'blocked' &&
+        team.integration.status === 'running'
+      );
+    });
+    let team: any = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    await waitFor(() => turns('worker').length === 1);
+    team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    expect(team.workers.map((row: any) => row.status)).toEqual(['failed', 'blocked']);
+    expect(team.integration.threadId).toBeTruthy();
+    expect(turns('worker')[0].threadId).toBe(team.integration.threadId);
+    expect(
+      fake.calls.some((row) => row.kind === 'turn' && row.threadId === team.workers[0].threadId)
+    ).toBe(false);
+    await complete('worker', 'Integration completed for the available contributions.');
+    await waitFor(
+      () => turns('orchestrator').length === 2 && state.getTask(task.id)?.phase === 'reviewing'
+    );
+    team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    expect(team.integration.status).toBe('complete');
+    expect(team.combinedReceipt.status).toBe('incomplete');
+    expect(
+      team.workerReceiptBundle.map((row: any) => ({
+        status: row.status,
+        receiptStatus: row.receipt.status,
+        producer: row.producer,
+      }))
+    ).toEqual([
+      { status: 'failed', receiptStatus: 'failed', producer: null },
+      { status: 'blocked', receiptStatus: 'failed', producer: null },
+    ]);
+    await orchestrator.cancelTask(task.id);
+  });
+  it('propagates asynchronous provider startup failures after the scheduler claim releases', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask(
+      'Start independent workers once and unblock integration after a provider startup failure.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request has independent and dependent implementation steps.',
+    });
+    await waitForRole('orchestrator');
+    const plans = [
+      { ...workerPlan(), name: 'Prerequisite', step: 'Complete the prerequisite.' },
+      {
+        ...workerPlan(),
+        name: 'Dependent',
+        step: 'Continue only after the prerequisite succeeds.',
+        depends_on: ['Prerequisite'],
+      },
+      {
+        ...workerPlan(),
+        name: 'Chained dependent',
+        step: 'Continue only after the dependent succeeds.',
+        depends_on: ['Dependent'],
+      },
+      { ...workerPlan(), name: 'Independent', step: 'Complete an independent step.' },
+    ];
+    let releaseIndependent!: () => void;
+    const holdIndependent = new Promise<void>((resolve) => {
+      releaseIndependent = resolve;
+    });
+    fake.dshConnectHook = async (runtime: any) => {
+      const team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam,
+        worker = team?.workers.find(
+          (row: any) => path.resolve(row.worktreeRoot) === path.resolve(runtime.cwd)
+        );
+      if (worker?.name === 'Prerequisite')
+        throw new Error('Fixture asynchronous DSH connect failure.');
+      if (worker?.name === 'Independent') {
+        await holdIndependent;
+        throw new Error('Fixture gated DSH connect failure.');
+      }
+    };
+    try {
+      const turn = lastTurn('orchestrator'),
+        owner = fake.threadOwners.get(turn.threadId) || fake.agentInstance,
+        id = `async-recruit-${fake.turnCount}`;
+      owner.emit('serverRequest', id, 'item/tool/call', {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        namespace: 'opnex',
+        tool: 'recruit_workers',
+        arguments: { workers: plans },
+      });
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === id)
+      );
+      expect(
+        fake.calls.find((row) => row.kind === 'server-response' && row.id === id)?.result?.success
+      ).toBe(true);
+      owner.emit('notification', 'turn/completed', {
+        threadId: turn.threadId,
+        turn: {
+          id: turn.turnId,
+          status: 'completed',
+          items: [
+            {
+              type: 'agentMessage',
+              text: 'The complete team is sealed; I will wait for its result.',
+            },
+          ],
+        },
+      });
+      await waitFor(() => state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.sealed);
+      let team: any = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+      await waitFor(() => fake.calls.filter((row) => row.kind === 'dsh-connect').length === 2);
+      await waitFor(() => {
+        const current = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+        return (
+          current?.workers.find((row: any) => row.name === 'Prerequisite')?.status === 'failed' &&
+          current.workers.find((row: any) => row.name === 'Dependent')?.status === 'blocked' &&
+          current.workers.find((row: any) => row.name === 'Chained dependent')?.status === 'blocked'
+        );
+      });
+      team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+      expect(team.workers.find((row: any) => row.name === 'Dependent')?.status).toBe('blocked');
+      expect(team.workers.find((row: any) => row.name === 'Chained dependent')?.status).toBe(
+        'blocked'
+      );
+      expect(team.integration.status).toBe('queued');
+      expect(
+        fake.calls.filter((row) => row.kind === 'turn' && row.server === 'deepseek')
+      ).toHaveLength(0);
       releaseIndependent();
-      await waitFor(()=>{const current=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;return current?.workers.find((row:any)=>row.name==='Prerequisite')?.status==='failed'&&current.workers.find((row:any)=>row.name==='Independent')?.status==='failed'&&current.workers.find((row:any)=>row.name==='Dependent')?.status==='blocked'&&current.workers.find((row:any)=>row.name==='Chained dependent')?.status==='blocked'&&current.integration.status==='running';});
-      team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;await waitFor(()=>fake.calls.some(row=>row.kind==='turn'&&row.server==='deepseek'&&row.threadId===team.integration.threadId));const failedWorkers=team.workers.filter((row:any)=>['Prerequisite','Independent'].includes(row.name));const connectCalls=fake.calls.filter(row=>row.kind==='dsh-connect');expect(failedWorkers.map((row:any)=>row.status)).toEqual(['failed','failed']);expect(connectCalls.filter(row=>failedWorkers.some((worker:any)=>worker.threadId===row.sessionId))).toHaveLength(2);expect(team.workers.find((row:any)=>row.name==='Dependent')?.threadId).toBeUndefined();expect(team.workers.find((row:any)=>row.name==='Chained dependent')?.threadId).toBeUndefined();expect(team.workers.map((row:any)=>row.status)).toEqual(['failed','blocked','blocked','failed']);expect(fake.calls.filter(row=>row.kind==='turn'&&row.server==='deepseek').map(row=>row.threadId)).toEqual([team.integration.threadId]);
-    }finally{releaseIndependent();await orchestrator.cancelTask(task.id);}
+      await waitFor(() => {
+        const current = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+        return (
+          current?.workers.find((row: any) => row.name === 'Prerequisite')?.status === 'failed' &&
+          current.workers.find((row: any) => row.name === 'Independent')?.status === 'failed' &&
+          current.workers.find((row: any) => row.name === 'Dependent')?.status === 'blocked' &&
+          current.workers.find((row: any) => row.name === 'Chained dependent')?.status ===
+            'blocked' &&
+          current.integration.status === 'running'
+        );
+      });
+      team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+      await waitFor(() =>
+        fake.calls.some(
+          (row) =>
+            row.kind === 'turn' &&
+            row.server === 'deepseek' &&
+            row.threadId === team.integration.threadId
+        )
+      );
+      const failedWorkers = team.workers.filter((row: any) =>
+        ['Prerequisite', 'Independent'].includes(row.name)
+      );
+      const connectCalls = fake.calls.filter((row) => row.kind === 'dsh-connect');
+      expect(failedWorkers.map((row: any) => row.status)).toEqual(['failed', 'failed']);
+      expect(
+        connectCalls.filter((row) =>
+          failedWorkers.some((worker: any) => worker.threadId === row.sessionId)
+        )
+      ).toHaveLength(2);
+      expect(team.workers.find((row: any) => row.name === 'Dependent')?.threadId).toBeUndefined();
+      expect(
+        team.workers.find((row: any) => row.name === 'Chained dependent')?.threadId
+      ).toBeUndefined();
+      expect(team.workers.map((row: any) => row.status)).toEqual([
+        'failed',
+        'blocked',
+        'blocked',
+        'failed',
+      ]);
+      expect(
+        fake.calls
+          .filter((row) => row.kind === 'turn' && row.server === 'deepseek')
+          .map((row) => row.threadId)
+      ).toEqual([team.integration.threadId]);
+    } finally {
+      releaseIndependent();
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('starts a newly-ready dependent after its prerequisite completes during another startup',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Start a newly-ready dependent after another worker finishes connecting.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'A dependent step must start after its prerequisite succeeds.'});await waitForRole('orchestrator');
-    const plans=[{...workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]}),name:'Prerequisite',step:'Complete the prerequisite.'},{...workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]}),name:'Dependent',step:'Continue only after the prerequisite succeeds.',depends_on:['Prerequisite']},{...workerPlan({...assignment,write_scope:[path.join(projectRoot,'src')]}),name:'Independent',step:'Complete an independent step.'}];let releaseIndependent!:()=>void;const holdIndependent=new Promise<void>(resolve=>{releaseIndependent=resolve;});
-    fake.dshConnectHook=async(runtime:any)=>{const team=state.getTask(task.id)?.passes?.[0]?.recruitmentTeam,worker=team?.workers.find((row:any)=>path.resolve(row.worktreeRoot)===path.resolve(runtime.cwd));if(worker?.name==='Independent')await holdIndependent;};
-    const teamNow=()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;const workerRecord=(name:string)=>teamNow()?.workers.find((row:any)=>row.name===name);const turnsFor=(worker:any)=>fake.calls.filter(row=>row.kind==='turn'&&row.server==='deepseek'&&row.threadId===worker?.threadId);const completeWorker=async(name:string)=>{const worker=workerRecord(name);if(!worker?.threadId)throw new Error(`Worker ${name} has no active session.`);const runtime=fake.dshSessions.get(worker.threadId);runtime?.complete(runtime.current?.turnId,{type:'receipt',receipt,decision_needed:null,evidence:[],options:[],recommendation:null,consequences:[]});await waitFor(()=>workerRecord(name)?.status==='complete');};
-    try{
-      const turn=lastTurn('orchestrator'),owner=fake.threadOwners.get(turn.threadId)||fake.agentInstance,id=`ready-recruit-${fake.turnCount}`;owner.emit('serverRequest',id,'item/tool/call',{threadId:turn.threadId,turnId:turn.turnId,namespace:'opnex',tool:'recruit_workers',arguments:{workers:plans}});await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id===id));expect(fake.calls.find(row=>row.kind==='server-response'&&row.id===id)?.result?.success).toBe(true);owner.emit('notification','turn/completed',{threadId:turn.threadId,turn:{id:turn.turnId,status:'completed',items:[{type:'agentMessage',text:'The complete team is sealed; I will wait for its result.'}]}});
-      await waitFor(()=>teamNow()?.sealed);await waitFor(()=>fake.calls.filter(row=>row.kind==='dsh-connect').length===2);await waitFor(()=>workerRecord('Prerequisite')?.threadId&&turnsFor(workerRecord('Prerequisite')).length===1&&workerRecord('Prerequisite')?.activeTurnId);expect(workerRecord('Dependent')?.status).toBe('queued');expect(workerRecord('Independent')?.status).toBe('running');
-      await completeWorker('Prerequisite');await waitFor(()=>workerRecord('Dependent')?.threadId&&turnsFor(workerRecord('Dependent')).length===1&&workerRecord('Dependent')?.activeTurnId);expect(fake.calls.filter(row=>row.kind==='dsh-connect').length).toBe(3);expect(turnsFor(workerRecord('Independent'))).toHaveLength(0);
-      releaseIndependent();await waitFor(()=>turnsFor(workerRecord('Independent')).length===1&&workerRecord('Independent')?.activeTurnId);await completeWorker('Independent');await completeWorker('Dependent');await waitFor(()=>teamNow()?.integration.status==='running'&&!!teamNow()?.integration.activeTurnId);const team=teamNow();await waitFor(()=>fake.calls.filter(row=>row.kind==='turn'&&row.server==='deepseek').length===4);expect(team?.workers.map((row:any)=>row.status)).toEqual(['complete','complete','complete']);expect(turns('orchestrator')).toHaveLength(1);expect(fake.calls.filter(row=>row.kind==='turn'&&row.server==='deepseek')).toHaveLength(4);expect(fake.calls.some(row=>row.kind==='turn'&&row.threadId===team?.integration.threadId)).toBe(true);await orchestrator.cancelTask(task.id);
-    }finally{releaseIndependent();if(state.getTask(task.id)?.phase!=='cancelled')await orchestrator.cancelTask(task.id);}
-  });  it('fails closed on unverified image attachments before starting DeepSeek execution',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const image=pngAttachment();const task=await orchestrator.submitTask('Inspect the attached diagram as part of this implementation.',undefined,[image]);await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request needs a delegated implementation.'});await waitForRole('orchestrator');
-    await expect(complete('orchestrator',assignment)).rejects.toThrow(/image attachments have not been verified/);await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status==='failed');const saved=state.getTask(task.id)!;expect(turns('worker')).toHaveLength(0);expect(saved.passes?.[0]?.recruitmentTeam?.workers[0]?.error).toMatch(/image attachments have not been verified/);expect(turns('orchestrator')).toHaveLength(1);await orchestrator.cancelTask(task.id);
-  });  it('accepts a native DSH final response without requiring an Opnex-authored receipt schema',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Delegate one worker to report its runtime identity.');await complete('router',{route:'hard_task',rule_id:'hard_new_feature',justification:'The request explicitly requires a delegated worker.'});await waitForRole('orchestrator');await recruit([workerPlan({...assignment,write_scope:[]})]);const worker=await waitForRole('worker');
-    try{
-      fake.dshSessions.get(worker.threadId)?.complete(worker.turnId,'This session is running in DSH.');
-      await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status!=='running');
-      expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]).toMatchObject({status:'complete',receipt:{status:'incomplete',result:'This session is running in DSH.'}});
-      await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status==='running'&&!!state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.activeTurnId);
-    }finally{await orchestrator.cancelTask(task.id);}
+  it('starts a newly-ready dependent after its prerequisite completes during another startup', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask(
+      'Start a newly-ready dependent after another worker finishes connecting.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'A dependent step must start after its prerequisite succeeds.',
+    });
+    await waitForRole('orchestrator');
+    const plans = [
+      {
+        ...workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+        name: 'Prerequisite',
+        step: 'Complete the prerequisite.',
+      },
+      {
+        ...workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+        name: 'Dependent',
+        step: 'Continue only after the prerequisite succeeds.',
+        depends_on: ['Prerequisite'],
+      },
+      {
+        ...workerPlan({ ...assignment, write_scope: [path.join(projectRoot, 'src')] }),
+        name: 'Independent',
+        step: 'Complete an independent step.',
+      },
+    ];
+    let releaseIndependent!: () => void;
+    const holdIndependent = new Promise<void>((resolve) => {
+      releaseIndependent = resolve;
+    });
+    fake.dshConnectHook = async (runtime: any) => {
+      const team = state.getTask(task.id)?.passes?.[0]?.recruitmentTeam,
+        worker = team?.workers.find(
+          (row: any) => path.resolve(row.worktreeRoot) === path.resolve(runtime.cwd)
+        );
+      if (worker?.name === 'Independent') await holdIndependent;
+    };
+    const teamNow = () => state.getTask(task.id)?.passes?.[0]?.recruitmentTeam;
+    const workerRecord = (name: string) => teamNow()?.workers.find((row: any) => row.name === name);
+    const turnsFor = (worker: any) =>
+      fake.calls.filter(
+        (row) =>
+          row.kind === 'turn' && row.server === 'deepseek' && row.threadId === worker?.threadId
+      );
+    const completeWorker = async (name: string) => {
+      const worker = workerRecord(name);
+      if (!worker?.threadId) throw new Error(`Worker ${name} has no active session.`);
+      const runtime = fake.dshSessions.get(worker.threadId);
+      runtime?.complete(runtime.current?.turnId, {
+        type: 'receipt',
+        receipt,
+        decision_needed: null,
+        evidence: [],
+        options: [],
+        recommendation: null,
+        consequences: [],
+      });
+      await waitFor(() => workerRecord(name)?.status === 'complete');
+    };
+    try {
+      const turn = lastTurn('orchestrator'),
+        owner = fake.threadOwners.get(turn.threadId) || fake.agentInstance,
+        id = `ready-recruit-${fake.turnCount}`;
+      owner.emit('serverRequest', id, 'item/tool/call', {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        namespace: 'opnex',
+        tool: 'recruit_workers',
+        arguments: { workers: plans },
+      });
+      await waitFor(() =>
+        fake.calls.some((row) => row.kind === 'server-response' && row.id === id)
+      );
+      expect(
+        fake.calls.find((row) => row.kind === 'server-response' && row.id === id)?.result?.success
+      ).toBe(true);
+      owner.emit('notification', 'turn/completed', {
+        threadId: turn.threadId,
+        turn: {
+          id: turn.turnId,
+          status: 'completed',
+          items: [
+            {
+              type: 'agentMessage',
+              text: 'The complete team is sealed; I will wait for its result.',
+            },
+          ],
+        },
+      });
+      await waitFor(() => teamNow()?.sealed);
+      await waitFor(() => fake.calls.filter((row) => row.kind === 'dsh-connect').length === 2);
+      await waitFor(
+        () =>
+          workerRecord('Prerequisite')?.threadId &&
+          turnsFor(workerRecord('Prerequisite')).length === 1 &&
+          workerRecord('Prerequisite')?.activeTurnId
+      );
+      expect(workerRecord('Dependent')?.status).toBe('queued');
+      expect(workerRecord('Independent')?.status).toBe('running');
+      await completeWorker('Prerequisite');
+      await waitFor(
+        () =>
+          workerRecord('Dependent')?.threadId &&
+          turnsFor(workerRecord('Dependent')).length === 1 &&
+          workerRecord('Dependent')?.activeTurnId
+      );
+      expect(fake.calls.filter((row) => row.kind === 'dsh-connect').length).toBe(3);
+      expect(turnsFor(workerRecord('Independent'))).toHaveLength(0);
+      releaseIndependent();
+      await waitFor(
+        () =>
+          turnsFor(workerRecord('Independent')).length === 1 &&
+          workerRecord('Independent')?.activeTurnId
+      );
+      await completeWorker('Independent');
+      await completeWorker('Dependent');
+      await waitFor(
+        () => teamNow()?.integration.status === 'running' && !!teamNow()?.integration.activeTurnId
+      );
+      const team = teamNow();
+      await waitFor(
+        () =>
+          fake.calls.filter((row) => row.kind === 'turn' && row.server === 'deepseek').length === 4
+      );
+      expect(team?.workers.map((row: any) => row.status)).toEqual([
+        'complete',
+        'complete',
+        'complete',
+      ]);
+      expect(turns('orchestrator')).toHaveLength(1);
+      expect(
+        fake.calls.filter((row) => row.kind === 'turn' && row.server === 'deepseek')
+      ).toHaveLength(4);
+      expect(
+        fake.calls.some((row) => row.kind === 'turn' && row.threadId === team?.integration.threadId)
+      ).toBe(true);
+      await orchestrator.cancelTask(task.id);
+    } finally {
+      releaseIndependent();
+      if (state.getTask(task.id)?.phase !== 'cancelled') await orchestrator.cancelTask(task.id);
+    }
   });
-  it('passes an explicitly requested assigned worker name as task data and formats the read-only response for the user',async()=>{
-    const {orchestrator,state}=await setupDeepSeek();const task=await orchestrator.submitTask('Delegate one read-only worker to report your worker name.');await complete('router',{route:'hard_task',rule_id:'hard_explicit_worker_delegation',justification:'The request explicitly asks for a delegated worker.'});await waitForRole('orchestrator');
-    const assigned={...assignment,outcome:'Report your worker name.',deliverable:'Return the worker name.',write_scope:[],acceptance:["The response clearly states the worker's assigned name."]};const plan={...workerPlan(assigned),name:'name_reporter',step:'Report the worker name.'};const workerTurnsBefore=turns('worker').length,orchestratorTurn=sendRecruitmentRequest('read-only-name-report',[plan],'read_only'),owner=fake.threadOwners.get(orchestratorTurn.threadId)||fake.agentInstance;
-    try{
-      await waitFor(()=>fake.calls.some(row=>row.kind==='server-response'&&row.id==='read-only-name-report'));expect(fake.calls.find(row=>row.kind==='server-response'&&row.id==='read-only-name-report')?.result?.success).toBe(true);
-      owner.emit('notification','turn/completed',{threadId:orchestratorTurn.threadId,turn:{id:orchestratorTurn.turnId,status:'completed',items:[{type:'agentMessage',text:'The read-only team is sealed.'}]}});
-      await waitFor(()=>state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.sealed);await waitFor(()=>turns('worker').length>workerTurnsBefore);const worker=lastTurn('worker');
-      expect(JSON.parse(worker.input)).toMatchObject({task_data:{assigned_worker_name:'name_reporter'}});expect(worker.input).not.toContain('persona');
-      const answer='The assigned worker name is name_reporter.';await complete('worker',answer);await waitFor(()=>state.getTask(task.id)?.receipt?.result===answer);
-      const saved=state.getTask(task.id)!,team=saved.passes?.[0]?.recruitmentTeam;expect(saved.receipt?.result).toBe(answer);expect(saved.receipt?.result).not.toContain('workerId');expect(team?.workerReceiptBundle?.[0]?.receipt.result).toBe(answer);expect(team?.workerReceiptBundle?.[0]?.producer?.threadId).toBe(worker.threadId);expect(team?.workers[0]?.status).toBe('complete');
-    }finally{await orchestrator.cancelTask(task.id);}
+  it('fails closed on unverified image attachments before starting DeepSeek execution', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const image = pngAttachment();
+    const task = await orchestrator.submitTask(
+      'Inspect the attached diagram as part of this implementation.',
+      undefined,
+      [image]
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request needs a delegated implementation.',
+    });
+    await waitForRole('orchestrator');
+    await expect(complete('orchestrator', assignment)).rejects.toThrow(
+      /image attachments have not been verified/
+    );
+    await waitFor(
+      () => state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status === 'failed'
+    );
+    const saved = state.getTask(task.id)!;
+    expect(turns('worker')).toHaveLength(0);
+    expect(saved.passes?.[0]?.recruitmentTeam?.workers[0]?.error).toMatch(
+      /image attachments have not been verified/
+    );
+    expect(turns('orchestrator')).toHaveLength(1);
+    await orchestrator.cancelTask(task.id);
   });
-  it('surfaces required router Fast startup failures for new tasks and follow-up passes',async()=>{
-    const {orchestrator}=await setup(false);const first=await orchestrator.submitTask('What is 2 + 2?');expect(first.phase).toBe('needs_attention');expect(first.error).toContain('Fast service tier');
-    const followup=await orchestrator.submitTask('Try again with the same request.',first.id);expect(followup.phase).toBe('needs_attention');expect(followup.error).toContain('Fast service tier');expect(followup.passes).toHaveLength(2);
+  it('accepts a native DSH final response without requiring an Opnex-authored receipt schema', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask(
+      'Delegate one worker to report its runtime identity.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_new_feature',
+      justification: 'The request explicitly requires a delegated worker.',
+    });
+    await waitForRole('orchestrator');
+    await recruit([workerPlan({ ...assignment, write_scope: [] })]);
+    const worker = await waitForRole('worker');
+    try {
+      fake.dshSessions
+        .get(worker.threadId)
+        ?.complete(worker.turnId, 'This session is running in DSH.');
+      await waitFor(
+        () => state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]?.status !== 'running'
+      );
+      expect(state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.workers[0]).toMatchObject({
+        status: 'complete',
+        receipt: { status: 'incomplete', result: 'This session is running in DSH.' },
+      });
+      await waitFor(
+        () =>
+          state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.status === 'running' &&
+          !!state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.integration.activeTurnId
+      );
+    } finally {
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('keeps a valid route when the selected executor fails to start',async()=>{
-    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Fix one bounded issue under `src/`.');const original=fake.agentInstance.startThread.bind(fake.agentInstance);fake.agentInstance.startThread=async(role:string,...args:any[])=>{if(role==='simple')throw new Error('GPT-6 Luna max is unavailable.');return original(role,...args);};
-    await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});await waitFor(()=>modules.state.getTask(task.id)?.phase==='needs_attention');expect(modules.state.getTask(task.id)?.routeDecision?.route).toBe('simple_implementation');expect(modules.state.getTask(task.id)?.error).toContain('max is unavailable');expect(fake.calls.some(row=>row.role==='orchestrator')).toBe(false);
+  it('passes an explicitly requested assigned worker name as task data and formats the read-only response for the user', async () => {
+    const { orchestrator, state } = await setupDeepSeek();
+    const task = await orchestrator.submitTask(
+      'Delegate one read-only worker to report your worker name.'
+    );
+    await complete('router', {
+      route: 'hard_task',
+      rule_id: 'hard_explicit_worker_delegation',
+      justification: 'The request explicitly asks for a delegated worker.',
+    });
+    await waitForRole('orchestrator');
+    const assigned = {
+      ...assignment,
+      outcome: 'Report your worker name.',
+      deliverable: 'Return the worker name.',
+      write_scope: [],
+      acceptance: ["The response clearly states the worker's assigned name."],
+    };
+    const plan = {
+      ...workerPlan(assigned),
+      name: 'name_reporter',
+      step: 'Report the worker name.',
+    };
+    const workerTurnsBefore = turns('worker').length,
+      orchestratorTurn = sendRecruitmentRequest('read-only-name-report', [plan], 'read_only'),
+      owner = fake.threadOwners.get(orchestratorTurn.threadId) || fake.agentInstance;
+    try {
+      await waitFor(() =>
+        fake.calls.some(
+          (row) => row.kind === 'server-response' && row.id === 'read-only-name-report'
+        )
+      );
+      expect(
+        fake.calls.find(
+          (row) => row.kind === 'server-response' && row.id === 'read-only-name-report'
+        )?.result?.success
+      ).toBe(true);
+      owner.emit('notification', 'turn/completed', {
+        threadId: orchestratorTurn.threadId,
+        turn: {
+          id: orchestratorTurn.turnId,
+          status: 'completed',
+          items: [{ type: 'agentMessage', text: 'The read-only team is sealed.' }],
+        },
+      });
+      await waitFor(() => state.getTask(task.id)?.passes?.[0]?.recruitmentTeam?.sealed);
+      await waitFor(() => turns('worker').length > workerTurnsBefore);
+      const worker = lastTurn('worker');
+      expect(JSON.parse(worker.input)).toMatchObject({
+        task_data: { assigned_worker_name: 'name_reporter' },
+      });
+      expect(worker.input).not.toContain('persona');
+      const answer = 'The assigned worker name is name_reporter.';
+      await complete('worker', answer);
+      await waitFor(() => state.getTask(task.id)?.receipt?.result === answer);
+      const saved = state.getTask(task.id)!,
+        team = saved.passes?.[0]?.recruitmentTeam;
+      expect(saved.receipt?.result).toBe(answer);
+      expect(saved.receipt?.result).not.toContain('workerId');
+      expect(team?.workerReceiptBundle?.[0]?.receipt.result).toBe(answer);
+      expect(team?.workerReceiptBundle?.[0]?.producer?.threadId).toBe(worker.threadId);
+      expect(team?.workers[0]?.status).toBe('complete');
+    } finally {
+      await orchestrator.cancelTask(task.id);
+    }
   });
-  it('routes simple work through the hard assignment when no bounded user-named directory exists',async()=>{
-    const {orchestrator}=await setup();const task=await orchestrator.submitTask('Fix the known typo in src/label.ts.');
-    await complete('router',{route:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known localized correction with clear verification.'});
-    const sol=await waitForRole('orchestrator');expect(sol.input).toContain('Fix the known typo in src/label.ts.');expect(sol.input).toContain('explicitly named, existing project directory');expect(fake.calls.some(row=>row.kind==='turn'&&row.role==='simple')).toBe(false);
-    expect(modules.state.getTask(task.id)?.routeDecision).toMatchObject({route:'simple_implementation',effectiveRoute:'hard_task'});
+  it('surfaces required router Fast startup failures for new tasks and follow-up passes', async () => {
+    const { orchestrator } = await setup(false);
+    const first = await orchestrator.submitTask('What is 2 + 2?');
+    expect(first.phase).toBe('needs_attention');
+    expect(first.error).toContain('Fast service tier');
+    const followup = await orchestrator.submitTask('Try again with the same request.', first.id);
+    expect(followup.phase).toBe('needs_attention');
+    expect(followup.error).toContain('Fast service tier');
+    expect(followup.passes).toHaveLength(2);
   });
-  it('conservatively starts the hard-task assignment when router output is malformed',async()=>{
-    const {orchestrator}=await setup();const task=await orchestrator.submitTask('A request with an invalid route payload.');await complete('router',{route:'simple_implementation',rule_id:'hard_new_feature',justification:'Mismatched rule'});await waitForRole('orchestrator');const routed=modules.state.getTask(task.id);expect(routed?.routeDecision).toMatchObject({route:'hard_task',effectiveRoute:'hard_task',rule_id:'hard_significant_uncertainty',fallback:true});expect(routed?.routeDecision?.justification).toContain('failed validation');expect(routed?.allowDirectResponse).toBe(false);
+  it('keeps a valid route when the selected executor fails to start', async () => {
+    const { orchestrator } = await setup();
+    const task = await orchestrator.submitTask('Fix one bounded issue under `src/`.');
+    const original = fake.agentInstance.startThread.bind(fake.agentInstance);
+    fake.agentInstance.startThread = async (role: string, ...args: any[]) => {
+      if (role === 'simple') throw new Error('GPT-6 Luna max is unavailable.');
+      return original(role, ...args);
+    };
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'This is a known localized correction with clear verification.',
+    });
+    await waitFor(() => modules.state.getTask(task.id)?.phase === 'needs_attention');
+    expect(modules.state.getTask(task.id)?.routeDecision?.route).toBe('simple_implementation');
+    expect(modules.state.getTask(task.id)?.error).toContain('max is unavailable');
+    expect(fake.calls.some((row) => row.role === 'orchestrator')).toBe(false);
   });
-  it('interrupts a turn/start response that resolves after a routed task is cancelled',async()=>{
-    const {orchestrator}=await setup();let release:(value:{turn:{id:string}})=>void=()=>{};const deferred=new Promise<{turn:{id:string}}>(resolve=>{release=resolve;});const original=fake.agentInstance.startTurn.bind(fake.agentInstance);fake.agentInstance.startTurn=(...args:any[])=>{const result=original(...args);return args[2]==='router'?deferred:result;};
-    const pending=orchestrator.submitTask('Classify this request.');await waitFor(()=>fake.calls.some(row=>row.kind==='turn'&&row.role==='router'));const row=modules.state.getState().tasks[0];await orchestrator.cancelTask(row.id);release({turn:{id:'late-turn'}});await pending;await waitFor(()=>fake.calls.some(call=>call.kind==='interrupt'&&call.turnId==='late-turn'));expect(modules.state.getTask(row.id)?.phase).toBe('cancelled');
+  it('routes simple work through the hard assignment when no bounded user-named directory exists', async () => {
+    const { orchestrator } = await setup();
+    const task = await orchestrator.submitTask('Fix the known typo in src/label.ts.');
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'This is a known localized correction with clear verification.',
+    });
+    const sol = await waitForRole('orchestrator');
+    expect(sol.input).toContain('Fix the known typo in src/label.ts.');
+    expect(sol.input).toContain('explicitly named, existing project directory');
+    expect(fake.calls.some((row) => row.kind === 'turn' && row.role === 'simple')).toBe(false);
+    expect(modules.state.getTask(task.id)?.routeDecision).toMatchObject({
+      route: 'simple_implementation',
+      effectiveRoute: 'hard_task',
+    });
   });
-  it('does not revive a router start that resolves after cancellation and interrupts a late turn response',async()=>{
-    const {orchestrator}=await setup();let release:(value:string)=>void=()=>{};const deferred=new Promise<string>(resolve=>{release=resolve;});const original=fake.agentInstance.startThread.bind(fake.agentInstance);fake.agentInstance.startThread=async(role:string,...args:any[])=>role==='router'?deferred:original(role,...args);
-    const pending=orchestrator.submitTask('Classify this request.');await waitFor(()=>modules.state.getState().tasks.length===1);const row=modules.state.getState().tasks[0];await orchestrator.cancelTask(row.id);release('late-router-thread');await pending;await new Promise(resolve=>setTimeout(resolve,20));expect(modules.state.getTask(row.id)?.phase).toBe('cancelled');expect(fake.calls.some(call=>call.kind==='turn'&&call.role==='router')).toBe(false);
+  it('conservatively starts the hard-task assignment when router output is malformed', async () => {
+    const { orchestrator } = await setup();
+    const task = await orchestrator.submitTask('A request with an invalid route payload.');
+    await complete('router', {
+      route: 'simple_implementation',
+      rule_id: 'hard_new_feature',
+      justification: 'Mismatched rule',
+    });
+    await waitForRole('orchestrator');
+    const routed = modules.state.getTask(task.id);
+    expect(routed?.routeDecision).toMatchObject({
+      route: 'hard_task',
+      effectiveRoute: 'hard_task',
+      rule_id: 'hard_significant_uncertainty',
+      fallback: true,
+    });
+    expect(routed?.routeDecision?.justification).toContain('failed validation');
+    expect(routed?.allowDirectResponse).toBe(false);
+  });
+  it('interrupts a turn/start response that resolves after a routed task is cancelled', async () => {
+    const { orchestrator } = await setup();
+    let release: (value: { turn: { id: string } }) => void = () => {};
+    const deferred = new Promise<{ turn: { id: string } }>((resolve) => {
+      release = resolve;
+    });
+    const original = fake.agentInstance.startTurn.bind(fake.agentInstance);
+    fake.agentInstance.startTurn = (...args: any[]) => {
+      const result = original(...args);
+      return args[2] === 'router' ? deferred : result;
+    };
+    const pending = orchestrator.submitTask('Classify this request.');
+    await waitFor(() => fake.calls.some((row) => row.kind === 'turn' && row.role === 'router'));
+    const row = modules.state.getState().tasks[0];
+    await orchestrator.cancelTask(row.id);
+    release({ turn: { id: 'late-turn' } });
+    await pending;
+    await waitFor(() =>
+      fake.calls.some((call) => call.kind === 'interrupt' && call.turnId === 'late-turn')
+    );
+    expect(modules.state.getTask(row.id)?.phase).toBe('cancelled');
+  });
+  it('does not revive a router start that resolves after cancellation and interrupts a late turn response', async () => {
+    const { orchestrator } = await setup();
+    let release: (value: string) => void = () => {};
+    const deferred = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const original = fake.agentInstance.startThread.bind(fake.agentInstance);
+    fake.agentInstance.startThread = async (role: string, ...args: any[]) =>
+      role === 'router' ? deferred : original(role, ...args);
+    const pending = orchestrator.submitTask('Classify this request.');
+    await waitFor(() => modules.state.getState().tasks.length === 1);
+    const row = modules.state.getState().tasks[0];
+    await orchestrator.cancelTask(row.id);
+    release('late-router-thread');
+    await pending;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(modules.state.getTask(row.id)?.phase).toBe('cancelled');
+    expect(fake.calls.some((call) => call.kind === 'turn' && call.role === 'router')).toBe(false);
   });
 });

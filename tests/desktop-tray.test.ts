@@ -3,9 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const { createTrayController } = require('../desktop/tray-controller.cjs') as {
-  createTrayController: (options: any) => { start: () => any; open: () => void; destroy: () => void; getTray: () => any; getMenu: () => any };
+  createTrayController: (options: any) => {
+    start: () => any;
+    open: () => void;
+    destroy: () => void;
+    getTray: () => any;
+    getMenu: () => any;
+  };
 };
-const { stopOwnedKernel } = require('../desktop/kernel-shutdown.cjs') as { stopOwnedKernel: (options: any) => Promise<void> };
+const { stopOwnedKernel } = require('../desktop/kernel-shutdown.cjs') as {
+  stopOwnedKernel: (options: any) => Promise<void>;
+};
 
 function trayHarness() {
   class FakeTray {
@@ -14,11 +22,21 @@ function trayHarness() {
     menu: any;
     destroyed = false;
     constructor(readonly image: unknown) {}
-    setToolTip(value: string) { this.tooltip = value; }
-    setContextMenu(value: unknown) { this.menu = value; }
-    on(name: string, callback: () => void) { this.events.set(name, callback); }
-    isDestroyed() { return this.destroyed; }
-    destroy() { this.destroyed = true; }
+    setToolTip(value: string) {
+      this.tooltip = value;
+    }
+    setContextMenu(value: unknown) {
+      this.menu = value;
+    }
+    on(name: string, callback: () => void) {
+      this.events.set(name, callback);
+    }
+    isDestroyed() {
+      return this.destroyed;
+    }
+    destroy() {
+      this.destroyed = true;
+    }
   }
   const openWindow = vi.fn();
   const quitApp = vi.fn(async () => {});
@@ -39,7 +57,11 @@ describe('desktop system tray', () => {
     expect(controller.start()).toBe(tray);
     expect(tray.tooltip).toBe('Opnex');
     expect(tray.image).toBe('brand-mark');
-    expect(controller.getMenu().map((item: any) => item.label ?? item.type)).toEqual(['Open Opnex', 'separator', 'Quit']);
+    expect(controller.getMenu().map((item: any) => item.label ?? item.type)).toEqual([
+      'Open Opnex',
+      'separator',
+      'Quit',
+    ]);
   });
 
   it('routes tray clicks and Open to the same window restore callback', () => {
@@ -72,22 +94,45 @@ describe('managed kernel shutdown', () => {
   it('does not contact an independently attached kernel', async () => {
     const fetchImpl = vi.fn();
     const waitForBackendExit = vi.fn();
-    await stopOwnedKernel({ ownsKernel: false, origin: 'http://127.0.0.1:4174', fetchImpl, state: {}, isBackendExited: () => false, waitForBackendExit });
+    await stopOwnedKernel({
+      ownsKernel: false,
+      origin: 'http://127.0.0.1:4174',
+      fetchImpl,
+      state: {},
+      isBackendExited: () => false,
+      waitForBackendExit,
+    });
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(waitForBackendExit).not.toHaveBeenCalled();
   });
 
   it('uses the versioned snapshot token and explicit shutdown request, then waits for exit', async () => {
-    const fetchImpl = vi.fn()
+    const fetchImpl = vi
+      .fn()
       .mockResolvedValueOnce(response(200, { csrf: 'opaque-test-token' }))
       .mockResolvedValueOnce(response(202, { status: 'stopping' }));
     const state = { shutdownAccepted: false };
     const waitForBackendExit = vi.fn(async () => true);
-    await stopOwnedKernel({ ownsKernel: true, origin: 'http://127.0.0.1:4174', fetchImpl, state, isBackendExited: () => false, waitForBackendExit });
-    expect(fetchImpl.mock.calls[0][1].headers).toEqual({ 'x-opnex-protocol-version': '1', 'x-pseudoharness-protocol-version': '1' });
+    await stopOwnedKernel({
+      ownsKernel: true,
+      origin: 'http://127.0.0.1:4174',
+      fetchImpl,
+      state,
+      isBackendExited: () => false,
+      waitForBackendExit,
+    });
+    expect(fetchImpl.mock.calls[0][1].headers).toEqual({
+      'x-opnex-protocol-version': '1',
+      'x-pseudoharness-protocol-version': '1',
+    });
     expect(fetchImpl.mock.calls[1][1]).toMatchObject({
       method: 'POST',
-      headers: { 'x-opnex-protocol-version': '1', 'x-pseudoharness-protocol-version': '1', 'x-opnex-token': 'opaque-test-token', 'x-pseudoharness-token': 'opaque-test-token' },
+      headers: {
+        'x-opnex-protocol-version': '1',
+        'x-pseudoharness-protocol-version': '1',
+        'x-opnex-token': 'opaque-test-token',
+        'x-pseudoharness-token': 'opaque-test-token',
+      },
       body: '{"confirm":"stop-kernel"}',
     });
     expect(state.shutdownAccepted).toBe(true);
@@ -95,12 +140,24 @@ describe('managed kernel shutdown', () => {
   });
 
   it('keeps the managed kernel running when its shutdown request is rejected', async () => {
-    const fetchImpl = vi.fn()
+    const fetchImpl = vi
+      .fn()
       .mockResolvedValueOnce(response(200, { csrf: 'opaque-test-token' }))
-      .mockResolvedValueOnce(response(409, { code: 'SHUTDOWN_REJECTED', error: 'Shutdown is temporarily unavailable.' }));
+      .mockResolvedValueOnce(
+        response(409, { code: 'SHUTDOWN_REJECTED', error: 'Shutdown is temporarily unavailable.' })
+      );
     const state = { shutdownAccepted: false };
     const waitForBackendExit = vi.fn();
-    await expect(stopOwnedKernel({ ownsKernel: true, origin: 'http://127.0.0.1:4174', fetchImpl, state, isBackendExited: () => false, waitForBackendExit })).rejects.toThrow('Shutdown is temporarily unavailable.');
+    await expect(
+      stopOwnedKernel({
+        ownsKernel: true,
+        origin: 'http://127.0.0.1:4174',
+        fetchImpl,
+        state,
+        isBackendExited: () => false,
+        waitForBackendExit,
+      })
+    ).rejects.toThrow('Shutdown is temporarily unavailable.');
     expect(state.shutdownAccepted).toBe(false);
     expect(waitForBackendExit).not.toHaveBeenCalled();
   });
@@ -108,7 +165,17 @@ describe('managed kernel shutdown', () => {
   it('allows retrying exit wait after the API already accepted shutdown', async () => {
     const fetchImpl = vi.fn();
     const state = { shutdownAccepted: true };
-    await expect(stopOwnedKernel({ ownsKernel: true, origin: 'http://127.0.0.1:4174', fetchImpl, state, isBackendExited: () => false, waitForBackendExit: async () => false, timeoutMs: 1 })).rejects.toMatchObject({ code: 'KERNEL_EXIT_TIMEOUT' });
+    await expect(
+      stopOwnedKernel({
+        ownsKernel: true,
+        origin: 'http://127.0.0.1:4174',
+        fetchImpl,
+        state,
+        isBackendExited: () => false,
+        waitForBackendExit: async () => false,
+        timeoutMs: 1,
+      })
+    ).rejects.toMatchObject({ code: 'KERNEL_EXIT_TIMEOUT' });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

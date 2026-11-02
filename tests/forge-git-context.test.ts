@@ -5,12 +5,19 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ForgeAttempt, ForgeTicket } from '../server/forge-contracts.js';
-import { forgeAttemptRoot, forgeAttemptWorkerId, forgeBranchName, resolveLocalForgeTargetBranch, restoreForgeWorkerWorktrees } from '../server/forge-git-context.js';
+import {
+  forgeAttemptRoot,
+  forgeAttemptWorkerId,
+  forgeBranchName,
+  resolveLocalForgeTargetBranch,
+  restoreForgeWorkerWorktrees,
+} from '../server/forge-git-context.js';
 import { prepareForgeWorktrees } from '../server/forge-git.js';
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
-const git = async (cwd: string, ...args: string[]) => execFileAsync('git', args, { cwd, windowsHide: true, encoding: 'utf8' });
+const git = async (cwd: string, ...args: string[]) =>
+  execFileAsync('git', args, { cwd, windowsHide: true, encoding: 'utf8' });
 const ticketId = '11111111-1111-4111-8111-111111111111';
 const testBase = path.join(os.tmpdir(), 'opx');
 
@@ -37,9 +44,13 @@ describe('Forge F2 Git context recovery', () => {
     const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     expect(await resolveLocalForgeTargetBranch(root)).toBe('main');
     expect(forgeAttemptWorkerId(attemptId)).toBe('w-aaaaaaaaaaaa4aaa8aaaaaaaaaaa');
-    expect(forgeBranchName(ticketId, attemptId, 'integration')).toBe(`codex/forge/${ticketId}/${attemptId}/integration/head`);
+    expect(forgeBranchName(ticketId, attemptId, 'integration')).toBe(
+      `codex/forge/${ticketId}/${attemptId}/integration/head`
+    );
     const stateRoot = path.join(testBase, 'app-state');
-    expect(forgeAttemptRoot(stateRoot, ticketId, attemptId)).toBe(path.join(stateRoot, 'forge-worktrees', ticketId, attemptId));
+    expect(forgeAttemptRoot(stateRoot, ticketId, attemptId)).toBe(
+      path.join(stateRoot, 'forge-worktrees', ticketId, attemptId)
+    );
   });
 
   it('blocks when no local default/main branch can be resolved', async () => {
@@ -58,7 +69,14 @@ describe('Forge F2 Git context recovery', () => {
     const taskRoot = forgeAttemptRoot(stateRoot, ticketId, attemptId);
     await mkdir(path.dirname(taskRoot), { recursive: true });
     const base = (await git(root, 'rev-parse', 'HEAD')).stdout.trim();
-    const prepared = await prepareForgeWorktrees({ canonicalRoot: root, taskRoot, baseRef: 'main', ticketId, attemptId, workerIds: [workerId] });
+    const prepared = await prepareForgeWorktrees({
+      canonicalRoot: root,
+      taskRoot,
+      baseRef: 'main',
+      ticketId,
+      attemptId,
+      workerIds: [workerId],
+    });
     const ticket = {
       id: ticketId,
       workspaceRoot: root,
@@ -73,7 +91,16 @@ describe('Forge F2 Git context recovery', () => {
       sourceBaselineSha: base,
     } as ForgeAttempt;
 
-    await expect(restoreForgeWorkerWorktrees(ticket, attempt)).resolves.toMatchObject({ attemptId, canonicalRoot: root, taskRoot });
-    await expect(restoreForgeWorkerWorktrees(ticket, { ...attempt, worktreeRoot: path.join(taskRoot, 'worker-forged') })).rejects.toThrow(/generated attempt root/i);
+    await expect(restoreForgeWorkerWorktrees(ticket, attempt)).resolves.toMatchObject({
+      attemptId,
+      canonicalRoot: root,
+      taskRoot,
+    });
+    await expect(
+      restoreForgeWorkerWorktrees(ticket, {
+        ...attempt,
+        worktreeRoot: path.join(taskRoot, 'worker-forged'),
+      })
+    ).rejects.toThrow(/generated attempt root/i);
   });
 });

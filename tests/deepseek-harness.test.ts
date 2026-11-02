@@ -24,22 +24,42 @@ const baseLaunch = (mode = 'normal', configuredMcpServers?: readonly string[]) =
   harnessVersion: '0.2.1-fixture',
 });
 const fullAccess = resolveDeepSeekHarnessPermission({
-  approvalPolicy: 'full-access', selectedForTask: true, workspaceRoot: cwd, writeScope: [cwd], requiresFilesystemConfinement: false,
+  approvalPolicy: 'full-access',
+  selectedForTask: true,
+  workspaceRoot: cwd,
+  writeScope: [cwd],
+  requiresFilesystemConfinement: false,
 });
-const options = (mode = 'normal', sessionId?: string, configuredMcpServers?: readonly string[]) => ({
-  launch: baseLaunch(mode, configuredMcpServers), cwd, provider: 'opencode-go', model: 'deepseek-v4.1-flash',
-  reasoningEffort: 'max', permission: fullAccess, ...(sessionId ? { sessionId } : {}), requestTimeoutMs: 5000,
+const options = (
+  mode = 'normal',
+  sessionId?: string,
+  configuredMcpServers?: readonly string[]
+) => ({
+  launch: baseLaunch(mode, configuredMcpServers),
+  cwd,
+  provider: 'opencode-go',
+  model: 'deepseek-v4.1-flash',
+  reasoningEffort: 'max',
+  permission: fullAccess,
+  ...(sessionId ? { sessionId } : {}),
+  requestTimeoutMs: 5000,
 });
 
 describe('DeepSeek Harness SDK worker boundary', () => {
   it('maps the selected OpenCode Go provider to the installed native DSH route', async () => {
     expect(deepSeekHarnessProviderRoute('opencode-go')).toBe('dsh-opencode-go');
-    expect(() => deepSeekHarnessProviderRoute('unknown-provider')).toThrow(/no installed native DSH route/i);
+    expect(() => deepSeekHarnessProviderRoute('unknown-provider')).toThrow(
+      /no installed native DSH route/i
+    );
 
     const runtime = new DeepSeekHarnessSdkRuntime({
       ...options('init-provider'),
       provider: 'opencode-go',
-      launch: { ...baseLaunch('init-provider'), profileName: 'opnex-sdk', args: [fixture, '--profile', 'opnex-sdk', '--fixture=init-provider'] },
+      launch: {
+        ...baseLaunch('init-provider'),
+        profileName: 'opnex-sdk',
+        args: [fixture, '--profile', 'opnex-sdk', '--fixture=init-provider'],
+      },
     });
     const info = await runtime.connect();
     expect(info).toMatchObject({
@@ -59,18 +79,37 @@ describe('DeepSeek Harness SDK worker boundary', () => {
       await mkdir(appResources, { recursive: true });
       const exe = path.join(root, 'DeepSeek Harness.exe');
       const appArchive = path.join(appResources, 'app.asar');
-      const cli = path.join(root, 'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js');
+      const cli = path.join(
+        root,
+        'resources',
+        'app.asar',
+        'dsh',
+        'node_modules',
+        '@deepseek-ai',
+        'dsh-desktop-host',
+        'lib',
+        'cli.js'
+      );
       await writeFile(exe, 'fixture');
       await writeFile(appArchive, 'fixture');
       const launch = createWindowsDeepSeekHarnessSdkLaunch(root, '0.2.1-fixture');
       expect(launch.command).toBe(exe);
       const storage = deepSeekHarnessConversationStorage();
-      expect(launch.args).toEqual(['--expose-internals', cli, '--profile', 'opnex-sdk', '--patch', storage.patchPath]);
+      expect(launch.args).toEqual([
+        '--expose-internals',
+        cli,
+        '--profile',
+        'opnex-sdk',
+        '--patch',
+        storage.patchPath,
+      ]);
       expect(launch.profileName).toBe('opnex-sdk');
       expect(launch.conversationStorage).toEqual(storage);
       expect(launch.harnessVersion).toBe('0.2.1-fixture');
       expect(launch.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' });
-      expect(() => createWindowsDeepSeekHarnessSdkLaunch(path.join(root, 'missing'))).toThrow(/does not contain the verified SDK runtime files/i);
+      expect(() => createWindowsDeepSeekHarnessSdkLaunch(path.join(root, 'missing'))).toThrow(
+        /does not contain the verified SDK runtime files/i
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -92,10 +131,17 @@ describe('DeepSeek Harness SDK worker boundary', () => {
       expect(persisted).toContain("name: '@deepseek-ai/dsh-session-persistence-jsonl'");
       expect(persisted).toContain("name: '@deepseek-ai/dsh-storage-json'");
       expect(persisted).toContain("name: '@deepseek-ai/dsh-attachment-local'");
-      expect(persisted).not.toMatch(/system-prompt|agent-instructions|tool-|provider|model|credential/i);
+      expect(persisted).not.toMatch(
+        /system-prompt|agent-instructions|tool-|provider|model|credential/i
+      );
 
-      const conflicting = { ...storage, patchContents: `${storage.patchContents}unexpected: true\n` };
-      await expect(prepareDeepSeekHarnessConversationStorage(conflicting)).rejects.toThrow(/unexpected contents/i);
+      const conflicting = {
+        ...storage,
+        patchContents: `${storage.patchContents}unexpected: true\n`,
+      };
+      await expect(prepareDeepSeekHarnessConversationStorage(conflicting)).rejects.toThrow(
+        /unexpected contents/i
+      );
       expect(await readFile(storage.patchPath, 'utf8')).toBe(storage.patchContents);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -103,8 +149,13 @@ describe('DeepSeek Harness SDK worker boundary', () => {
   });
 
   it('keeps native DSH storage untouched or redirects it to the selected isolated folder', () => {
-    const root = path.join(os.tmpdir(), 'opnex-storage-test'), home = path.join(root, 'external-sessions');
-    const base = { command: 'dsh.exe', args: ['--profile', 'opnex-sdk', '--patch', 'old-storage.patch.yml'], profileName: 'opnex-sdk' };
+    const root = path.join(os.tmpdir(), 'opnex-storage-test'),
+      home = path.join(root, 'external-sessions');
+    const base = {
+      command: 'dsh.exe',
+      args: ['--profile', 'opnex-sdk', '--patch', 'old-storage.patch.yml'],
+      profileName: 'opnex-sdk',
+    };
     const isolated = deepSeekHarnessConversationStorage(root, home);
     const native = withDeepSeekHarnessConversationStorage(base);
     const selected = withDeepSeekHarnessConversationStorage(base, isolated);
@@ -118,29 +169,50 @@ describe('DeepSeek Harness SDK worker boundary', () => {
   it('runs one task-owned SDK session, forwards events, and reports provider capability/version metadata', async () => {
     const runtime = new DeepSeekHarnessSdkRuntime(options());
     const notifications: Array<{ method: string; params: unknown }> = [];
-    runtime.on('notification', notification => notifications.push(notification));
+    runtime.on('notification', (notification) => notifications.push(notification));
 
     const info = await runtime.connect();
     expect(info).toMatchObject({
-      provider: 'opencode-go', requestedProviderRoute: 'dsh-opencode-go', model: 'deepseek-v4.1-flash', requestedReasoningEffort: 'max',
-      harnessVersion: '0.2.1-fixture', permissionMode: 'native-profile',
-      selectedApprovalPolicy: 'full-access', workspaceRoot: cwd, writeScope: [cwd], access: 'native-profile',
+      provider: 'opencode-go',
+      requestedProviderRoute: 'dsh-opencode-go',
+      model: 'deepseek-v4.1-flash',
+      requestedReasoningEffort: 'max',
+      harnessVersion: '0.2.1-fixture',
+      permissionMode: 'native-profile',
+      selectedApprovalPolicy: 'full-access',
+      workspaceRoot: cwd,
+      writeScope: [cwd],
+      access: 'native-profile',
       filesystemScope: 'native-profile',
-      mcpToolCatalog: { status: 'not-configured', configuredServerNames: [], availableServerNames: [], missingServerNames: [], toolNames: [] },
+      mcpToolCatalog: {
+        status: 'not-configured',
+        configuredServerNames: [],
+        availableServerNames: [],
+        missingServerNames: [],
+        toolNames: [],
+      },
       serverInfo: { name: 'deepseek-harness-sdk-runtime', version: 'fixture-0.0.1' },
       capabilities: {
-        sessionResume: true, workingDirectory: true, approvalResponse: false,
-        steering: false, gracefulSessionCancellation: false, cancellation: 'process-tree-termination',
+        sessionResume: true,
+        workingDirectory: true,
+        approvalResponse: false,
+        steering: false,
+        gracefulSessionCancellation: false,
+        cancellation: 'process-tree-termination',
       },
     });
-    const sessionId = await runtime.startSession([{ type: 'text', text: 'Complete this fixture task.' }]);
+    const sessionId = await runtime.startSession([
+      { type: 'text', text: 'Complete this fixture task.' },
+    ]);
     expect(sessionId).toBe(runtime.sessionId);
     expect(await runtime.waitSession()).toMatchObject({ sessionId, status: 'idle' });
     expect(await runtime.getWorkingDirectory()).toBe(cwd);
     const nextCwd = path.join(cwd, 'server');
     expect(await runtime.setWorkingDirectory(nextCwd)).toBe(nextCwd);
-    await expect(runtime.setWorkingDirectory(path.dirname(cwd))).rejects.toThrow(/cannot move outside this task’s workspace root/i);
-    expect(notifications.map(event => event.method)).toEqual(['session.status', 'session.event']);
+    await expect(runtime.setWorkingDirectory(path.dirname(cwd))).rejects.toThrow(
+      /cannot move outside this task’s workspace root/i
+    );
+    expect(notifications.map((event) => event.method)).toEqual(['session.status', 'session.event']);
     await runtime.shutdown();
     expect(runtime.ready).toBe(false);
 
@@ -150,27 +222,52 @@ describe('DeepSeek Harness SDK worker boundary', () => {
   });
 
   it('keeps the user DSH home while excluding unrelated app credentials from the SDK process', async () => {
-    const priorHome=process.env.DSH_HOME,priorSecret=process.env.OPNEX_FIXTURE_SECRET;const nativeHome=path.join(os.tmpdir(),'native-user-dsh-home');let childEnvironment:NodeJS.ProcessEnv|undefined;
-    process.env.DSH_HOME=nativeHome;process.env.OPNEX_FIXTURE_SECRET='fixture-only';
-    const captureSpawn=(command:string,args:readonly string[]|undefined,spawnOptions:import('node:child_process').SpawnOptions|undefined)=>{childEnvironment=spawnOptions?.env;return spawn(command,[...(args||[])],spawnOptions??{});};
-    const runtime=new DeepSeekHarnessSdkRuntime({...options(),spawnProcess:captureSpawn as unknown as typeof spawn});
-    try{
-      await runtime.connect();expect(childEnvironment?.DSH_HOME).toBe(nativeHome);expect(childEnvironment).not.toHaveProperty('OPNEX_FIXTURE_SECRET');expect(runtime.runtimeInfo).toMatchObject({profileName:'sdk'});
-    }finally{
-      await runtime.shutdown();if(priorHome===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=priorHome;if(priorSecret===undefined)delete process.env.OPNEX_FIXTURE_SECRET;else process.env.OPNEX_FIXTURE_SECRET=priorSecret;
+    const priorHome = process.env.DSH_HOME,
+      priorSecret = process.env.OPNEX_FIXTURE_SECRET;
+    const nativeHome = path.join(os.tmpdir(), 'native-user-dsh-home');
+    let childEnvironment: NodeJS.ProcessEnv | undefined;
+    process.env.DSH_HOME = nativeHome;
+    process.env.OPNEX_FIXTURE_SECRET = 'fixture-only';
+    const captureSpawn = (
+      command: string,
+      args: readonly string[] | undefined,
+      spawnOptions: import('node:child_process').SpawnOptions | undefined
+    ) => {
+      childEnvironment = spawnOptions?.env;
+      return spawn(command, [...(args || [])], spawnOptions ?? {});
+    };
+    const runtime = new DeepSeekHarnessSdkRuntime({
+      ...options(),
+      spawnProcess: captureSpawn as unknown as typeof spawn,
+    });
+    try {
+      await runtime.connect();
+      expect(childEnvironment?.DSH_HOME).toBe(nativeHome);
+      expect(childEnvironment).not.toHaveProperty('OPNEX_FIXTURE_SECRET');
+      expect(runtime.runtimeInfo).toMatchObject({ profileName: 'sdk' });
+    } finally {
+      await runtime.shutdown();
+      if (priorHome === undefined) delete process.env.DSH_HOME;
+      else process.env.DSH_HOME = priorHome;
+      if (priorSecret === undefined) delete process.env.OPNEX_FIXTURE_SECRET;
+      else process.env.OPNEX_FIXTURE_SECRET = priorSecret;
     }
   });
 
   it('reports only session-observed MCP tool names and preserves tool call/result provenance', async () => {
-    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['project_notes', 'opnex_skills']));
+    const runtime = new DeepSeekHarnessSdkRuntime(
+      options('mcp-catalog', undefined, ['project_notes', 'opnex_skills'])
+    );
     const catalogEvents: unknown[] = [];
     const notifications: Array<{ method: string; params: unknown }> = [];
-    runtime.on('mcpToolCatalog', catalog => catalogEvents.push(catalog));
-    runtime.on('notification', notification => notifications.push(notification));
+    runtime.on('mcpToolCatalog', (catalog) => catalogEvents.push(catalog));
+    runtime.on('notification', (notification) => notifications.push(notification));
 
     const connected = await runtime.connect();
     expect(connected.mcpToolCatalog.status).toBe('pending');
-    const sessionId = await runtime.startSession([{ type: 'text', text: 'Read-only catalog check.' }]);
+    const sessionId = await runtime.startSession([
+      { type: 'text', text: 'Read-only catalog check.' },
+    ]);
     await runtime.waitSession(sessionId);
 
     expect(runtime.runtimeInfo?.mcpToolCatalog).toEqual({
@@ -182,62 +279,143 @@ describe('DeepSeek Harness SDK worker boundary', () => {
       observedAtSequence: 17,
     });
     expect(catalogEvents).toHaveLength(1);
-    const toolCall = notifications.find(item => (item.params as any)?.event?.type === 'tool/call')?.params as any;
-    const toolResult = notifications.find(item => (item.params as any)?.event?.type === 'tool/result')?.params as any;
-    expect(toolCall.event.data).toMatchObject({ turn: 1, step: 1, callId: 'fixture-mcp-call', name: 'mcp__project_notes__search' });
+    const toolCall = notifications.find((item) => (item.params as any)?.event?.type === 'tool/call')
+      ?.params as any;
+    const toolResult = notifications.find(
+      (item) => (item.params as any)?.event?.type === 'tool/result'
+    )?.params as any;
+    expect(toolCall.event.data).toMatchObject({
+      turn: 1,
+      step: 1,
+      callId: 'fixture-mcp-call',
+      name: 'mcp__project_notes__search',
+    });
     expect(typeof toolCall.event.data.arguments).toBe('string');
-    expect(toolResult.event.data).toMatchObject({ turn: 1, step: 1, message: { role: 'tool', toolCallId: 'fixture-mcp-call', source: { kind: 'tool', callId: 'fixture-mcp-call' }, isError: false } });
+    expect(toolResult.event.data).toMatchObject({
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'tool',
+        toolCallId: 'fixture-mcp-call',
+        source: { kind: 'tool', callId: 'fixture-mcp-call' },
+        isError: false,
+      },
+    });
     expect(toolResult.event.sourceEventSeqs).toEqual([18]);
     await runtime.shutdown();
   });
 
   it('marks a configured MCP server missing when the real session header omits its tools', async () => {
-    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['project_notes', 'missing-server']));
+    const runtime = new DeepSeekHarnessSdkRuntime(
+      options('mcp-catalog', undefined, ['project_notes', 'missing-server'])
+    );
     await runtime.startSession([{ type: 'text', text: 'Read-only catalog check.' }]);
     await runtime.waitSession();
     expect(runtime.mcpToolCatalog).toMatchObject({
       status: 'missing-tools',
-      availableServerNames: ['opnex_skills','project_notes'],
+      availableServerNames: ['opnex_skills', 'project_notes'],
       missingServerNames: ['missing-server'],
     });
     await runtime.shutdown();
   });
 
   it('fails closed for permission combinations the installed SDK cannot honor', () => {
-    expect(resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'on-request', selectedForTask: true, workspaceRoot: cwd, writeScope: [], requiresFilesystemConfinement: false,
-    })).toMatchObject({ permissionMode: 'read-only', access: 'read-only' });
-    expect(resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'full-access', selectedForTask: true, workspaceRoot: cwd, writeScope: [], requiresFilesystemConfinement: false,
-    })).toMatchObject({ permissionMode: 'read-only', access: 'read-only', approvalPolicy: 'full-access' });
-    expect(() => resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'on-request', selectedForTask: true, workspaceRoot: cwd, writeScope: [cwd], requiresFilesystemConfinement: false,
-    })).toThrow(/cannot run this writable task under the selected on-request policy/i);
-    expect(() => resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'untrusted', selectedForTask: true, workspaceRoot: cwd, writeScope: [cwd], requiresFilesystemConfinement: false,
-    })).toThrow(/cannot run this writable task under the selected untrusted policy/i);
-    expect(() => resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'never', selectedForTask: true, workspaceRoot: cwd, writeScope: [], requiresFilesystemConfinement: false,
-    })).toThrow(/no native preset that matches the selected never policy/i);
-    expect(() => resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'full-access', selectedForTask: true, workspaceRoot: cwd, writeScope: [cwd], requiresFilesystemConfinement: true,
-    })).toThrow(/cannot enforce the task’s required filesystem path confinement/i);
-    expect(() => resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'full-access', selectedForTask: true, workspaceRoot: cwd, writeScope: [], requiresFilesystemConfinement: true,
-    })).toThrow(/cannot enforce the task’s required filesystem path confinement/i);
-    expect(() => resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'full-access', selectedForTask: false, workspaceRoot: cwd, writeScope: [cwd], requiresFilesystemConfinement: false,
-    })).toThrow(/will not infer or change the current policy/i);
-    expect(() => resolveDeepSeekHarnessPermission({
-      approvalPolicy: 'full-access', selectedForTask: true, workspaceRoot: cwd, writeScope: [path.dirname(cwd)], requiresFilesystemConfinement: false,
-    })).toThrow(/write scope escaped the task-owned worktree/i);
+    expect(
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'on-request',
+        selectedForTask: true,
+        workspaceRoot: cwd,
+        writeScope: [],
+        requiresFilesystemConfinement: false,
+      })
+    ).toMatchObject({ permissionMode: 'read-only', access: 'read-only' });
+    expect(
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'full-access',
+        selectedForTask: true,
+        workspaceRoot: cwd,
+        writeScope: [],
+        requiresFilesystemConfinement: false,
+      })
+    ).toMatchObject({
+      permissionMode: 'read-only',
+      access: 'read-only',
+      approvalPolicy: 'full-access',
+    });
+    expect(() =>
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'on-request',
+        selectedForTask: true,
+        workspaceRoot: cwd,
+        writeScope: [cwd],
+        requiresFilesystemConfinement: false,
+      })
+    ).toThrow(/cannot run this writable task under the selected on-request policy/i);
+    expect(() =>
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'untrusted',
+        selectedForTask: true,
+        workspaceRoot: cwd,
+        writeScope: [cwd],
+        requiresFilesystemConfinement: false,
+      })
+    ).toThrow(/cannot run this writable task under the selected untrusted policy/i);
+    expect(() =>
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'never',
+        selectedForTask: true,
+        workspaceRoot: cwd,
+        writeScope: [],
+        requiresFilesystemConfinement: false,
+      })
+    ).toThrow(/no native preset that matches the selected never policy/i);
+    expect(() =>
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'full-access',
+        selectedForTask: true,
+        workspaceRoot: cwd,
+        writeScope: [cwd],
+        requiresFilesystemConfinement: true,
+      })
+    ).toThrow(/cannot enforce the task’s required filesystem path confinement/i);
+    expect(() =>
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'full-access',
+        selectedForTask: true,
+        workspaceRoot: cwd,
+        writeScope: [],
+        requiresFilesystemConfinement: true,
+      })
+    ).toThrow(/cannot enforce the task’s required filesystem path confinement/i);
+    expect(() =>
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'full-access',
+        selectedForTask: false,
+        workspaceRoot: cwd,
+        writeScope: [cwd],
+        requiresFilesystemConfinement: false,
+      })
+    ).toThrow(/will not infer or change the current policy/i);
+    expect(() =>
+      resolveDeepSeekHarnessPermission({
+        approvalPolicy: 'full-access',
+        selectedForTask: true,
+        workspaceRoot: cwd,
+        writeScope: [path.dirname(cwd)],
+        requiresFilesystemConfinement: false,
+      })
+    ).toThrow(/write scope escaped the task-owned worktree/i);
   });
 
   it('does not leak or approve an unrouteable SDK approval event', async () => {
     const runtime = new DeepSeekHarnessSdkRuntime(options('approval'));
     let approvalMessage = '';
-    runtime.on('approvalRequired', event => { approvalMessage = event.message; });
-    await expect(runtime.startSession([{ type: 'text', text: 'This fixture triggers an approval.' }])).rejects.toMatchObject({ code: 'interrupted' });
+    runtime.on('approvalRequired', (event) => {
+      approvalMessage = event.message;
+    });
+    await expect(
+      runtime.startSession([{ type: 'text', text: 'This fixture triggers an approval.' }])
+    ).rejects.toMatchObject({ code: 'interrupted' });
     expect(approvalMessage).toMatch(/no approval response method/i);
     expect(runtime.ready).toBe(false);
   });
@@ -245,7 +423,11 @@ describe('DeepSeek Harness SDK worker boundary', () => {
   it('sanitizes auth errors returned by the Harness SDK', async () => {
     const runtime = new DeepSeekHarnessSdkRuntime(options('auth-error'));
     let caught: unknown;
-    try { await runtime.connect(); } catch (error) { caught = error; }
+    try {
+      await runtime.connect();
+    } catch (error) {
+      caught = error;
+    }
     expect(caught).toBeInstanceOf(DeepSeekHarnessError);
     expect(caught).toMatchObject({ code: 'authentication', method: 'initialize', rpcCode: -32001 });
     expect((caught as Error).message).toMatch(/sign in through the installed Harness profile/i);
@@ -260,7 +442,11 @@ describe('DeepSeek Harness SDK worker boundary', () => {
 
   it('rejects steering and approval responses instead of dropping them', async () => {
     const runtime = new DeepSeekHarnessSdkRuntime(options());
-    await expect(runtime.steer([{ type: 'text', text: 'changed assignment' }])).rejects.toMatchObject({ code: 'unsupported-capability' });
-    await expect(runtime.respondToApproval({ decision: 'approve' })).rejects.toMatchObject({ code: 'unsupported-capability' });
+    await expect(
+      runtime.steer([{ type: 'text', text: 'changed assignment' }])
+    ).rejects.toMatchObject({ code: 'unsupported-capability' });
+    await expect(runtime.respondToApproval({ decision: 'approve' })).rejects.toMatchObject({
+      code: 'unsupported-capability',
+    });
   });
 });

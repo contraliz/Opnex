@@ -187,8 +187,17 @@ export function summarizeSessionUsage(task: Task | null): SessionUsageSummary {
     considerTaskLevelThreads(threadMap, task);
   }
 
-  const threads = [...threadMap.values()].sort((a, b) => a.latestPassIndex - b.latestPassIndex || a.role.localeCompare(b.role) || a.threadId.localeCompare(b.threadId));
-  const roles = Object.fromEntries(roleFields.map(([role]) => [role, summarize(threads.filter((thread) => thread.role === role))])) as Record<WorkflowRole, SessionUsageBucket>;
-  const other = summarize(threads.filter((thread) => thread.role !== 'orchestrator' && thread.role !== 'worker'));
+  const threads = [...threadMap.values()].sort(
+    (a, b) =>
+      a.latestPassIndex - b.latestPassIndex ||
+      a.role.localeCompare(b.role) ||
+      a.threadId.localeCompare(b.threadId)
+  );
+  const roles = Object.fromEntries(
+    roleFields.map(([role]) => [role, summarize(threads.filter((thread) => thread.role === role))])
+  ) as Record<WorkflowRole, SessionUsageBucket>;
+  const other = summarize(
+    threads.filter((thread) => thread.role !== 'orchestrator' && thread.role !== 'worker')
+  );
   return { total: summarize(threads), other, roles, threads };
 }

@@ -1,11 +1,21 @@
 const { existsSync, readdirSync } = require('node:fs');
 const path = require('node:path');
 
-function findPackagedLauncher(directory, { platform = process.platform, arch = process.arch } = {}) {
+function findPackagedLauncher(
+  directory,
+  { platform = process.platform, arch = process.arch } = {}
+) {
   if (!existsSync(directory)) return null;
   if (platform === 'darwin') {
     const architectureDirectory = arch === 'arm64' ? 'mac-arm64' : 'mac';
-    const executable = path.join(directory, architectureDirectory, 'Opnex.app', 'Contents', 'MacOS', 'Opnex');
+    const executable = path.join(
+      directory,
+      architectureDirectory,
+      'Opnex.app',
+      'Contents',
+      'MacOS',
+      'Opnex'
+    );
     return existsSync(executable) ? { executable, args: [] } : null;
   }
   for (const entry of readdirSync(directory, { withFileTypes: true })) {

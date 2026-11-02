@@ -13,13 +13,19 @@ const strongMark = Decoration.mark({ class: 'cm-live-strong' });
 const emphasisMark = Decoration.mark({ class: 'cm-live-emphasis' });
 const codeMark = Decoration.mark({ class: 'cm-live-code' });
 const linkMark = Decoration.mark({ class: 'cm-live-link' });
-const headingMarks = [1, 2, 3, 4, 5, 6].map(level => Decoration.mark({ class: `cm-live-heading-${level}` }));
+const headingMarks = [1, 2, 3, 4, 5, 6].map((level) =>
+  Decoration.mark({ class: `cm-live-heading-${level}` })
+);
 
 export function prepareMarkdownSubmission(source: string): string | null {
   return source.trim() ? source : null;
 }
 
-export function markdownLiveDecorations(state: EditorState, selection: SelectionRange, focused: boolean): DecorationSet {
+export function markdownLiveDecorations(
+  state: EditorState,
+  selection: SelectionRange,
+  focused: boolean
+): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   const add = (decoration: Decoration, from: number, to: number) => {
     if (from < to) decorations.push(decoration.range(from, to));
@@ -47,7 +53,15 @@ export function markdownLiveDecorations(state: EditorState, selection: Selection
           const bodyFrom = markers[0].to;
           const bodyTo = markers[markers.length - 1].from;
           if (!reveal(node.from, node.to)) {
-            add(name === 'StrongEmphasis' ? strongMark : name === 'Emphasis' ? emphasisMark : codeMark, bodyFrom, bodyTo);
+            add(
+              name === 'StrongEmphasis'
+                ? strongMark
+                : name === 'Emphasis'
+                  ? emphasisMark
+                  : codeMark,
+              bodyFrom,
+              bodyTo
+            );
             for (const marker of markers) add(hiddenMarker, marker.from, marker.to);
           }
         }
@@ -78,13 +92,19 @@ function buildLiveDecorations(view: EditorView): DecorationSet {
   return markdownLiveDecorations(view.state, view.state.selection.main, view.hasFocus);
 }
 
-const livePreview = ViewPlugin.fromClass(class {
-  decorations: DecorationSet;
-  constructor(view: EditorView) { this.decorations = buildLiveDecorations(view); }
-  update(update: import('@codemirror/view').ViewUpdate) {
-    if (update.docChanged || update.selectionSet || update.focusChanged) this.decorations = buildLiveDecorations(update.view);
-  }
-}, { decorations: plugin => plugin.decorations });
+const livePreview = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = buildLiveDecorations(view);
+    }
+    update(update: import('@codemirror/view').ViewUpdate) {
+      if (update.docChanged || update.selectionSet || update.focusChanged)
+        this.decorations = buildLiveDecorations(update.view);
+    }
+  },
+  { decorations: (plugin) => plugin.decorations }
+);
 
 const markdownHighlight = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--accent-soft)', fontWeight: '650' },
@@ -98,7 +118,13 @@ const markdownHighlight = HighlightStyle.define([
 ]);
 
 const editorTheme = EditorView.theme({
-  '&': { height: '100%', minHeight: '55px', backgroundColor: 'transparent', color: 'var(--text)', fontSize: '14px' },
+  '&': {
+    height: '100%',
+    minHeight: '55px',
+    backgroundColor: 'transparent',
+    color: 'var(--text)',
+    fontSize: '14px',
+  },
   '.cm-scroller': { overflow: 'auto', fontFamily: 'inherit', lineHeight: '1.55' },
   '.cm-content': { minHeight: '55px', padding: '6px 7px', caretColor: 'var(--accent-soft)' },
   '.cm-line': { padding: '0' },
@@ -116,10 +142,19 @@ type Props = {
   hint: string;
   inputRef: { current: HTMLElement | null };
   onKeyDown?: (event: KeyboardEvent, view: EditorView) => boolean;
-  onCompositionChange?: (composing:boolean)=>void;
+  onCompositionChange?: (composing: boolean) => void;
 };
 
-export function LiveMarkdownEditor({ value, onChange, submit, disabled, hint, inputRef, onKeyDown, onCompositionChange }: Props) {
+export function LiveMarkdownEditor({
+  value,
+  onChange,
+  submit,
+  disabled,
+  hint,
+  inputRef,
+  onKeyDown,
+  onCompositionChange,
+}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const latest = useRef({ onChange, submit, disabled, onKeyDown });
@@ -138,21 +173,32 @@ export function LiveMarkdownEditor({ value, onChange, submit, disabled, hint, in
           EditorView.lineWrapping,
           EditorView.editable.of(true),
           placeholderConfig.of(placeholder(hint)),
-          EditorView.contentAttributes.of({ role: 'textbox', 'aria-label': 'Task message', 'aria-multiline': 'true', spellcheck: 'false' }),
-          EditorView.updateListener.of(update => {
+          EditorView.contentAttributes.of({
+            role: 'textbox',
+            'aria-label': 'Task message',
+            'aria-multiline': 'true',
+            spellcheck: 'false',
+          }),
+          EditorView.updateListener.of((update) => {
             if (update.docChanged) latest.current.onChange(update.state.doc.toString());
           }),
-          Prec.highest(EditorView.domEventHandlers({
-            keydown(event, current) {
-              if (event.key === 'Enter' && (event.isComposing || current.composing || event.keyCode === 229)) return false;
-              if (latest.current.onKeyDown?.(event, current)) return true;
-              if (event.key !== 'Enter' || event.shiftKey) return false;
-              if (event.isComposing || current.composing || event.keyCode === 229) return false;
-              event.preventDefault();
-              if (!latest.current.disabled) latest.current.submit();
-              return true;
-            },
-          })),
+          Prec.highest(
+            EditorView.domEventHandlers({
+              keydown(event, current) {
+                if (
+                  event.key === 'Enter' &&
+                  (event.isComposing || current.composing || event.keyCode === 229)
+                )
+                  return false;
+                if (latest.current.onKeyDown?.(event, current)) return true;
+                if (event.key !== 'Enter' || event.shiftKey) return false;
+                if (event.isComposing || current.composing || event.keyCode === 229) return false;
+                event.preventDefault();
+                if (!latest.current.disabled) latest.current.submit();
+                return true;
+              },
+            })
+          ),
           livePreview,
           editorTheme,
         ],
@@ -179,5 +225,13 @@ export function LiveMarkdownEditor({ value, onChange, submit, disabled, hint, in
     view.dispatch({ effects: placeholderConfig.reconfigure(placeholder(hint)) });
   }, [hint]);
 
-  return <div className="live-markdown-editor" ref={host} data-placeholder={hint} onCompositionStart={()=>onCompositionChange?.(true)} onCompositionEnd={()=>onCompositionChange?.(false)} />;
+  return (
+    <div
+      className='live-markdown-editor'
+      ref={host}
+      data-placeholder={hint}
+      onCompositionStart={() => onCompositionChange?.(true)}
+      onCompositionEnd={() => onCompositionChange?.(false)}
+    />
+  );
 }

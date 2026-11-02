@@ -39,9 +39,20 @@
   font-size: 11px;
 }
 
-.native-browser-title > svg:first-child { flex: 0 0 auto; color: #a78bfa; }
-.native-browser-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.native-browser-title .spinning { flex: 0 0 auto; color: #a78bfa; }
+.native-browser-title > svg:first-child {
+  flex: 0 0 auto;
+  color: #a78bfa;
+}
+.native-browser-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-browser-title .spinning {
+  flex: 0 0 auto;
+  color: #a78bfa;
+}
 
 .native-browser-address {
   flex: 1 1 280px;
@@ -52,8 +63,14 @@
   margin: 0;
 }
 
-.native-browser-nav { flex: 0 0 auto; display: flex; align-items: center; gap: 1px; }
-.native-browser-nav button,.native-browser-action {
+.native-browser-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.native-browser-nav button,
+.native-browser-action {
   min-width: 30px;
   min-height: 30px;
   display: inline-flex;
@@ -67,10 +84,25 @@
   color: #aaa;
   cursor: pointer;
 }
-.native-browser-nav button:hover:not(:disabled),.native-browser-action:hover:not(:disabled) { background: #292929; color: #eee; }
-.native-browser-nav button:disabled,.native-browser-action:disabled { opacity: .38; cursor: default; }
+.native-browser-nav button:hover:not(:disabled),
+.native-browser-action:hover:not(:disabled) {
+  background: #292929;
+  color: #eee;
+}
+.native-browser-nav button:disabled,
+.native-browser-action:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
 
-.native-browser-address-wrap { position: relative; flex: 1 1 auto; min-width: 48px; display: flex; flex-direction: column; gap: 6px; }
+.native-browser-address-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .native-browser-address input {
   width: 100%;
   min-width: 48px;
@@ -85,8 +117,13 @@
   font-size: 11px;
   text-align: center;
 }
-.native-browser-address input:focus-visible { border-color: #a78bfa; box-shadow: 0 0 0 2px #a78bfa33; }
-.native-browser-address input::placeholder { color: #858585; }
+.native-browser-address input:focus-visible {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 2px #a78bfa33;
+}
+.native-browser-address input::placeholder {
+  color: #858585;
+}
 .native-browser-go {
   flex: 0 0 auto;
   min-width: 37px;
@@ -98,7 +135,10 @@
   cursor: pointer;
   font-size: 10px;
 }
-.native-browser-go:hover { border-color: #a78bfa; color: #fff; }
+.native-browser-go:hover {
+  border-color: #a78bfa;
+  color: #fff;
+}
 
 .native-browser-suggestions {
   width: 100%;
@@ -123,16 +163,46 @@
   text-align: left;
   cursor: pointer;
 }
-.native-browser-suggestions button:hover,.native-browser-suggestions button[aria-selected="true"] { background: #38333f; }
-.native-browser-suggestions small { overflow: hidden; color: #999; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.native-browser-suggestions button:hover,
+.native-browser-suggestions button[aria-selected='true'] {
+  background: #38333f;
+}
+.native-browser-suggestions small {
+  overflow: hidden;
+  color: #999;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
 
-.native-browser-action { flex: 0 0 auto; min-width: 32px; white-space: nowrap; font-size: 10px; }
-.native-browser-new-tab { width: 32px; padding: 0; }
-.native-browser-clear-data { width: 32px; padding: 0; }
-.native-browser-toolbar.has-address-suggestions { align-items: flex-start; }
-.native-browser-toolbar.has-address-suggestions .native-browser-title,.native-browser-toolbar.has-address-suggestions > .native-browser-action { margin-top: 1px; }
-.native-browser-toolbar.has-address-suggestions .native-browser-nav,.native-browser-toolbar.has-address-suggestions .native-browser-go { margin-top: 0; }
-.native-browser-toolbar.has-address-suggestions .native-browser-address { align-items: flex-start; }
+.native-browser-action {
+  flex: 0 0 auto;
+  min-width: 32px;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.native-browser-new-tab {
+  width: 32px;
+  padding: 0;
+}
+.native-browser-clear-data {
+  width: 32px;
+  padding: 0;
+}
+.native-browser-toolbar.has-address-suggestions {
+  align-items: flex-start;
+}
+.native-browser-toolbar.has-address-suggestions .native-browser-title,
+.native-browser-toolbar.has-address-suggestions > .native-browser-action {
+  margin-top: 1px;
+}
+.native-browser-toolbar.has-address-suggestions .native-browser-nav,
+.native-browser-toolbar.has-address-suggestions .native-browser-go {
+  margin-top: 0;
+}
+.native-browser-toolbar.has-address-suggestions .native-browser-address {
+  align-items: flex-start;
+}
 
 .native-browser-feedback {
   z-index: 1;
@@ -147,8 +217,19 @@
   color: #e8c5c5;
   font-size: 10px;
 }
-.native-browser-feedback[role="status"] { background: #222932; color: #c5d4e8; }
-.native-browser-feedback button { margin-left: auto; display: inline-grid; place-items: center; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.native-browser-feedback[role='status'] {
+  background: #222932;
+  color: #c5d4e8;
+}
+.native-browser-feedback button {
+  margin-left: auto;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
 
 .native-browser-page {
   position: relative;
@@ -161,7 +242,8 @@
   overflow: hidden;
   background: #fff;
 }
-.native-browser-loading,.native-browser-unavailable {
+.native-browser-loading,
+.native-browser-unavailable {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -176,11 +258,23 @@
   text-align: center;
   font-size: 11px;
 }
-.native-browser-unavailable { position: absolute; inset: 48px 0 0; }
-.native-browser-unavailable > svg { color: #a78bfa; }
-.native-browser-unavailable strong { color: #eee; font-size: 13px; }
-.native-browser-unavailable code { color: #c6b1ff; }
-.native-browser-loading > svg { color: #a78bfa; }
+.native-browser-unavailable {
+  position: absolute;
+  inset: 48px 0 0;
+}
+.native-browser-unavailable > svg {
+  color: #a78bfa;
+}
+.native-browser-unavailable strong {
+  color: #eee;
+  font-size: 13px;
+}
+.native-browser-unavailable code {
+  color: #c6b1ff;
+}
+.native-browser-loading > svg {
+  color: #a78bfa;
+}
 
 .native-browser-load-error {
   position: absolute;
@@ -194,20 +288,61 @@
   background: #202020;
   color: #ddd;
 }
-.native-browser-load-error > div { max-width: min(640px,75%); display: grid; gap: 7px; }
-.native-browser-load-error strong { color: #eee; font-size: 15px; }
-.native-browser-load-error span { color: #aaa; overflow-wrap: anywhere; font-size: 11px; }
-.native-browser-load-error button { min-height: 31px; padding: 0 12px; border: 1px solid #454545; border-radius: 6px; background: #2a2a2a; color: #eee; cursor: pointer; }
-.native-browser-load-error button:hover { border-color: #a78bfa; }
+.native-browser-load-error > div {
+  max-width: min(640px, 75%);
+  display: grid;
+  gap: 7px;
+}
+.native-browser-load-error strong {
+  color: #eee;
+  font-size: 15px;
+}
+.native-browser-load-error span {
+  color: #aaa;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.native-browser-load-error button {
+  min-height: 31px;
+  padding: 0 12px;
+  border: 1px solid #454545;
+  border-radius: 6px;
+  background: #2a2a2a;
+  color: #eee;
+  cursor: pointer;
+}
+.native-browser-load-error button:hover {
+  border-color: #a78bfa;
+}
 
 @container native-browser-workspace (max-width: 680px) {
-  .native-browser-toolbar { flex-wrap: wrap; gap: 6px; padding: 7px 8px; }
-  .native-browser-title { flex: 0 0 auto; max-width: 85px; }
-  .native-browser-address { flex: 1 1 250px; min-width: 48px; order: 3; }
-  .native-browser-action span { display: none; }
-  .native-browser-page { min-height: 0; }
+  .native-browser-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 7px 8px;
+  }
+  .native-browser-title {
+    flex: 0 0 auto;
+    max-width: 85px;
+  }
+  .native-browser-address {
+    flex: 1 1 250px;
+    min-width: 48px;
+    order: 3;
+  }
+  .native-browser-action span {
+    display: none;
+  }
+  .native-browser-page {
+    min-height: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .native-browser-toolbar *, .native-browser-feedback *, .native-browser-page * { animation-duration: 0s !important; transition-duration: 0s !important; }
+  .native-browser-toolbar *,
+  .native-browser-feedback *,
+  .native-browser-page * {
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
 }

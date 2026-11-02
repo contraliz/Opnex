@@ -2,17 +2,29 @@ import { fileURLToPath } from 'node:url';
 import { stateDirectory } from './paths.js';
 import { resolveMcpHelperLaunch } from './mcp-helper-runtime.js';
 
-export function skillLibraryMcpServerConfig({taskId,role}:{taskId:string;role:'direct'|'simple'|'orchestrator'|'worker'}):Record<string,unknown>{
-  const modulePath=fileURLToPath(import.meta.url);
-  const helperFile=modulePath.endsWith('.ts')?'skills-mcp-gateway.ts':'skills-mcp-gateway.js';
-  const launch=resolveMcpHelperLaunch({modulePath,helperFile});
-  const dataDirectory=stateDirectory();
+export function skillLibraryMcpServerConfig({
+  taskId,
+  role,
+}: {
+  taskId: string;
+  role: 'direct' | 'simple' | 'orchestrator' | 'worker';
+}): Record<string, unknown> {
+  const modulePath = fileURLToPath(import.meta.url);
+  const helperFile = modulePath.endsWith('.ts') ? 'skills-mcp-gateway.ts' : 'skills-mcp-gateway.js';
+  const launch = resolveMcpHelperLaunch({ modulePath, helperFile });
+  const dataDirectory = stateDirectory();
   return {
-    command:launch.command,
-    args:launch.args,
-    cwd:launch.cwd,
-    enabled:true,
-    enabled_tools:['skills_list','skills_search','skills_load','skills_read_file','skills_save'],
-    env:{OPNEX_DATA_DIR:dataDirectory,OPNEX_SKILLS_TASK_ID:taskId,OPNEX_SKILLS_ROLE:role},
+    command: launch.command,
+    args: launch.args,
+    cwd: launch.cwd,
+    enabled: true,
+    enabled_tools: [
+      'skills_list',
+      'skills_search',
+      'skills_load',
+      'skills_read_file',
+      'skills_save',
+    ],
+    env: { OPNEX_DATA_DIR: dataDirectory, OPNEX_SKILLS_TASK_ID: taskId, OPNEX_SKILLS_ROLE: role },
   };
 }

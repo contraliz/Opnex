@@ -2,189 +2,1408 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { beginPass, currentPass, isCurrentPassThread, syncCurrentPass, upgradeStoredState, type Message, type Task } from '../server/state.js';
-import { buildPriorConversationContext, formatCurrentPassConversation } from '../server/pass-context.js';
+import {
+  beginPass,
+  currentPass,
+  isCurrentPassThread,
+  syncCurrentPass,
+  upgradeStoredState,
+  type Message,
+  type Task,
+} from '../server/state.js';
+import {
+  buildPriorConversationContext,
+  formatCurrentPassConversation,
+} from '../server/pass-context.js';
 import { qualityLoopResumeAction } from '../server/quality-loop-resume.js';
 import type { McpServerRegistration } from '../server/mcp-registration.js';
 
-const assignment={outcome:'First change',deliverable:'first',read_scope:[],write_scope:[],exclusions:[],constraints:[],context_refs:[],acceptance:['done'],verification:['check'],ordinary_authority:['normal choices'],escalation_conditions:['blocked'],receipt_requirements:['receipt']};
-const receipt={status:'complete' as const,result:'First result',changes:[],acceptance:{met:['done'],unmet:[]},verification:[],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};
-function taskFixture():Task{return {id:'task',sessionType:'conversation',title:'First prompt',phase:'accepted',createdAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:00:00Z',userRoot:'D:/workspace',userMessages:['First prompt'],messages:[],passes:[{id:'pass-1',index:1,createdAt:'2026-10-19T00:00:00Z',userInput:'First prompt',userInputs:['First prompt'],userMessageIds:[],phase:'accepted',assignment,receipt,reviewNote:'Reviewed first pass',resolution:'delegated',workerThreadId:'worker-one',orchestratorThreadId:'orch-one',correctionCount:1,processedTurns:['turn-one']}],currentPassId:'pass-1',assignment,receipt,reviewNote:'Reviewed first pass',resolution:'delegated',workerThreadId:'worker-one',orchestratorThreadId:'orch-one',correctionCount:1,processedTurns:['turn-one']};}
-let currentStateDirectory:string|undefined;
-afterEach(async()=>{
-  vi.unstubAllEnvs();vi.resetModules();
-  if(currentStateDirectory){const root=path.resolve(os.tmpdir()),target=path.resolve(currentStateDirectory),relative=path.relative(root,target);if(!relative||relative.startsWith('..')||path.isAbsolute(relative))throw new Error('Refusing to remove a state fixture outside the task temp root.');await rm(target,{recursive:true,force:true});}
-  currentStateDirectory=undefined;
+const assignment = {
+  outcome: 'First change',
+  deliverable: 'first',
+  read_scope: [],
+  write_scope: [],
+  exclusions: [],
+  constraints: [],
+  context_refs: [],
+  acceptance: ['done'],
+  verification: ['check'],
+  ordinary_authority: ['normal choices'],
+  escalation_conditions: ['blocked'],
+  receipt_requirements: ['receipt'],
+};
+const receipt = {
+  status: 'complete' as const,
+  result: 'First result',
+  changes: [],
+  acceptance: { met: ['done'], unmet: [] },
+  verification: [],
+  risks: [],
+  knowledge: { consulted: [], updated: [] },
+  decision_required: null,
+};
+function taskFixture(): Task {
+  return {
+    id: 'task',
+    sessionType: 'conversation',
+    title: 'First prompt',
+    phase: 'accepted',
+    createdAt: '2026-10-19T00:00:00Z',
+    updatedAt: '2026-10-19T00:00:00Z',
+    userRoot: 'D:/workspace',
+    userMessages: ['First prompt'],
+    messages: [],
+    passes: [
+      {
+        id: 'pass-1',
+        index: 1,
+        createdAt: '2026-10-19T00:00:00Z',
+        userInput: 'First prompt',
+        userInputs: ['First prompt'],
+        userMessageIds: [],
+        phase: 'accepted',
+        assignment,
+        receipt,
+        reviewNote: 'Reviewed first pass',
+        resolution: 'delegated',
+        workerThreadId: 'worker-one',
+        orchestratorThreadId: 'orch-one',
+        correctionCount: 1,
+        processedTurns: ['turn-one'],
+      },
+    ],
+    currentPassId: 'pass-1',
+    assignment,
+    receipt,
+    reviewNote: 'Reviewed first pass',
+    resolution: 'delegated',
+    workerThreadId: 'worker-one',
+    orchestratorThreadId: 'orch-one',
+    correctionCount: 1,
+    processedTurns: ['turn-one'],
+  };
+}
+let currentStateDirectory: string | undefined;
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  vi.resetModules();
+  if (currentStateDirectory) {
+    const root = path.resolve(os.tmpdir()),
+      target = path.resolve(currentStateDirectory),
+      relative = path.relative(root, target);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative))
+      throw new Error('Refusing to remove a state fixture outside the task temp root.');
+    await rm(target, { recursive: true, force: true });
+  }
+  currentStateDirectory = undefined;
 });
 
-async function loadNativeDshTeamState(integrationProvider:'deepseek'|'codex'){
-  currentStateDirectory=await mkdtemp(path.join(os.tmpdir(),'opnex-native-dsh-state-'));
-  const task=taskFixture(),pass=task.passes![0],deepSeekExecution={kind:'deepseek-harness-sdk' as const,provider:'opencode-go',model:'deepseek-v4.1-flash',nativeReasoningEffort:'max'};
-  const integrationAssignment={...structuredClone(assignment),outcome:'Integrate the worker contribution.',receipt_requirements:[]};
-  pass.executionProfile={provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'};
-  pass.deepSeekExecution=deepSeekExecution;
-  pass.recruitmentTeam={teamId:'team-native-dsh',passId:pass.id,createdAt:'2026-10-31T00:00:00Z',canonicalProjectRoot:'D:/workspace',workspaceParent:'D:/workspace/.opnex',baseRef:'main',baseCommit:'a'.repeat(40),status:'complete',sealed:true,workers:[{workerId:'worker-1',name:'Native DSH worker',assignment,effort:'max',skills:[],branch:'recruitment/native-dsh/worker',worktreeRoot:'D:/workspace/.opnex/worker',status:'complete'}],integration:{status:'complete',branch:'recruitment/native-dsh/integration',worktreeRoot:'D:/workspace/.opnex/integration',assignment:integrationAssignment,effort:'high',skills:[],executionProfile:{provider:integrationProvider,model:integrationProvider==='deepseek'?'deepseek-v4.1-flash':'gpt-6-luna',effort:'max'},...(integrationProvider==='deepseek'?{deepSeekExecution}:{})},toolCallIds:[],completionWakeSent:true};
-  const state={version:7,revision:0,settings:{orchestratorModel:'gpt-6-luna',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[task],activeTaskId:null,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']};
-  await writeFile(path.join(currentStateDirectory,'state.json'),JSON.stringify(state));
-  vi.stubEnv('OPNEX_DATA_DIR',currentStateDirectory);vi.resetModules();
-  return {state:await import('../server/state.js'),taskId:task.id};
+async function loadNativeDshTeamState(integrationProvider: 'deepseek' | 'codex') {
+  currentStateDirectory = await mkdtemp(path.join(os.tmpdir(), 'opnex-native-dsh-state-'));
+  const task = taskFixture(),
+    pass = task.passes![0],
+    deepSeekExecution = {
+      kind: 'deepseek-harness-sdk' as const,
+      provider: 'opencode-go',
+      model: 'deepseek-v4.1-flash',
+      nativeReasoningEffort: 'max',
+    };
+  const integrationAssignment = {
+    ...structuredClone(assignment),
+    outcome: 'Integrate the worker contribution.',
+    receipt_requirements: [],
+  };
+  pass.executionProfile = { provider: 'deepseek', model: 'deepseek-v4.1-flash', effort: 'max' };
+  pass.deepSeekExecution = deepSeekExecution;
+  pass.recruitmentTeam = {
+    teamId: 'team-native-dsh',
+    passId: pass.id,
+    createdAt: '2026-10-31T00:00:00Z',
+    canonicalProjectRoot: 'D:/workspace',
+    workspaceParent: 'D:/workspace/.opnex',
+    baseRef: 'main',
+    baseCommit: 'a'.repeat(40),
+    status: 'complete',
+    sealed: true,
+    workers: [
+      {
+        workerId: 'worker-1',
+        name: 'Native DSH worker',
+        assignment,
+        effort: 'max',
+        skills: [],
+        branch: 'recruitment/native-dsh/worker',
+        worktreeRoot: 'D:/workspace/.opnex/worker',
+        status: 'complete',
+      },
+    ],
+    integration: {
+      status: 'complete',
+      branch: 'recruitment/native-dsh/integration',
+      worktreeRoot: 'D:/workspace/.opnex/integration',
+      assignment: integrationAssignment,
+      effort: 'high',
+      skills: [],
+      executionProfile: {
+        provider: integrationProvider,
+        model: integrationProvider === 'deepseek' ? 'deepseek-v4.1-flash' : 'gpt-6-luna',
+        effort: 'max',
+      },
+      ...(integrationProvider === 'deepseek' ? { deepSeekExecution } : {}),
+    },
+    toolCallIds: [],
+    completionWakeSent: true,
+  };
+  const state = {
+    version: 7,
+    revision: 0,
+    settings: {
+      orchestratorModel: 'gpt-6-luna',
+      orchestratorEffort: 'low',
+      approvalPolicy: 'on-request',
+    },
+    tasks: [task],
+    activeTaskId: null,
+    projects: [],
+    selectedProjectId: null,
+    expandedProjectIds: ['unclassified'],
+  };
+  await writeFile(path.join(currentStateDirectory, 'state.json'), JSON.stringify(state));
+  vi.stubEnv('OPNEX_DATA_DIR', currentStateDirectory);
+  vi.resetModules();
+  return { state: await import('../server/state.js'), taskId: task.id };
 }
 
-async function loadReadOnlyRecruitmentState(){
-  currentStateDirectory=await mkdtemp(path.join(os.tmpdir(),'opnex-read-only-team-state-'));
-  const task=taskFixture(),pass=task.passes![0],readAssignment={...structuredClone(assignment),outcome:'Answer without changing files.',deliverable:'A read-only answer.',write_scope:[]};
-  pass.phase='worker_running';task.phase='worker_running';
-  pass.recruitmentTeam={teamId:'read-only-team',passId:pass.id,createdAt:'2026-10-31T00:00:00Z',canonicalProjectRoot:'D:/workspace',mode:'read_only',status:'running',sealed:true,workers:[{workerId:'read-only-worker',name:'Answer worker',assignment:readAssignment,effort:'max',skills:[],status:'queued'}],integration:{status:'not_required'},toolCallIds:['read-only-call'],completionWakeSent:false};
-  const state={version:7,revision:0,settings:{orchestratorModel:'gpt-6-luna',orchestratorEffort:'low',approvalPolicy:'on-request'},tasks:[task],activeTaskId:task.id,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']};
-  await writeFile(path.join(currentStateDirectory,'state.json'),JSON.stringify(state));
-  vi.stubEnv('OPNEX_DATA_DIR',currentStateDirectory);vi.resetModules();
-  return {state:await import('../server/state.js'),taskId:task.id};
+async function loadReadOnlyRecruitmentState() {
+  currentStateDirectory = await mkdtemp(path.join(os.tmpdir(), 'opnex-read-only-team-state-'));
+  const task = taskFixture(),
+    pass = task.passes![0],
+    readAssignment = {
+      ...structuredClone(assignment),
+      outcome: 'Answer without changing files.',
+      deliverable: 'A read-only answer.',
+      write_scope: [],
+    };
+  pass.phase = 'worker_running';
+  task.phase = 'worker_running';
+  pass.recruitmentTeam = {
+    teamId: 'read-only-team',
+    passId: pass.id,
+    createdAt: '2026-10-31T00:00:00Z',
+    canonicalProjectRoot: 'D:/workspace',
+    mode: 'read_only',
+    status: 'running',
+    sealed: true,
+    workers: [
+      {
+        workerId: 'read-only-worker',
+        name: 'Answer worker',
+        assignment: readAssignment,
+        effort: 'max',
+        skills: [],
+        status: 'queued',
+      },
+    ],
+    integration: { status: 'not_required' },
+    toolCallIds: ['read-only-call'],
+    completionWakeSent: false,
+  };
+  const state = {
+    version: 7,
+    revision: 0,
+    settings: {
+      orchestratorModel: 'gpt-6-luna',
+      orchestratorEffort: 'low',
+      approvalPolicy: 'on-request',
+    },
+    tasks: [task],
+    activeTaskId: task.id,
+    projects: [],
+    selectedProjectId: null,
+    expandedProjectIds: ['unclassified'],
+  };
+  await writeFile(path.join(currentStateDirectory, 'state.json'), JSON.stringify(state));
+  vi.stubEnv('OPNEX_DATA_DIR', currentStateDirectory);
+  vi.resetModules();
+  return { state: await import('../server/state.js'), taskId: task.id };
 }
 
-describe('per-pass task state',()=>{
-  it('snapshots MCP registrations into a pass and restores that snapshot from disk state',()=>{
-    const registration:McpServerRegistration={name:'docs',command:'node',args:['docs.js'],envVars:['DOCS_TOKEN'],codexRoles:['worker'],deepseekRoles:['worker']};
-    const task=taskFixture(),registrations=[registration];
-    const pass=beginPass(task,'Use the configured docs tools',undefined,'on-request',[],[],undefined,false,undefined,registrations);
-    registrations[0]={...registration,name:'changed'};
+describe('per-pass task state', () => {
+  it('snapshots MCP registrations into a pass and restores that snapshot from disk state', () => {
+    const registration: McpServerRegistration = {
+      name: 'docs',
+      command: 'node',
+      args: ['docs.js'],
+      envVars: ['DOCS_TOKEN'],
+      codexRoles: ['worker'],
+      deepseekRoles: ['worker'],
+    };
+    const task = taskFixture(),
+      registrations = [registration];
+    const pass = beginPass(
+      task,
+      'Use the configured docs tools',
+      undefined,
+      'on-request',
+      [],
+      [],
+      undefined,
+      false,
+      undefined,
+      registrations
+    );
+    registrations[0] = { ...registration, name: 'changed' };
     expect(pass.mcpServers?.[0]?.name).toBe('docs');
-    const restored=upgradeStoredState(JSON.parse(JSON.stringify({version:7,revision:0,settings:{orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request',mcpServers:[registration]},tasks:[task],activeTaskId:task.id,projects:[],selectedProjectId:null,expandedProjectIds:[]})));
-    expect(restored.tasks[0].passes?.at(-1)?.mcpServers).toEqual([expect.objectContaining({name:'docs',envVars:['DOCS_TOKEN']})]);
+    const restored = upgradeStoredState(
+      JSON.parse(
+        JSON.stringify({
+          version: 7,
+          revision: 0,
+          settings: {
+            orchestratorModel: 'gpt-6.1-sol',
+            orchestratorEffort: 'low',
+            approvalPolicy: 'on-request',
+            mcpServers: [registration],
+          },
+          tasks: [task],
+          activeTaskId: task.id,
+          projects: [],
+          selectedProjectId: null,
+          expandedProjectIds: [],
+        })
+      )
+    );
+    expect(restored.tasks[0].passes?.at(-1)?.mcpServers).toEqual([
+      expect.objectContaining({ name: 'docs', envVars: ['DOCS_TOKEN'] }),
+    ]);
   });
-  it('keeps legacy execution routing on the pass that created its thread while new settings default to Luna',()=>{
-    const task=taskFixture();const pass=task.passes![0];
-    task.reasoningTurns=[{role:'simple',threadId:'simple-one',turnId:'turn-one',provider:'codex',requestedModel:'gpt-6-astra',requestedEffort:'high',status:'interrupted'}];
-    pass.reasoningTurns=structuredClone(task.reasoningTurns);
-    const migrated=upgradeStoredState(JSON.parse(JSON.stringify({version:5,settings:{orchestratorModel:'gpt-6-astra',orchestratorEffort:'high',approvalPolicy:'on-request',deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'},tasks:[task],activeTaskId:task.id})));
-    expect(migrated.settings.executionProfile).toEqual({provider:'codex',model:'gpt-6-luna',effort:'max'});
-    expect(migrated.tasks[0].passes?.[0].executionProfile).toEqual({provider:'codex',model:'gpt-6-astra',effort:'high'});
-    expect(migrated.tasks[0].passes?.[0].reasoningTurns?.[0]).toMatchObject({requestedModel:'gpt-6-astra',requestedEffort:'high'});
+  it('keeps legacy execution routing on the pass that created its thread while new settings default to Luna', () => {
+    const task = taskFixture();
+    const pass = task.passes![0];
+    task.reasoningTurns = [
+      {
+        role: 'simple',
+        threadId: 'simple-one',
+        turnId: 'turn-one',
+        provider: 'codex',
+        requestedModel: 'gpt-6-astra',
+        requestedEffort: 'high',
+        status: 'interrupted',
+      },
+    ];
+    pass.reasoningTurns = structuredClone(task.reasoningTurns);
+    const migrated = upgradeStoredState(
+      JSON.parse(
+        JSON.stringify({
+          version: 5,
+          settings: {
+            orchestratorModel: 'gpt-6-astra',
+            orchestratorEffort: 'high',
+            approvalPolicy: 'on-request',
+            deepseekProvider: 'opencode-go',
+            deepseekModel: 'deepseek-v4.1-flash',
+            deepseekReasoningEffort: 'max',
+          },
+          tasks: [task],
+          activeTaskId: task.id,
+        })
+      )
+    );
+    expect(migrated.settings.executionProfile).toEqual({
+      provider: 'codex',
+      model: 'gpt-6-luna',
+      effort: 'max',
+    });
+    expect(migrated.tasks[0].passes?.[0].executionProfile).toEqual({
+      provider: 'codex',
+      model: 'gpt-6-astra',
+      effort: 'high',
+    });
+    expect(migrated.tasks[0].passes?.[0].reasoningTurns?.[0]).toMatchObject({
+      requestedModel: 'gpt-6-astra',
+      requestedEffort: 'high',
+    });
   });
-  it('migrates a DeepSeek team pass from its recorded provider turn',()=>{
-    const task=taskFixture(),pass=task.passes![0];const deepSeek={kind:'deepseek-harness-sdk' as const,provider:'opencode-go',model:'deepseek-v4.1-flash',nativeReasoningEffort:'max'};
-    pass.deepSeekExecution=deepSeek;pass.recruitmentTeam={teamId:'team-legacy',passId:pass.id,createdAt:'2026-10-19T00:00:00Z',canonicalProjectRoot:'D:/workspace',workspaceParent:'D:/workspace/.opnex',baseRef:'HEAD',baseCommit:'abc123',status:'paused_after_restart',sealed:true,workers:[{workerId:'worker-1',name:'Legacy worker',assignment,effort:'high',skills:[],branch:'recruitment/legacy/worker-1',worktreeRoot:'D:/workspace/.opnex/worker-1',status:'paused_after_restart',deepSeekExecution:deepSeek}],integration:{status:'paused_after_restart',branch:'recruitment/legacy/integration',worktreeRoot:'D:/workspace/.opnex/integration',assignment,effort:'high',skills:[]},toolCallIds:[],completionWakeSent:false};
-    task.reasoningTurns=[{role:'worker',threadId:'worker-one',turnId:'worker-turn',provider:'deepseek',requestedModel:'deepseek-v4.1-flash',requestedEffort:'max',status:'interrupted'}];pass.reasoningTurns=structuredClone(task.reasoningTurns);
-    const migrated=upgradeStoredState(JSON.parse(JSON.stringify({version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max'},tasks:[task],activeTaskId:task.id}))).tasks[0];
-    expect(migrated.passes?.[0].executionProfile).toEqual({provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'});
+  it('migrates a DeepSeek team pass from its recorded provider turn', () => {
+    const task = taskFixture(),
+      pass = task.passes![0];
+    const deepSeek = {
+      kind: 'deepseek-harness-sdk' as const,
+      provider: 'opencode-go',
+      model: 'deepseek-v4.1-flash',
+      nativeReasoningEffort: 'max',
+    };
+    pass.deepSeekExecution = deepSeek;
+    pass.recruitmentTeam = {
+      teamId: 'team-legacy',
+      passId: pass.id,
+      createdAt: '2026-10-19T00:00:00Z',
+      canonicalProjectRoot: 'D:/workspace',
+      workspaceParent: 'D:/workspace/.opnex',
+      baseRef: 'HEAD',
+      baseCommit: 'abc123',
+      status: 'paused_after_restart',
+      sealed: true,
+      workers: [
+        {
+          workerId: 'worker-1',
+          name: 'Legacy worker',
+          assignment,
+          effort: 'high',
+          skills: [],
+          branch: 'recruitment/legacy/worker-1',
+          worktreeRoot: 'D:/workspace/.opnex/worker-1',
+          status: 'paused_after_restart',
+          deepSeekExecution: deepSeek,
+        },
+      ],
+      integration: {
+        status: 'paused_after_restart',
+        branch: 'recruitment/legacy/integration',
+        worktreeRoot: 'D:/workspace/.opnex/integration',
+        assignment,
+        effort: 'high',
+        skills: [],
+      },
+      toolCallIds: [],
+      completionWakeSent: false,
+    };
+    task.reasoningTurns = [
+      {
+        role: 'worker',
+        threadId: 'worker-one',
+        turnId: 'worker-turn',
+        provider: 'deepseek',
+        requestedModel: 'deepseek-v4.1-flash',
+        requestedEffort: 'max',
+        status: 'interrupted',
+      },
+    ];
+    pass.reasoningTurns = structuredClone(task.reasoningTurns);
+    const migrated = upgradeStoredState(
+      JSON.parse(
+        JSON.stringify({
+          version: 5,
+          settings: {
+            deepseekProvider: 'opencode-go',
+            deepseekModel: 'deepseek-v4.1-flash',
+            deepseekReasoningEffort: 'max',
+          },
+          tasks: [task],
+          activeTaskId: task.id,
+        })
+      )
+    ).tasks[0];
+    expect(migrated.passes?.[0].executionProfile).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-v4.1-flash',
+      effort: 'max',
+    });
   });
-  it.each(['reviewing','paused_after_restart'] as const)('restores correction resume from saved findings after restart migration (%s state)',phase=>{
-    const task=taskFixture(),pass=task.passes![0],at='2026-10-27T12:45:00.000Z';task.phase=phase;pass.phase=phase;
-    const findings=[{findingId:'finding-1',fingerprint:'sha256-finding-1',title:'The correction was not planned',severity:'medium' as const,issue:'Saved actionable evidence needs a correction pass.',requiredFix:'Resume planning from this exact finding.',evidence:['The auditor saved the finding before shutdown.']}];
-    pass.recruitmentTeam={teamId:'team-complete',passId:pass.id,createdAt:at,canonicalProjectRoot:'D:/workspace',agentmemProjectId:'demo',workspaceParent:'D:/workspace',baseRef:'main',baseCommit:'abc123',status:'complete',sealed:true,workers:[],integration:{status:'complete'},toolCallIds:[],completionWakeSent:true} as any;
-    pass.qualityLoop={enabled:true,status:'awaiting_corrections',rounds:[{roundId:'qa-round-corrections',index:1,status:'awaiting_corrections',createdAt:at,startedAt:at,completedAt:at,threadId:'terra-thread',turnId:'terra-turn',model:'gpt-6.1-terra',requestedEffort:'high',workspaceRoot:'D:/workspace/.opnex/integration',integrationBranch:'recruitment/smoke/integration',integrationHead:'abc123',findings,findingsFingerprint:'sha256-findings',teamId:'team-complete'}],maxRounds:5};
-    const loaded=upgradeStoredState(JSON.parse(JSON.stringify({version:3,revision:1,settings:{},tasks:[task],activeTaskId:task.id}))).tasks[0];
-    expect(loaded.phase).toBe('paused_after_restart');expect(loaded.passes?.[0].qualityLoop).toMatchObject({status:'paused_after_restart',resumeAction:'corrections',correctionPlannerNotDispatchedRoundId:'qa-round-corrections',rounds:[{roundId:'qa-round-corrections',status:'awaiting_corrections',findings,findingsFingerprint:'sha256-findings'}]});
+  it.each(['reviewing', 'paused_after_restart'] as const)(
+    'restores correction resume from saved findings after restart migration (%s state)',
+    (phase) => {
+      const task = taskFixture(),
+        pass = task.passes![0],
+        at = '2026-10-27T12:45:00.000Z';
+      task.phase = phase;
+      pass.phase = phase;
+      const findings = [
+        {
+          findingId: 'finding-1',
+          fingerprint: 'sha256-finding-1',
+          title: 'The correction was not planned',
+          severity: 'medium' as const,
+          issue: 'Saved actionable evidence needs a correction pass.',
+          requiredFix: 'Resume planning from this exact finding.',
+          evidence: ['The auditor saved the finding before shutdown.'],
+        },
+      ];
+      pass.recruitmentTeam = {
+        teamId: 'team-complete',
+        passId: pass.id,
+        createdAt: at,
+        canonicalProjectRoot: 'D:/workspace',
+        agentmemProjectId: 'demo',
+        workspaceParent: 'D:/workspace',
+        baseRef: 'main',
+        baseCommit: 'abc123',
+        status: 'complete',
+        sealed: true,
+        workers: [],
+        integration: { status: 'complete' },
+        toolCallIds: [],
+        completionWakeSent: true,
+      } as any;
+      pass.qualityLoop = {
+        enabled: true,
+        status: 'awaiting_corrections',
+        rounds: [
+          {
+            roundId: 'qa-round-corrections',
+            index: 1,
+            status: 'awaiting_corrections',
+            createdAt: at,
+            startedAt: at,
+            completedAt: at,
+            threadId: 'terra-thread',
+            turnId: 'terra-turn',
+            model: 'gpt-6.1-terra',
+            requestedEffort: 'high',
+            workspaceRoot: 'D:/workspace/.opnex/integration',
+            integrationBranch: 'recruitment/smoke/integration',
+            integrationHead: 'abc123',
+            findings,
+            findingsFingerprint: 'sha256-findings',
+            teamId: 'team-complete',
+          },
+        ],
+        maxRounds: 5,
+      };
+      const loaded = upgradeStoredState(
+        JSON.parse(
+          JSON.stringify({
+            version: 3,
+            revision: 1,
+            settings: {},
+            tasks: [task],
+            activeTaskId: task.id,
+          })
+        )
+      ).tasks[0];
+      expect(loaded.phase).toBe('paused_after_restart');
+      expect(loaded.passes?.[0].qualityLoop).toMatchObject({
+        status: 'paused_after_restart',
+        resumeAction: 'corrections',
+        correctionPlannerNotDispatchedRoundId: 'qa-round-corrections',
+        rounds: [
+          {
+            roundId: 'qa-round-corrections',
+            status: 'awaiting_corrections',
+            findings,
+            findingsFingerprint: 'sha256-findings',
+          },
+        ],
+      });
+    }
+  );
+  it('preserves an unknown correction dispatch across restart recovery and does not offer Resume', () => {
+    const task = taskFixture(),
+      pass = task.passes![0],
+      at = '2026-10-27T12:45:00.000Z',
+      findings = [
+        {
+          findingId: 'finding-1',
+          fingerprint: 'sha256-finding-1',
+          title: 'Unknown planner outcome',
+          severity: 'medium' as const,
+          issue: 'The sent planner turn has no confirmed outcome.',
+          requiredFix: 'Wait for authoritative completion before retrying.',
+          evidence: ['The runtime accepted turn/start before shutdown.'],
+        },
+      ];
+    task.phase = 'planning';
+    task.activeRole = 'orchestrator';
+    task.activeTurnId = 'planner-turn';
+    pass.qualityLoop = {
+      enabled: true,
+      status: 'awaiting_corrections',
+      rounds: [
+        {
+          roundId: 'qa-round-uncertain',
+          index: 1,
+          status: 'awaiting_corrections',
+          createdAt: at,
+          startedAt: at,
+          threadId: 'terra-thread',
+          turnId: 'audit-turn',
+          model: 'gpt-6.1-terra',
+          requestedEffort: 'high',
+          workspaceRoot: 'D:/workspace/.opnex/integration',
+          integrationBranch: 'recruitment/smoke/integration',
+          integrationHead: 'abc123',
+          findings,
+          findingsFingerprint: 'sha256-findings',
+          teamId: 'team-complete',
+        },
+      ],
+      maxRounds: 5,
+    };
+    const loaded = upgradeStoredState(
+        JSON.parse(
+          JSON.stringify({
+            version: 3,
+            revision: 1,
+            settings: {},
+            tasks: [task],
+            activeTaskId: task.id,
+          })
+        )
+      ).tasks[0],
+      saved = loaded.passes?.[0].qualityLoop;
+    expect(loaded.phase).toBe('paused_after_restart');
+    expect(saved).toMatchObject({
+      status: 'paused_after_restart',
+      resumeAction: 'corrections',
+      correctionPlanner: {
+        roundId: 'qa-round-uncertain',
+        status: 'dispatch_unknown',
+        threadId: 'orch-one',
+        turnId: 'planner-turn',
+      },
+    });
+    expect(qualityLoopResumeAction(saved)).toBeUndefined();
   });
-  it('preserves an unknown correction dispatch across restart recovery and does not offer Resume',()=>{
-    const task=taskFixture(),pass=task.passes![0],at='2026-10-27T12:45:00.000Z',findings=[{findingId:'finding-1',fingerprint:'sha256-finding-1',title:'Unknown planner outcome',severity:'medium' as const,issue:'The sent planner turn has no confirmed outcome.',requiredFix:'Wait for authoritative completion before retrying.',evidence:['The runtime accepted turn/start before shutdown.']}];task.phase='planning';task.activeRole='orchestrator';task.activeTurnId='planner-turn';
-    pass.qualityLoop={enabled:true,status:'awaiting_corrections',rounds:[{roundId:'qa-round-uncertain',index:1,status:'awaiting_corrections',createdAt:at,startedAt:at,threadId:'terra-thread',turnId:'audit-turn',model:'gpt-6.1-terra',requestedEffort:'high',workspaceRoot:'D:/workspace/.opnex/integration',integrationBranch:'recruitment/smoke/integration',integrationHead:'abc123',findings,findingsFingerprint:'sha256-findings',teamId:'team-complete'}],maxRounds:5};
-    const loaded=upgradeStoredState(JSON.parse(JSON.stringify({version:3,revision:1,settings:{},tasks:[task],activeTaskId:task.id}))).tasks[0],saved=loaded.passes?.[0].qualityLoop;
-    expect(loaded.phase).toBe('paused_after_restart');expect(saved).toMatchObject({status:'paused_after_restart',resumeAction:'corrections',correctionPlanner:{roundId:'qa-round-uncertain',status:'dispatch_unknown',threadId:'orch-one',turnId:'planner-turn'}});expect(qualityLoopResumeAction(saved)).toBeUndefined();
+  it('keeps a user-paused unknown correction dispatch blocked across another restart', () => {
+    const task = taskFixture(),
+      pass = task.passes![0],
+      at = '2026-10-27T12:45:00.000Z',
+      findings = [
+        {
+          findingId: 'finding-paused-unknown',
+          fingerprint: 'sha256-paused-unknown',
+          title: 'Paused planner outcome is still unknown',
+          severity: 'medium' as const,
+          issue: 'The paused state does not prove that turn/start was rejected.',
+          requiredFix:
+            'Keep the correction planner blocked until an authoritative outcome arrives.',
+          evidence: ['The planner dispatch marker survived the user pause.'],
+        },
+      ];
+    task.phase = 'paused_after_restart';
+    pass.qualityLoop = {
+      enabled: true,
+      status: 'paused',
+      resumeAction: 'corrections',
+      correctionPlanner: {
+        roundId: 'qa-round-paused-unknown',
+        status: 'dispatch_unknown',
+        threadId: 'orch-one',
+      },
+      rounds: [
+        {
+          roundId: 'qa-round-paused-unknown',
+          index: 1,
+          status: 'awaiting_corrections',
+          createdAt: at,
+          startedAt: at,
+          threadId: 'terra-thread',
+          turnId: 'audit-turn',
+          model: 'gpt-6.1-terra',
+          requestedEffort: 'high',
+          workspaceRoot: 'D:/workspace/.opnex/integration',
+          integrationBranch: 'recruitment/smoke/integration',
+          integrationHead: 'abc123',
+          findings,
+          findingsFingerprint: 'sha256-paused-unknown',
+          teamId: 'team-complete',
+        },
+      ],
+      maxRounds: 5,
+    };
+    const loaded = upgradeStoredState(
+        JSON.parse(
+          JSON.stringify({
+            version: 3,
+            revision: 1,
+            settings: {},
+            tasks: [task],
+            activeTaskId: task.id,
+          })
+        )
+      ).tasks[0],
+      saved = loaded.passes?.[0].qualityLoop;
+    expect(saved).toMatchObject({
+      status: 'paused_after_restart',
+      resumeAction: 'corrections',
+      correctionPlanner: {
+        roundId: 'qa-round-paused-unknown',
+        status: 'dispatch_unknown',
+        threadId: 'orch-one',
+      },
+    });
+    expect(qualityLoopResumeAction(saved)).toBeUndefined();
   });
-  it('keeps a user-paused unknown correction dispatch blocked across another restart',()=>{
-    const task=taskFixture(),pass=task.passes![0],at='2026-10-27T12:45:00.000Z',findings=[{findingId:'finding-paused-unknown',fingerprint:'sha256-paused-unknown',title:'Paused planner outcome is still unknown',severity:'medium' as const,issue:'The paused state does not prove that turn/start was rejected.',requiredFix:'Keep the correction planner blocked until an authoritative outcome arrives.',evidence:['The planner dispatch marker survived the user pause.']}];task.phase='paused_after_restart';pass.qualityLoop={enabled:true,status:'paused',resumeAction:'corrections',correctionPlanner:{roundId:'qa-round-paused-unknown',status:'dispatch_unknown',threadId:'orch-one'},rounds:[{roundId:'qa-round-paused-unknown',index:1,status:'awaiting_corrections',createdAt:at,startedAt:at,threadId:'terra-thread',turnId:'audit-turn',model:'gpt-6.1-terra',requestedEffort:'high',workspaceRoot:'D:/workspace/.opnex/integration',integrationBranch:'recruitment/smoke/integration',integrationHead:'abc123',findings,findingsFingerprint:'sha256-paused-unknown',teamId:'team-complete'}],maxRounds:5};
-    const loaded=upgradeStoredState(JSON.parse(JSON.stringify({version:3,revision:1,settings:{},tasks:[task],activeTaskId:task.id}))).tasks[0],saved=loaded.passes?.[0].qualityLoop;
-    expect(saved).toMatchObject({status:'paused_after_restart',resumeAction:'corrections',correctionPlanner:{roundId:'qa-round-paused-unknown',status:'dispatch_unknown',threadId:'orch-one'}});expect(qualityLoopResumeAction(saved)).toBeUndefined();
+  it('fails closed for a legacy paused correction loop with no recorded send boundary', () => {
+    const task = taskFixture(),
+      pass = task.passes![0],
+      at = '2026-10-27T12:45:00.000Z',
+      findings = [
+        {
+          findingId: 'finding-legacy',
+          fingerprint: 'sha256-legacy',
+          title: 'Legacy pause ambiguity',
+          severity: 'medium' as const,
+          issue: 'The old state cannot distinguish preflight from a sent request.',
+          requiredFix: 'Do not replay a correction plan from this legacy pause.',
+          evidence: ['The prior state had no durable planner dispatch marker.'],
+        },
+      ];
+    task.phase = 'reviewing';
+    pass.qualityLoop = {
+      enabled: true,
+      status: 'paused',
+      resumeAction: 'corrections',
+      rounds: [
+        {
+          roundId: 'qa-round-legacy',
+          index: 1,
+          status: 'awaiting_corrections',
+          createdAt: at,
+          startedAt: at,
+          threadId: 'terra-thread',
+          turnId: 'audit-turn',
+          model: 'gpt-6.1-terra',
+          requestedEffort: 'high',
+          workspaceRoot: 'D:/workspace/.opnex/integration',
+          integrationBranch: 'recruitment/smoke/integration',
+          integrationHead: 'abc123',
+          findings,
+          findingsFingerprint: 'sha256-findings',
+          teamId: 'team-complete',
+        },
+      ],
+      maxRounds: 5,
+    };
+    const loaded = upgradeStoredState(
+        JSON.parse(
+          JSON.stringify({
+            version: 3,
+            revision: 1,
+            settings: {},
+            tasks: [task],
+            activeTaskId: task.id,
+          })
+        )
+      ).tasks[0],
+      saved = loaded.passes?.[0].qualityLoop;
+    expect(saved).toMatchObject({
+      status: 'paused_after_restart',
+      resumeAction: 'corrections',
+      correctionPlanner: {
+        roundId: 'qa-round-legacy',
+        status: 'dispatch_unknown',
+        threadId: 'orch-one',
+      },
+    });
+    expect(qualityLoopResumeAction(saved)).toBeUndefined();
   });
-  it('fails closed for a legacy paused correction loop with no recorded send boundary',()=>{
-    const task=taskFixture(),pass=task.passes![0],at='2026-10-27T12:45:00.000Z',findings=[{findingId:'finding-legacy',fingerprint:'sha256-legacy',title:'Legacy pause ambiguity',severity:'medium' as const,issue:'The old state cannot distinguish preflight from a sent request.',requiredFix:'Do not replay a correction plan from this legacy pause.',evidence:['The prior state had no durable planner dispatch marker.']}];task.phase='reviewing';pass.qualityLoop={enabled:true,status:'paused',resumeAction:'corrections',rounds:[{roundId:'qa-round-legacy',index:1,status:'awaiting_corrections',createdAt:at,startedAt:at,threadId:'terra-thread',turnId:'audit-turn',model:'gpt-6.1-terra',requestedEffort:'high',workspaceRoot:'D:/workspace/.opnex/integration',integrationBranch:'recruitment/smoke/integration',integrationHead:'abc123',findings,findingsFingerprint:'sha256-findings',teamId:'team-complete'}],maxRounds:5};
-    const loaded=upgradeStoredState(JSON.parse(JSON.stringify({version:3,revision:1,settings:{},tasks:[task],activeTaskId:task.id}))).tasks[0],saved=loaded.passes?.[0].qualityLoop;
-    expect(saved).toMatchObject({status:'paused_after_restart',resumeAction:'corrections',correctionPlanner:{roundId:'qa-round-legacy',status:'dispatch_unknown',threadId:'orch-one'}});expect(qualityLoopResumeAction(saved)).toBeUndefined();
+  it('clears preflight-only correction state during restart recovery so saved findings remain resumable', () => {
+    const task = taskFixture(),
+      pass = task.passes![0],
+      at = '2026-10-27T12:45:00.000Z',
+      findings = [
+        {
+          findingId: 'finding-1',
+          fingerprint: 'sha256-finding-1',
+          title: 'No planner request was sent',
+          severity: 'medium' as const,
+          issue: 'Setup stopped before turn/start.',
+          requiredFix: 'Resume from these saved findings.',
+          evidence: ['The persisted stage was preflight.'],
+        },
+      ];
+    task.phase = 'paused_after_restart';
+    pass.qualityLoop = {
+      enabled: true,
+      status: 'paused',
+      resumeAction: 'corrections',
+      correctionPlanner: { roundId: 'qa-round-preflight', status: 'preflight' },
+      rounds: [
+        {
+          roundId: 'qa-round-preflight',
+          index: 1,
+          status: 'awaiting_corrections',
+          createdAt: at,
+          startedAt: at,
+          threadId: 'terra-thread',
+          turnId: 'audit-turn',
+          model: 'gpt-6.1-terra',
+          requestedEffort: 'high',
+          workspaceRoot: 'D:/workspace/.opnex/integration',
+          integrationBranch: 'recruitment/smoke/integration',
+          integrationHead: 'abc123',
+          findings,
+          findingsFingerprint: 'sha256-findings',
+          teamId: 'team-complete',
+        },
+      ],
+      maxRounds: 5,
+    };
+    const loaded = upgradeStoredState(
+      JSON.parse(
+        JSON.stringify({
+          version: 3,
+          revision: 1,
+          settings: {},
+          tasks: [task],
+          activeTaskId: task.id,
+        })
+      )
+    ).tasks[0].passes?.[0].qualityLoop;
+    expect(loaded).toMatchObject({
+      status: 'paused_after_restart',
+      resumeAction: 'corrections',
+      correctionPlannerNotDispatchedRoundId: 'qa-round-preflight',
+    });
+    expect(loaded?.correctionPlanner).toBeUndefined();
+    expect(qualityLoopResumeAction(loaded)).toBe('corrections');
   });
-  it('clears preflight-only correction state during restart recovery so saved findings remain resumable',()=>{
-    const task=taskFixture(),pass=task.passes![0],at='2026-10-27T12:45:00.000Z',findings=[{findingId:'finding-1',fingerprint:'sha256-finding-1',title:'No planner request was sent',severity:'medium' as const,issue:'Setup stopped before turn/start.',requiredFix:'Resume from these saved findings.',evidence:['The persisted stage was preflight.']}];task.phase='paused_after_restart';pass.qualityLoop={enabled:true,status:'paused',resumeAction:'corrections',correctionPlanner:{roundId:'qa-round-preflight',status:'preflight'},rounds:[{roundId:'qa-round-preflight',index:1,status:'awaiting_corrections',createdAt:at,startedAt:at,threadId:'terra-thread',turnId:'audit-turn',model:'gpt-6.1-terra',requestedEffort:'high',workspaceRoot:'D:/workspace/.opnex/integration',integrationBranch:'recruitment/smoke/integration',integrationHead:'abc123',findings,findingsFingerprint:'sha256-findings',teamId:'team-complete'}],maxRounds:5};
-    const loaded=upgradeStoredState(JSON.parse(JSON.stringify({version:3,revision:1,settings:{},tasks:[task],activeTaskId:task.id}))).tasks[0].passes?.[0].qualityLoop;
-    expect(loaded).toMatchObject({status:'paused_after_restart',resumeAction:'corrections',correctionPlannerNotDispatchedRoundId:'qa-round-preflight'});expect(loaded?.correctionPlanner).toBeUndefined();expect(qualityLoopResumeAction(loaded)).toBe('corrections');
-  });
-  it('starts new passes without creating service audit state while preserving older audit history',()=>{
-    const task=taskFixture();const second=beginPass(task,'Second prompt');
+  it('starts new passes without creating service audit state while preserving older audit history', () => {
+    const task = taskFixture();
+    const second = beginPass(task, 'Second prompt');
     expect(second.agentmemAudit).toBeUndefined();
-    const legacy=upgradeStoredState({version:2,settings:{},tasks:[task],activeTaskId:task.id}).tasks[0];
+    const legacy = upgradeStoredState({
+      version: 2,
+      settings: {},
+      tasks: [task],
+      activeTaskId: task.id,
+    }).tasks[0];
     expect(legacy.passes?.[0].agentmemAudit).toBeUndefined();
   });
-  it('persists each completed pass usage snapshot across reloads and new passes',()=>{
-    const task=taskFixture();task.passes![0].agentmemAudit={recorded:true,coverage:'full_pass',selectedProjectId:'demo',workspaceRoot:'D:/workspace',identityStatus:'verified',verifiedProjectId:'demo',verifiedRoot:'D:/workspace',modelMcpStatus:'disabled',contexts:[{id:'context',role:'orchestrator',purpose:'assignment_context',queryHash:'sha256',status:'supplied',startedAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:01:00Z',threadId:'orch-one',turnId:'turn-one',resultSummary:'decisions=1 · refs=DEC-1'}],calls:[{id:'tool',source:'application',role:'orchestrator',purpose:'assignment_context',method:'attach_project',status:'completed',startedAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:01:00Z',contextId:'context',projectId:'demo',threadId:'orch-one',turnId:'turn-one'}]};task.passes![0].usage={orchestrator:{threadId:'orch-one',tokenStatus:'available',tokens:{totalTokens:80,inputTokens:60,cachedInputTokens:10,cacheWriteInputTokens:null,outputTokens:20,reasoningOutputTokens:4,modelContextWindow:128000,source:'thread'},creditStatus:'available',estimateSource:'codex-app-server-thread-usage',estimatedCreditsMicros:'1200000',estimatedUsdMicros:'700000',groups:[{model:'gpt-6.1-sol',reasoningEffort:'low',speed:'standard',estimatedCreditsMicros:'1200000',netNewInputTokens:'50',cachedInputTokens:'10',inputTokens:'60',outputTokens:'20',totalTokens:'80'}],allowance:{fiveHourPercent:0.25,weeklyPercent:0.5,fiveHourWindow:{sampleCount:1,firstSampledAt:'2026-10-19T00:00:00Z',lastSampledAt:'2026-10-19T00:01:00Z',windowDurationMins:300,resetsAt:1800000000,boundariesChanged:false}}},worker:{threadId:'worker-one',tokenStatus:'available',tokens:{totalTokens:20,inputTokens:15,cachedInputTokens:0,cacheWriteInputTokens:null,outputTokens:5,reasoningOutputTokens:1,modelContextWindow:128000,source:'thread'},creditStatus:'available',estimateSource:'codex-app-server-thread-usage',estimatedCreditsMicros:'300000',estimatedUsdMicros:'150000',groups:[{model:'gpt-6-luna',reasoningEffort:'high',speed:'standard',estimatedCreditsMicros:'300000',netNewInputTokens:'15',cachedInputTokens:'0',inputTokens:'15',outputTokens:'5',totalTokens:'20'}],allowance:{fiveHourPercent:0.1,weeklyPercent:0.2}}};
-    const loaded=upgradeStoredState(JSON.parse(JSON.stringify({version:2,settings:{},tasks:[task],activeTaskId:task.id}))).tasks[0];
-    const previous=loaded.passes![0].usage;const userMessage:Message={id:'later',role:'user',text:'Next pass',createdAt:'2026-10-19T00:02:00Z'};loaded.messages.push(userMessage);beginPass(loaded,userMessage.text,userMessage.id);
-    expect(loaded.passes![0].usage).toEqual(previous);expect(loaded.passes![0].usage?.orchestrator?.groups?.[0].model).toBe('gpt-6.1-sol');expect(loaded.passes![0].usage?.orchestrator?.allowance?.fiveHourWindow?.firstSampledAt).toBe('2026-10-19T00:00:00Z');expect(loaded.passes![0].agentmemAudit?.calls).toMatchObject([{source:'application',role:'orchestrator',method:'attach_project',status:'completed',projectId:'demo',threadId:'orch-one',turnId:'turn-one'}]);expect(loaded.passes![0].agentmemAudit?.contexts[0].resultSummary).toBe('decisions=1 · refs=DEC-1');expect(loaded.passes![1].usage).toBeUndefined();
+  it('persists each completed pass usage snapshot across reloads and new passes', () => {
+    const task = taskFixture();
+    task.passes![0].agentmemAudit = {
+      recorded: true,
+      coverage: 'full_pass',
+      selectedProjectId: 'demo',
+      workspaceRoot: 'D:/workspace',
+      identityStatus: 'verified',
+      verifiedProjectId: 'demo',
+      verifiedRoot: 'D:/workspace',
+      modelMcpStatus: 'disabled',
+      contexts: [
+        {
+          id: 'context',
+          role: 'orchestrator',
+          purpose: 'assignment_context',
+          queryHash: 'sha256',
+          status: 'supplied',
+          startedAt: '2026-10-19T00:00:00Z',
+          updatedAt: '2026-10-19T00:01:00Z',
+          threadId: 'orch-one',
+          turnId: 'turn-one',
+          resultSummary: 'decisions=1 · refs=DEC-1',
+        },
+      ],
+      calls: [
+        {
+          id: 'tool',
+          source: 'application',
+          role: 'orchestrator',
+          purpose: 'assignment_context',
+          method: 'attach_project',
+          status: 'completed',
+          startedAt: '2026-10-19T00:00:00Z',
+          updatedAt: '2026-10-19T00:01:00Z',
+          contextId: 'context',
+          projectId: 'demo',
+          threadId: 'orch-one',
+          turnId: 'turn-one',
+        },
+      ],
+    };
+    task.passes![0].usage = {
+      orchestrator: {
+        threadId: 'orch-one',
+        tokenStatus: 'available',
+        tokens: {
+          totalTokens: 80,
+          inputTokens: 60,
+          cachedInputTokens: 10,
+          cacheWriteInputTokens: null,
+          outputTokens: 20,
+          reasoningOutputTokens: 4,
+          modelContextWindow: 128000,
+          source: 'thread',
+        },
+        creditStatus: 'available',
+        estimateSource: 'codex-app-server-thread-usage',
+        estimatedCreditsMicros: '1200000',
+        estimatedUsdMicros: '700000',
+        groups: [
+          {
+            model: 'gpt-6.1-sol',
+            reasoningEffort: 'low',
+            speed: 'standard',
+            estimatedCreditsMicros: '1200000',
+            netNewInputTokens: '50',
+            cachedInputTokens: '10',
+            inputTokens: '60',
+            outputTokens: '20',
+            totalTokens: '80',
+          },
+        ],
+        allowance: {
+          fiveHourPercent: 0.25,
+          weeklyPercent: 0.5,
+          fiveHourWindow: {
+            sampleCount: 1,
+            firstSampledAt: '2026-10-19T00:00:00Z',
+            lastSampledAt: '2026-10-19T00:01:00Z',
+            windowDurationMins: 300,
+            resetsAt: 1800000000,
+            boundariesChanged: false,
+          },
+        },
+      },
+      worker: {
+        threadId: 'worker-one',
+        tokenStatus: 'available',
+        tokens: {
+          totalTokens: 20,
+          inputTokens: 15,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: null,
+          outputTokens: 5,
+          reasoningOutputTokens: 1,
+          modelContextWindow: 128000,
+          source: 'thread',
+        },
+        creditStatus: 'available',
+        estimateSource: 'codex-app-server-thread-usage',
+        estimatedCreditsMicros: '300000',
+        estimatedUsdMicros: '150000',
+        groups: [
+          {
+            model: 'gpt-6-luna',
+            reasoningEffort: 'high',
+            speed: 'standard',
+            estimatedCreditsMicros: '300000',
+            netNewInputTokens: '15',
+            cachedInputTokens: '0',
+            inputTokens: '15',
+            outputTokens: '5',
+            totalTokens: '20',
+          },
+        ],
+        allowance: { fiveHourPercent: 0.1, weeklyPercent: 0.2 },
+      },
+    };
+    const loaded = upgradeStoredState(
+      JSON.parse(JSON.stringify({ version: 2, settings: {}, tasks: [task], activeTaskId: task.id }))
+    ).tasks[0];
+    const previous = loaded.passes![0].usage;
+    const userMessage: Message = {
+      id: 'later',
+      role: 'user',
+      text: 'Next pass',
+      createdAt: '2026-10-19T00:02:00Z',
+    };
+    loaded.messages.push(userMessage);
+    beginPass(loaded, userMessage.text, userMessage.id);
+    expect(loaded.passes![0].usage).toEqual(previous);
+    expect(loaded.passes![0].usage?.orchestrator?.groups?.[0].model).toBe('gpt-6.1-sol');
+    expect(loaded.passes![0].usage?.orchestrator?.allowance?.fiveHourWindow?.firstSampledAt).toBe(
+      '2026-10-19T00:00:00Z'
+    );
+    expect(loaded.passes![0].agentmemAudit?.calls).toMatchObject([
+      {
+        source: 'application',
+        role: 'orchestrator',
+        method: 'attach_project',
+        status: 'completed',
+        projectId: 'demo',
+        threadId: 'orch-one',
+        turnId: 'turn-one',
+      },
+    ]);
+    expect(loaded.passes![0].agentmemAudit?.contexts[0].resultSummary).toBe(
+      'decisions=1 · refs=DEC-1'
+    );
+    expect(loaded.passes![1].usage).toBeUndefined();
   });
-  it('removes legacy raw reasoning content while preserving readable summaries and activity rows',()=>{
-    const task=taskFixture() as any;task.reasoningRawContent=[{text:'LEGACY_PRIVATE_RAW'}];task.passes![0].reasoningRawContent=[{text:'LEGACY_PRIVATE_RAW'}];task.reasoningSummaries=[{role:'orchestrator',threadId:'orch-one',turnId:'turn-one',itemId:'r',summaryIndex:0,text:'Readable summary'}];task.liveActivity=[{role:'orchestrator',threadId:'orch-one',turnId:'turn-one',itemId:'commentary',kind:'commentary',itemType:'agentMessage',title:'',text:'Visible commentary',status:'completed',startedAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:01:00Z'}];
-    const loaded=upgradeStoredState({version:2,settings:{},tasks:[task],activeTaskId:task.id}).tasks[0];
-    expect(loaded).not.toHaveProperty('reasoningRawContent');expect(loaded.passes![0]).not.toHaveProperty('reasoningRawContent');expect(loaded.liveActivity?.[0].text).toBe('Visible commentary');expect(loaded.passes![0].reasoningSummaries?.[0].text).toBe('Readable summary');expect(JSON.stringify(loaded)).not.toContain('LEGACY_PRIVATE_RAW');
+  it('removes legacy raw reasoning content while preserving readable summaries and activity rows', () => {
+    const task = taskFixture() as any;
+    task.reasoningRawContent = [{ text: 'LEGACY_PRIVATE_RAW' }];
+    task.passes![0].reasoningRawContent = [{ text: 'LEGACY_PRIVATE_RAW' }];
+    task.reasoningSummaries = [
+      {
+        role: 'orchestrator',
+        threadId: 'orch-one',
+        turnId: 'turn-one',
+        itemId: 'r',
+        summaryIndex: 0,
+        text: 'Readable summary',
+      },
+    ];
+    task.liveActivity = [
+      {
+        role: 'orchestrator',
+        threadId: 'orch-one',
+        turnId: 'turn-one',
+        itemId: 'commentary',
+        kind: 'commentary',
+        itemType: 'agentMessage',
+        title: '',
+        text: 'Visible commentary',
+        status: 'completed',
+        startedAt: '2026-10-19T00:00:00Z',
+        updatedAt: '2026-10-19T00:01:00Z',
+      },
+    ];
+    const loaded = upgradeStoredState({
+      version: 2,
+      settings: {},
+      tasks: [task],
+      activeTaskId: task.id,
+    }).tasks[0];
+    expect(loaded).not.toHaveProperty('reasoningRawContent');
+    expect(loaded.passes![0]).not.toHaveProperty('reasoningRawContent');
+    expect(loaded.liveActivity?.[0].text).toBe('Visible commentary');
+    expect(loaded.passes![0].reasoningSummaries?.[0].text).toBe('Readable summary');
+    expect(JSON.stringify(loaded)).not.toContain('LEGACY_PRIVATE_RAW');
   });
-  it('marks in-flight activity interrupted when a saved session restarts mid-turn',()=>{
-    const task=taskFixture();task.phase='worker_running';task.activeRole='worker';task.activeTurnId='turn-one';task.reasoningTurns=[{role:'worker',threadId:'worker-one',turnId:'turn-one',requestedModel:'gpt-6-luna',requestedEffort:'high',status:'streaming'}];task.liveActivity=[{role:'worker',threadId:'worker-one',turnId:'turn-one',itemId:'cmd',kind:'tool',itemType:'commandExecution',title:'npm test',status:'running',startedAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:00:00Z'}];task.passes![0].agentmemAudit={recorded:true,coverage:'full_pass',selectedProjectId:'demo',workspaceRoot:'D:/workspace',identityStatus:'verified',modelMcpStatus:'observed',contexts:[{id:'ctx',role:'worker',purpose:'worker_context',queryHash:'hash',status:'running',startedAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:00:00Z'}],calls:[{id:'call',source:'model',role:'worker',method:'retrieve_evidence',status:'running',startedAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:00:00Z',threadId:'worker-one',turnId:'turn-one'}]};
-    const loaded=upgradeStoredState({version:2,settings:{},tasks:[task],activeTaskId:task.id}).tasks[0];
-    expect(loaded.phase).toBe('paused_after_restart');expect(loaded.reasoningTurns?.[0].status).toBe('interrupted');expect(loaded.liveActivity?.[0].status).toBe('interrupted');expect(loaded.passes?.[0].agentmemAudit?.contexts[0].status).toBe('interrupted');expect(loaded.passes?.[0].agentmemAudit?.calls[0].status).toBe('interrupted');expect(loaded.activeTurnId).toBeUndefined();
+  it('marks in-flight activity interrupted when a saved session restarts mid-turn', () => {
+    const task = taskFixture();
+    task.phase = 'worker_running';
+    task.activeRole = 'worker';
+    task.activeTurnId = 'turn-one';
+    task.reasoningTurns = [
+      {
+        role: 'worker',
+        threadId: 'worker-one',
+        turnId: 'turn-one',
+        requestedModel: 'gpt-6-luna',
+        requestedEffort: 'high',
+        status: 'streaming',
+      },
+    ];
+    task.liveActivity = [
+      {
+        role: 'worker',
+        threadId: 'worker-one',
+        turnId: 'turn-one',
+        itemId: 'cmd',
+        kind: 'tool',
+        itemType: 'commandExecution',
+        title: 'npm test',
+        status: 'running',
+        startedAt: '2026-10-19T00:00:00Z',
+        updatedAt: '2026-10-19T00:00:00Z',
+      },
+    ];
+    task.passes![0].agentmemAudit = {
+      recorded: true,
+      coverage: 'full_pass',
+      selectedProjectId: 'demo',
+      workspaceRoot: 'D:/workspace',
+      identityStatus: 'verified',
+      modelMcpStatus: 'observed',
+      contexts: [
+        {
+          id: 'ctx',
+          role: 'worker',
+          purpose: 'worker_context',
+          queryHash: 'hash',
+          status: 'running',
+          startedAt: '2026-10-19T00:00:00Z',
+          updatedAt: '2026-10-19T00:00:00Z',
+        },
+      ],
+      calls: [
+        {
+          id: 'call',
+          source: 'model',
+          role: 'worker',
+          method: 'retrieve_evidence',
+          status: 'running',
+          startedAt: '2026-10-19T00:00:00Z',
+          updatedAt: '2026-10-19T00:00:00Z',
+          threadId: 'worker-one',
+          turnId: 'turn-one',
+        },
+      ],
+    };
+    const loaded = upgradeStoredState({
+      version: 2,
+      settings: {},
+      tasks: [task],
+      activeTaskId: task.id,
+    }).tasks[0];
+    expect(loaded.phase).toBe('paused_after_restart');
+    expect(loaded.reasoningTurns?.[0].status).toBe('interrupted');
+    expect(loaded.liveActivity?.[0].status).toBe('interrupted');
+    expect(loaded.passes?.[0].agentmemAudit?.contexts[0].status).toBe('interrupted');
+    expect(loaded.passes?.[0].agentmemAudit?.calls[0].status).toBe('interrupted');
+    expect(loaded.activeTurnId).toBeUndefined();
   });
-  it('starts an independent pass and leaves prior assignment, receipt and thread ids attached to the previous pass',()=>{
-    const task=taskFixture();syncCurrentPass(task);const userMessage:Message={id:'user-two',role:'user',text:'Second prompt',createdAt:'2026-10-19T00:01:00Z'};task.messages.push(userMessage);const second=beginPass(task,userMessage.text,userMessage.id);
-    expect(userMessage.passId).toBe(second.id);expect(currentPass(task)?.id).toBe(second.id);
-    expect(task.passes).toHaveLength(2);expect(task.passes?.[0]).toMatchObject({assignment,receipt,workerThreadId:'worker-one',orchestratorThreadId:'orch-one',phase:'accepted'});
-    expect(second).toMatchObject({index:2,userInput:'Second prompt',phase:'intake',agentContextVersion:1,correctionCount:0});expect(second.assignment).toBeUndefined();expect(second.receipt).toBeUndefined();expect(task.orchestratorThreadId).toBeUndefined();expect(task.workerThreadId).toBeUndefined();
-    second.orchestratorThreadId='orch-two';task.orchestratorThreadId='orch-two';syncCurrentPass(task);expect(isCurrentPassThread(task,'orch-two')).toBe(true);expect(isCurrentPassThread(task,'orch-one')).toBe(false);
+  it('starts an independent pass and leaves prior assignment, receipt and thread ids attached to the previous pass', () => {
+    const task = taskFixture();
+    syncCurrentPass(task);
+    const userMessage: Message = {
+      id: 'user-two',
+      role: 'user',
+      text: 'Second prompt',
+      createdAt: '2026-10-19T00:01:00Z',
+    };
+    task.messages.push(userMessage);
+    const second = beginPass(task, userMessage.text, userMessage.id);
+    expect(userMessage.passId).toBe(second.id);
+    expect(currentPass(task)?.id).toBe(second.id);
+    expect(task.passes).toHaveLength(2);
+    expect(task.passes?.[0]).toMatchObject({
+      assignment,
+      receipt,
+      workerThreadId: 'worker-one',
+      orchestratorThreadId: 'orch-one',
+      phase: 'accepted',
+    });
+    expect(second).toMatchObject({
+      index: 2,
+      userInput: 'Second prompt',
+      phase: 'intake',
+      agentContextVersion: 1,
+      correctionCount: 0,
+    });
+    expect(second.assignment).toBeUndefined();
+    expect(second.receipt).toBeUndefined();
+    expect(task.orchestratorThreadId).toBeUndefined();
+    expect(task.workerThreadId).toBeUndefined();
+    second.orchestratorThreadId = 'orch-two';
+    task.orchestratorThreadId = 'orch-two';
+    syncCurrentPass(task);
+    expect(isCurrentPassThread(task, 'orch-two')).toBe(true);
+    expect(isCurrentPassThread(task, 'orch-one')).toBe(false);
   });
-  it('round-trips separate composer prompts with their own pass and message identity',()=>{
-    const task=taskFixture();const firstMessage:Message={id:'user-one',role:'user',text:'First prompt',createdAt:task.createdAt};task.messages.push(firstMessage);syncCurrentPass(task);const first=task.passes![0];firstMessage.passId=first.id;first.userMessageIds.push(firstMessage.id);first.phase='needs_attention';first.error='A new composer message started a separate pass.';const secondMessage:Message={id:'user-two',role:'user',text:'Separate follow-up',createdAt:'2026-10-19T00:01:00Z'};task.messages.push(secondMessage);task.userMessages.push(secondMessage.text);const second=beginPass(task,secondMessage.text,secondMessage.id);const restored=upgradeStoredState(JSON.parse(JSON.stringify({version:2,settings:{},tasks:[task],activeTaskId:task.id}))).tasks[0];
-    expect(restored.passes?.map(pass=>({id:pass.id,userInputs:pass.userInputs,phase:pass.phase,error:pass.error}))).toEqual([{id:first.id,userInputs:['First prompt'],phase:'needs_attention',error:'A new composer message started a separate pass.'},{id:second.id,userInputs:['Separate follow-up'],phase:'paused_after_restart',error:'The process restarted during this turn. Resume explicitly after checking the Codex agent thread.'}]);expect(restored.messages.filter(row=>row.role==='user').map(row=>({id:row.id,passId:row.passId}))).toEqual([{id:firstMessage.id,passId:first.id},{id:secondMessage.id,passId:second.id}]);
+  it('round-trips separate composer prompts with their own pass and message identity', () => {
+    const task = taskFixture();
+    const firstMessage: Message = {
+      id: 'user-one',
+      role: 'user',
+      text: 'First prompt',
+      createdAt: task.createdAt,
+    };
+    task.messages.push(firstMessage);
+    syncCurrentPass(task);
+    const first = task.passes![0];
+    firstMessage.passId = first.id;
+    first.userMessageIds.push(firstMessage.id);
+    first.phase = 'needs_attention';
+    first.error = 'A new composer message started a separate pass.';
+    const secondMessage: Message = {
+      id: 'user-two',
+      role: 'user',
+      text: 'Separate follow-up',
+      createdAt: '2026-10-19T00:01:00Z',
+    };
+    task.messages.push(secondMessage);
+    task.userMessages.push(secondMessage.text);
+    const second = beginPass(task, secondMessage.text, secondMessage.id);
+    const restored = upgradeStoredState(
+      JSON.parse(JSON.stringify({ version: 2, settings: {}, tasks: [task], activeTaskId: task.id }))
+    ).tasks[0];
+    expect(
+      restored.passes?.map((pass) => ({
+        id: pass.id,
+        userInputs: pass.userInputs,
+        phase: pass.phase,
+        error: pass.error,
+      }))
+    ).toEqual([
+      {
+        id: first.id,
+        userInputs: ['First prompt'],
+        phase: 'needs_attention',
+        error: 'A new composer message started a separate pass.',
+      },
+      {
+        id: second.id,
+        userInputs: ['Separate follow-up'],
+        phase: 'paused_after_restart',
+        error:
+          'The process restarted during this turn. Resume explicitly after checking the Codex agent thread.',
+      },
+    ]);
+    expect(
+      restored.messages
+        .filter((row) => row.role === 'user')
+        .map((row) => ({ id: row.id, passId: row.passId }))
+    ).toEqual([
+      { id: firstMessage.id, passId: first.id },
+      { id: secondMessage.id, passId: second.id },
+    ]);
   });
-  it('restores a steering delivery interrupted by process shutdown as unconfirmed in the same pass',()=>{
-    const task=taskFixture();task.phase='worker_running';task.activeRole='worker';task.activeTurnId='turn-one';const pass=task.passes![0];pass.phase='worker_running';const steering:Message={id:'steer-one',role:'user',text:'Check the failing test first.',createdAt:'2026-10-19T00:02:00Z',passId:pass.id,submissionKind:'steering',deliveryStatus:'pending'};task.messages.push(steering);
-    const restored=upgradeStoredState(JSON.parse(JSON.stringify({version:2,settings:{},tasks:[task],activeTaskId:task.id}))).tasks[0];
-    expect(restored.messages.find(row=>row.id==='steer-one')).toMatchObject({passId:pass.id,submissionKind:'steering',deliveryStatus:'unconfirmed'});expect(restored.passes?.[0].userInputs).toEqual(['First prompt','Check the failing test first.']);expect(restored.passes?.[0].userMessageIds).toContain('steer-one');expect(restored.passes?.[0].workerThreadId).toBe('worker-one');expect(restored.phase).toBe('paused_after_restart');
+  it('restores a steering delivery interrupted by process shutdown as unconfirmed in the same pass', () => {
+    const task = taskFixture();
+    task.phase = 'worker_running';
+    task.activeRole = 'worker';
+    task.activeTurnId = 'turn-one';
+    const pass = task.passes![0];
+    pass.phase = 'worker_running';
+    const steering: Message = {
+      id: 'steer-one',
+      role: 'user',
+      text: 'Check the failing test first.',
+      createdAt: '2026-10-19T00:02:00Z',
+      passId: pass.id,
+      submissionKind: 'steering',
+      deliveryStatus: 'pending',
+    };
+    task.messages.push(steering);
+    const restored = upgradeStoredState(
+      JSON.parse(JSON.stringify({ version: 2, settings: {}, tasks: [task], activeTaskId: task.id }))
+    ).tasks[0];
+    expect(restored.messages.find((row) => row.id === 'steer-one')).toMatchObject({
+      passId: pass.id,
+      submissionKind: 'steering',
+      deliveryStatus: 'unconfirmed',
+    });
+    expect(restored.passes?.[0].userInputs).toEqual([
+      'First prompt',
+      'Check the failing test first.',
+    ]);
+    expect(restored.passes?.[0].userMessageIds).toContain('steer-one');
+    expect(restored.passes?.[0].workerThreadId).toBe('worker-one');
+    expect(restored.phase).toBe('paused_after_restart');
   });
-  it('preserves old pass records but never resumes threads from an older role configuration',()=>{
-    const active=taskFixture();active.phase='worker_running';active.activeRole='worker';active.activeTurnId='old-turn';
-    const migrated=upgradeStoredState({version:2,settings:{},tasks:[active],activeTaskId:active.id}).tasks[0];
-    expect(migrated.phase).toBe('paused_after_restart');expect(migrated.activeRole).toBeUndefined();expect(migrated.error).toContain('older Codex thread');
-    expect(migrated.passes?.[0]).toMatchObject({agentContextVersion:0,workerThreadId:'worker-one',orchestratorThreadId:'orch-one'});
-    const msg:Message={id:'followup',role:'user',text:'Continue with a new pass',createdAt:'2026-10-20T00:00:00Z'};migrated.messages.push(msg);const fresh=beginPass(migrated,msg.text,msg.id);
-    expect(fresh.agentContextVersion).toBe(1);expect(migrated.workerThreadId).toBeUndefined();expect(migrated.orchestratorThreadId).toBeUndefined();expect(migrated.passes?.[0].workerThreadId).toBe('worker-one');
+  it('preserves old pass records but never resumes threads from an older role configuration', () => {
+    const active = taskFixture();
+    active.phase = 'worker_running';
+    active.activeRole = 'worker';
+    active.activeTurnId = 'old-turn';
+    const migrated = upgradeStoredState({
+      version: 2,
+      settings: {},
+      tasks: [active],
+      activeTaskId: active.id,
+    }).tasks[0];
+    expect(migrated.phase).toBe('paused_after_restart');
+    expect(migrated.activeRole).toBeUndefined();
+    expect(migrated.error).toContain('older Codex thread');
+    expect(migrated.passes?.[0]).toMatchObject({
+      agentContextVersion: 0,
+      workerThreadId: 'worker-one',
+      orchestratorThreadId: 'orch-one',
+    });
+    const msg: Message = {
+      id: 'followup',
+      role: 'user',
+      text: 'Continue with a new pass',
+      createdAt: '2026-10-20T00:00:00Z',
+    };
+    migrated.messages.push(msg);
+    const fresh = beginPass(migrated, msg.text, msg.id);
+    expect(fresh.agentContextVersion).toBe(1);
+    expect(migrated.workerThreadId).toBeUndefined();
+    expect(migrated.orchestratorThreadId).toBeUndefined();
+    expect(migrated.passes?.[0].workerThreadId).toBe('worker-one');
   });
-  it('persists the selected approval policy per pass and preserves the historical policy across later passes',()=>{
-    const task=taskFixture();task.passes![0].approvalPolicy='on-request';syncCurrentPass(task);
-    const msg:Message={id:'user-full',role:'user',text:'Use full access',createdAt:'2026-10-19T00:02:00Z'};task.messages.push(msg);
-    const second=beginPass(task,msg.text,msg.id,'full-access');
-    expect(task.passes?.[0].approvalPolicy).toBe('on-request');expect(second.approvalPolicy).toBe('full-access');
-    const migrated=upgradeStoredState({version:2,settings:{approvalPolicy:'full-access'},tasks:[task],activeTaskId:task.id});
-    expect(migrated.tasks[0].passes?.map(pass=>pass.approvalPolicy)).toEqual(['on-request','full-access']);
+  it('persists the selected approval policy per pass and preserves the historical policy across later passes', () => {
+    const task = taskFixture();
+    task.passes![0].approvalPolicy = 'on-request';
+    syncCurrentPass(task);
+    const msg: Message = {
+      id: 'user-full',
+      role: 'user',
+      text: 'Use full access',
+      createdAt: '2026-10-19T00:02:00Z',
+    };
+    task.messages.push(msg);
+    const second = beginPass(task, msg.text, msg.id, 'full-access');
+    expect(task.passes?.[0].approvalPolicy).toBe('on-request');
+    expect(second.approvalPolicy).toBe('full-access');
+    const migrated = upgradeStoredState({
+      version: 2,
+      settings: { approvalPolicy: 'full-access' },
+      tasks: [task],
+      activeTaskId: task.id,
+    });
+    expect(migrated.tasks[0].passes?.map((pass) => pass.approvalPolicy)).toEqual([
+      'on-request',
+      'full-access',
+    ]);
   });
-  it('snapshots the selected DSH conversation home per pass and defaults old settings to isolated storage',()=>{
-    const task=taskFixture(),message:Message={id:'user-storage',role:'user',text:'Use my DSH home',createdAt:'2026-10-20T00:00:00Z'};task.messages.push(message);
-    const pass=beginPass(task,message.text,message.id,'on-request',[],[],undefined,false,undefined,[],{mode:'native'});
-    expect(pass.deepSeekConversationStorage).toEqual({mode:'native'});
-    const migrated=upgradeStoredState({version:2,settings:{},tasks:[],activeTaskId:null});
+  it('snapshots the selected DSH conversation home per pass and defaults old settings to isolated storage', () => {
+    const task = taskFixture(),
+      message: Message = {
+        id: 'user-storage',
+        role: 'user',
+        text: 'Use my DSH home',
+        createdAt: '2026-10-20T00:00:00Z',
+      };
+    task.messages.push(message);
+    const pass = beginPass(
+      task,
+      message.text,
+      message.id,
+      'on-request',
+      [],
+      [],
+      undefined,
+      false,
+      undefined,
+      [],
+      { mode: 'native' }
+    );
+    expect(pass.deepSeekConversationStorage).toEqual({ mode: 'native' });
+    const migrated = upgradeStoredState({
+      version: 2,
+      settings: {},
+      tasks: [],
+      activeTaskId: null,
+    });
     expect(migrated.settings.deepseekConversationStorageMode).toBe('isolated');
   });
-  it('migrates old passes from the saved setting and rejects an unknown stored preset to the safe default',()=>{
-    const task=taskFixture();delete task.passes![0].approvalPolicy;
-    const saved=upgradeStoredState({version:2,settings:{approvalPolicy:'full-access'},tasks:[task],activeTaskId:task.id});
-    expect(saved.tasks[0].passes?.[0].approvalPolicy).toBe('full-access');expect(saved.settings.approvalPolicy).toBe('full-access');
-    const invalid=upgradeStoredState({version:2,settings:{approvalPolicy:'custom-policy'},tasks:[],activeTaskId:null});
+  it('migrates old passes from the saved setting and rejects an unknown stored preset to the safe default', () => {
+    const task = taskFixture();
+    delete task.passes![0].approvalPolicy;
+    const saved = upgradeStoredState({
+      version: 2,
+      settings: { approvalPolicy: 'full-access' },
+      tasks: [task],
+      activeTaskId: task.id,
+    });
+    expect(saved.tasks[0].passes?.[0].approvalPolicy).toBe('full-access');
+    expect(saved.settings.approvalPolicy).toBe('full-access');
+    const invalid = upgradeStoredState({
+      version: 2,
+      settings: { approvalPolicy: 'custom-policy' },
+      tasks: [],
+      activeTaskId: null,
+    });
     expect(invalid.settings.approvalPolicy).toBe('on-request');
   });
-  it('migrates old single-artifact state without claiming the artifact belongs to a particular message',()=>{
-    const legacy=upgradeStoredState({version:1,settings:{projectRoot:'D:/workspace',agentmemProjectId:'demo'},activeTaskId:'old',tasks:[{id:'old',title:'Old task',phase:'accepted',createdAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:01:00Z',userRoot:'D:/workspace',userMessages:['first','second'],messages:[{id:'one',role:'user',text:'first'},{id:'two',role:'user',text:'second'}],assignment,receipt,correctionCount:0,processedTurns:[]}]});
-    const old=legacy.tasks[0];expect(legacy.version).toBe(7);expect(legacy.settings).not.toHaveProperty('projectRoot');expect(legacy.settings).not.toHaveProperty('agentmemProjectId');expect(legacy.projects).toHaveLength(1);expect(legacy.projects[0]).toMatchObject({projectRoot:'D:/workspace',needsLocation:true});expect(legacy.projects[0]).not.toHaveProperty('agentmemProjectId');expect(legacy.selectedProjectId).toBe(legacy.projects[0].id);expect(old.projectId).toBe(legacy.projects[0].id);expect(old.requiresFreshSession).toBe(true);expect(old.legacyAgentMem).toMatchObject({projectId:'demo'});expect(legacy.expandedProjectIds).toContain(legacy.projects[0].id);expect(legacy.expandedProjectIds).toContain('unclassified');expect(old.messages).toHaveLength(2);expect(old.userMessages).toEqual(['first','second']);expect(old.currentPassId).toBeUndefined();expect(old.passes?.[0]).toMatchObject({legacyUnassociated:true,assignment,receipt,userInputs:['first','second']});
+  it('migrates old single-artifact state without claiming the artifact belongs to a particular message', () => {
+    const legacy = upgradeStoredState({
+      version: 1,
+      settings: { projectRoot: 'D:/workspace', agentmemProjectId: 'demo' },
+      activeTaskId: 'old',
+      tasks: [
+        {
+          id: 'old',
+          title: 'Old task',
+          phase: 'accepted',
+          createdAt: '2026-10-19T00:00:00Z',
+          updatedAt: '2026-10-19T00:01:00Z',
+          userRoot: 'D:/workspace',
+          userMessages: ['first', 'second'],
+          messages: [
+            { id: 'one', role: 'user', text: 'first' },
+            { id: 'two', role: 'user', text: 'second' },
+          ],
+          assignment,
+          receipt,
+          correctionCount: 0,
+          processedTurns: [],
+        },
+      ],
+    });
+    const old = legacy.tasks[0];
+    expect(legacy.version).toBe(7);
+    expect(legacy.settings).not.toHaveProperty('projectRoot');
+    expect(legacy.settings).not.toHaveProperty('agentmemProjectId');
+    expect(legacy.projects).toHaveLength(1);
+    expect(legacy.projects[0]).toMatchObject({ projectRoot: 'D:/workspace', needsLocation: true });
+    expect(legacy.projects[0]).not.toHaveProperty('agentmemProjectId');
+    expect(legacy.selectedProjectId).toBe(legacy.projects[0].id);
+    expect(old.projectId).toBe(legacy.projects[0].id);
+    expect(old.requiresFreshSession).toBe(true);
+    expect(old.legacyAgentMem).toMatchObject({ projectId: 'demo' });
+    expect(legacy.expandedProjectIds).toContain(legacy.projects[0].id);
+    expect(legacy.expandedProjectIds).toContain('unclassified');
+    expect(old.messages).toHaveLength(2);
+    expect(old.userMessages).toEqual(['first', 'second']);
+    expect(old.currentPassId).toBeUndefined();
+    expect(old.passes?.[0]).toMatchObject({
+      legacyUnassociated: true,
+      assignment,
+      receipt,
+      userInputs: ['first', 'second'],
+    });
   });
-  it('retires old per-task knowledge bindings and keeps matching-root history separately',()=>{
-    const state=upgradeStoredState({version:2,settings:{projectRoot:'D:/workspace',agentmemProjectId:'configured-project'},tasks:[{id:'disabled-task',title:'No KB',phase:'accepted',createdAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:01:00Z',userRoot:'D:/workspace',agentmemProjectId:'',userMessages:['question'],messages:[],correctionCount:0,processedTurns:[]},{id:'legacy-task',title:'Old KB',phase:'accepted',createdAt:'2026-10-19T00:00:00Z',updatedAt:'2026-10-19T00:01:00Z',userRoot:'D:/workspace',userMessages:['question'],messages:[],correctionCount:0,processedTurns:[]}]});
-    const disabled=state.tasks.find(t=>t.id==='disabled-task')!,legacy=state.tasks.find(t=>t.id==='legacy-task')!;
-    expect(disabled).not.toHaveProperty('agentmemProjectId');expect(disabled.legacyAgentMem).toMatchObject({projectId:''});expect(disabled.requiresFreshSession).toBeUndefined();
-    expect(legacy).not.toHaveProperty('agentmemProjectId');expect(legacy.legacyAgentMem).toMatchObject({projectId:'configured-project'});expect(legacy.requiresFreshSession).toBe(true);expect(legacy.projectId).toBe(state.projects[0].id);
+  it('retires old per-task knowledge bindings and keeps matching-root history separately', () => {
+    const state = upgradeStoredState({
+      version: 2,
+      settings: { projectRoot: 'D:/workspace', agentmemProjectId: 'configured-project' },
+      tasks: [
+        {
+          id: 'disabled-task',
+          title: 'No KB',
+          phase: 'accepted',
+          createdAt: '2026-10-19T00:00:00Z',
+          updatedAt: '2026-10-19T00:01:00Z',
+          userRoot: 'D:/workspace',
+          agentmemProjectId: '',
+          userMessages: ['question'],
+          messages: [],
+          correctionCount: 0,
+          processedTurns: [],
+        },
+        {
+          id: 'legacy-task',
+          title: 'Old KB',
+          phase: 'accepted',
+          createdAt: '2026-10-19T00:00:00Z',
+          updatedAt: '2026-10-19T00:01:00Z',
+          userRoot: 'D:/workspace',
+          userMessages: ['question'],
+          messages: [],
+          correctionCount: 0,
+          processedTurns: [],
+        },
+      ],
+    });
+    const disabled = state.tasks.find((t) => t.id === 'disabled-task')!,
+      legacy = state.tasks.find((t) => t.id === 'legacy-task')!;
+    expect(disabled).not.toHaveProperty('agentmemProjectId');
+    expect(disabled.legacyAgentMem).toMatchObject({ projectId: '' });
+    expect(disabled.requiresFreshSession).toBeUndefined();
+    expect(legacy).not.toHaveProperty('agentmemProjectId');
+    expect(legacy.legacyAgentMem).toMatchObject({ projectId: 'configured-project' });
+    expect(legacy.requiresFreshSession).toBe(true);
+    expect(legacy.projectId).toBe(state.projects[0].id);
   });
-  it('preserves role-labeled visible answers for follow-ups while excluding assignments, receipts, and worker output',()=>{
-    const direct={...taskFixture().passes![0],id:'direct',index:1,userInput:'What is 1+1?',userInputs:['What is 1+1?','Do not delegate.'],resolution:'direct' as const,publicAnswer:'1 + 1 = 2.',reasoningSummaries:[{role:'orchestrator' as const,threadId:'orch',turnId:'turn',itemId:'reason',summaryIndex:0,text:'PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD',passId:'direct'}],assignment:{...assignment,outcome:'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD'},receipt:{...receipt,result:'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD'}};
-    const delegated={...taskFixture().passes![0],id:'delegated',index:2,userInput:'Return my requested result.',userInputs:['Return my requested result.'],reviewNote:'The requested result is 2.',resolution:'delegated' as const,phase:'accepted' as const,assignment:{...assignment,outcome:'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD'},receipt:{...receipt,result:'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD'}};
-    const context=buildPriorConversationContext([direct,delegated],'current');
-    const text=formatCurrentPassConversation('Double that result.',context);
+  it('preserves role-labeled visible answers for follow-ups while excluding assignments, receipts, and worker output', () => {
+    const direct = {
+      ...taskFixture().passes![0],
+      id: 'direct',
+      index: 1,
+      userInput: 'What is 1+1?',
+      userInputs: ['What is 1+1?', 'Do not delegate.'],
+      resolution: 'direct' as const,
+      publicAnswer: '1 + 1 = 2.',
+      reasoningSummaries: [
+        {
+          role: 'orchestrator' as const,
+          threadId: 'orch',
+          turnId: 'turn',
+          itemId: 'reason',
+          summaryIndex: 0,
+          text: 'PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD',
+          passId: 'direct',
+        },
+      ],
+      assignment: { ...assignment, outcome: 'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD' },
+      receipt: { ...receipt, result: 'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD' },
+    };
+    const delegated = {
+      ...taskFixture().passes![0],
+      id: 'delegated',
+      index: 2,
+      userInput: 'Return my requested result.',
+      userInputs: ['Return my requested result.'],
+      reviewNote: 'The requested result is 2.',
+      resolution: 'delegated' as const,
+      phase: 'accepted' as const,
+      assignment: { ...assignment, outcome: 'PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD' },
+      receipt: { ...receipt, result: 'PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD' },
+    };
+    const context = buildPriorConversationContext([direct, delegated], 'current');
+    const text = formatCurrentPassConversation('Double that result.', context);
     expect(text).toContain('CURRENT USER REQUEST:\nDouble that result.');
     expect(text).toContain('Use this history to resolve conversational follow-ups');
     expect(text).toContain('"role":"user","content":"What is 1+1?"');
     expect(text).toContain('"role":"assistant","content":"1 + 1 = 2."');
-    expect(context[0].conversation_history).toEqual([{role:'user',content:'What is 1+1?'},{role:'user',content:'Do not delegate.'},{role:'assistant',content:'1 + 1 = 2.'}]);
-    expect(context[1].conversation_history).toEqual([{role:'user',content:'Return my requested result.'},{role:'assistant',content:'The requested result is 2.'}]);
+    expect(context[0].conversation_history).toEqual([
+      { role: 'user', content: 'What is 1+1?' },
+      { role: 'user', content: 'Do not delegate.' },
+      { role: 'assistant', content: '1 + 1 = 2.' },
+    ]);
+    expect(context[1].conversation_history).toEqual([
+      { role: 'user', content: 'Return my requested result.' },
+      { role: 'assistant', content: 'The requested result is 2.' },
+    ]);
     expect(text).not.toContain('PRIVATE_WORKER_RECEIPT_SHOULD_NOT_FORWARD');
     expect(text).not.toContain('PRIVATE_ASSIGNMENT_SHOULD_NOT_FORWARD');
     expect(text).not.toContain('PRIVATE_REASONING_SUMMARY_SHOULD_NOT_FORWARD');
@@ -195,23 +1414,36 @@ describe('per-pass task state',()=>{
   });
 });
 
-describe('native DSH state persistence',()=>{
-  it('loads a saved DSH integration assignment without inventing receipt requirements',async()=>{
-    const {state,taskId}=await loadNativeDshTeamState('deepseek');
-    const loaded=await state.loadState();
-    expect(loaded.tasks.find(row=>row.id===taskId)?.passes?.[0]?.recruitmentTeam?.integration.assignment?.receipt_requirements).toEqual([]);
+describe('native DSH state persistence', () => {
+  it('loads a saved DSH integration assignment without inventing receipt requirements', async () => {
+    const { state, taskId } = await loadNativeDshTeamState('deepseek');
+    const loaded = await state.loadState();
+    expect(
+      loaded.tasks.find((row) => row.id === taskId)?.passes?.[0]?.recruitmentTeam?.integration
+        .assignment?.receipt_requirements
+    ).toEqual([]);
   });
 
-  it('continues to reject an empty receipt contract on a Codex integration',async()=>{
-    const {state}=await loadNativeDshTeamState('codex');
+  it('continues to reject an empty receipt contract on a Codex integration', async () => {
+    const { state } = await loadNativeDshTeamState('codex');
     await expect(state.loadState()).rejects.toThrow(/unsupported format/i);
   });
 });
 
-describe('read-only recruitment persistence',()=>{
-  it('loads a persisted team without Git branch or worktree metadata',async()=>{
-    const {state,taskId}=await loadReadOnlyRecruitmentState(),loaded=await state.loadState(),team=loaded.tasks.find(row=>row.id===taskId)?.passes?.[0]?.recruitmentTeam;
-    expect(team).toMatchObject({mode:'read_only',integration:{status:'not_required'},workers:[{workerId:'read-only-worker',status:'paused_after_restart'}]});
-    expect(team).not.toHaveProperty('workspaceParent');expect(team).not.toHaveProperty('baseRef');expect(team).not.toHaveProperty('baseCommit');expect(team?.workers[0]).not.toHaveProperty('branch');expect(team?.workers[0]).not.toHaveProperty('worktreeRoot');
+describe('read-only recruitment persistence', () => {
+  it('loads a persisted team without Git branch or worktree metadata', async () => {
+    const { state, taskId } = await loadReadOnlyRecruitmentState(),
+      loaded = await state.loadState(),
+      team = loaded.tasks.find((row) => row.id === taskId)?.passes?.[0]?.recruitmentTeam;
+    expect(team).toMatchObject({
+      mode: 'read_only',
+      integration: { status: 'not_required' },
+      workers: [{ workerId: 'read-only-worker', status: 'paused_after_restart' }],
+    });
+    expect(team).not.toHaveProperty('workspaceParent');
+    expect(team).not.toHaveProperty('baseRef');
+    expect(team).not.toHaveProperty('baseCommit');
+    expect(team?.workers[0]).not.toHaveProperty('branch');
+    expect(team?.workers[0]).not.toHaveProperty('worktreeRoot');
   });
 });

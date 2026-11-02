@@ -21,9 +21,12 @@ describe('Opnex branding and compatibility', () => {
     const html = read('index.html');
     expect(html).toContain('<title>Opnex');
     expect(html).toContain('href="/opnex-icon-grid-1_5-margin.svg"');
-    expect(read('public/opnex-icon-grid-1_5-margin.svg')).toBe(read('opnex-icon-grid-1_5-margin.svg'));
-    expect(readFileSync(path.join(root, 'public/opnex-icon-grid-1_5-margin.png')))
-      .toEqual(readFileSync(path.join(root, 'opnex-icon-grid-1_5-margin.png')));
+    expect(read('public/opnex-icon-grid-1_5-margin.svg')).toBe(
+      read('opnex-icon-grid-1_5-margin.svg')
+    );
+    expect(readFileSync(path.join(root, 'public/opnex-icon-grid-1_5-margin.png'))).toEqual(
+      readFileSync(path.join(root, 'opnex-icon-grid-1_5-margin.png'))
+    );
   });
 
   it('packages Opnex icons while preserving the installed-app identity', () => {
@@ -33,7 +36,11 @@ describe('Opnex branding and compatibility', () => {
     expect(builder).toContain('icon: desktop/opnex.icns');
     expect(builder).toContain('appId: org.pseudoharness.desktop');
     expect(builder).toMatch(/appId: org\.pseudoharness\.desktop\r?\n#.*upgrade.*compatibility/i);
-    for (const relativePath of ['desktop/opnex.ico', 'desktop/opnex.icns', 'desktop/opnex-tray-icon.png']) {
+    for (const relativePath of [
+      'desktop/opnex.ico',
+      'desktop/opnex.icns',
+      'desktop/opnex-tray-icon.png',
+    ]) {
       expect(() => readFileSync(path.join(root, relativePath))).not.toThrow();
     }
     const generator = read('scripts/generate-brand-icons.ps1');

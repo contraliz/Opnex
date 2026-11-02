@@ -14,7 +14,12 @@ function createTrayController({ Tray, Menu, image, openWindow, quitApp }) {
     menu = Menu.buildFromTemplate([
       { label: 'Open Opnex', click: open },
       { type: 'separator' },
-      { label: 'Quit', click: () => { void quitApp(); } },
+      {
+        label: 'Quit',
+        click: () => {
+          void quitApp();
+        },
+      },
     ]);
     tray.setContextMenu(menu);
     tray.on('click', open);

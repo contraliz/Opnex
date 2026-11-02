@@ -5,7 +5,7 @@ export type WorkspaceTabRecord = {
   kind: Exclude<WorkspaceTabKind, 'session'>;
   originTabId: string | null;
   originTaskId: string | null;
-  projectId?:string;
+  projectId?: string;
   projectRoot: string;
   initialUrl?: string;
   focusUrl?: string;
@@ -15,7 +15,7 @@ export type WorkspaceTabRegistry = Readonly<Record<string, WorkspaceTabRecord>>;
 
 export type WorkspaceTabContext = {
   originTabId: string | null;
-  projectId?:string;
+  projectId?: string;
   projectRoot: string;
   initialUrl?: string;
   focusUrl?: string;
@@ -34,17 +34,22 @@ export function workspaceKindForMode(mode: string): Exclude<WorkspaceTabKind, 's
   return null;
 }
 
-export function createWorkspaceTabId(kind: Exclude<WorkspaceTabKind, 'session'>, nonce: string | number): string {
+export function createWorkspaceTabId(
+  kind: Exclude<WorkspaceTabKind, 'session'>,
+  nonce: string | number
+): string {
   return `${kind}:${nonce}`;
 }
 
 export function createWorkspaceTabRecord(
   kind: Exclude<WorkspaceTabKind, 'session'>,
   id: string,
-  context: WorkspaceTabContext,
+  context: WorkspaceTabContext
 ): WorkspaceTabRecord {
-  if (workspaceTabKind(id) !== kind) throw new Error(`Workspace tab ID must use the ${kind}: prefix.`);
-  const originTaskId = context.originTabId && !context.originTabId.startsWith('new:') ? context.originTabId : null;
+  if (workspaceTabKind(id) !== kind)
+    throw new Error(`Workspace tab ID must use the ${kind}: prefix.`);
+  const originTaskId =
+    context.originTabId && !context.originTabId.startsWith('new:') ? context.originTabId : null;
   return {
     id,
     kind,
@@ -57,12 +62,19 @@ export function createWorkspaceTabRecord(
   };
 }
 
-export function registerWorkspaceTab(registry: WorkspaceTabRegistry, tab: WorkspaceTabRecord): WorkspaceTabRegistry {
-  if (workspaceTabKind(tab.id) !== tab.kind) throw new Error(`Workspace tab ID must use the ${tab.kind}: prefix.`);
+export function registerWorkspaceTab(
+  registry: WorkspaceTabRegistry,
+  tab: WorkspaceTabRecord
+): WorkspaceTabRegistry {
+  if (workspaceTabKind(tab.id) !== tab.kind)
+    throw new Error(`Workspace tab ID must use the ${tab.kind}: prefix.`);
   return { ...registry, [tab.id]: tab };
 }
 
-export function removeWorkspaceTab(registry: WorkspaceTabRegistry, id: string): WorkspaceTabRegistry {
+export function removeWorkspaceTab(
+  registry: WorkspaceTabRegistry,
+  id: string
+): WorkspaceTabRegistry {
   if (!(id in registry)) return registry;
   const next = { ...registry };
   delete next[id];

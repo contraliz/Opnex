@@ -282,7 +282,7 @@
   cursor: pointer;
 }
 
-.recruitment-team__steer[aria-pressed="true"] {
+.recruitment-team__steer[aria-pressed='true'] {
   border-color: var(--accent);
   background: var(--accent-wash);
 }
@@ -310,35 +310,142 @@
 }
 
 /* Flat markdown/CLI roster inside the Workers fold (2026-11-02) */
-.recruitment-team { gap: 10px; color: #cfcfd2; font-size: 11.5px; }
-.recruitment-team__heading h2 { display: none; }
-.recruitment-team__heading p { margin: 0; color: #6f6f74; font: 9.5px/1.55 var(--font-app); }
-.recruitment-team__heading p code { color: #8f8f95; }
-.recruitment-team__roster { gap: 12px; }
+.recruitment-team {
+  gap: 10px;
+  color: #cfcfd2;
+  font-size: 11.5px;
+}
+.recruitment-team__heading h2 {
+  display: none;
+}
+.recruitment-team__heading p {
+  margin: 0;
+  color: #6f6f74;
+  font: 9.5px/1.55 var(--font-app);
+}
+.recruitment-team__heading p code {
+  color: #8f8f95;
+}
+.recruitment-team__roster {
+  gap: 12px;
+}
 .recruitment-team__card,
-.recruitment-team__worker-bar { border: 0; border-radius: 0; background: transparent; padding: 0; overflow: visible; }
+.recruitment-team__worker-bar {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  overflow: visible;
+}
 .recruitment-team__card article,
-.recruitment-team__worker-bar article { padding: 0; gap: 5px; }
-.recruitment-team__worker-bar-heading { padding: 0 0 2px; border-bottom: 0; gap: 8px; }
-.recruitment-team__worker-bar-heading h3 { color: #e4e4e6; font: 600 11.5px/1.5 var(--font-app); }
+.recruitment-team__worker-bar article {
+  padding: 0;
+  gap: 5px;
+}
+.recruitment-team__worker-bar-heading {
+  padding: 0 0 2px;
+  border-bottom: 0;
+  gap: 8px;
+}
+.recruitment-team__worker-bar-heading h3 {
+  color: #e4e4e6;
+  font: 600 11.5px/1.5 var(--font-app);
+}
 .recruitment-team__worker-effort,
-.recruitment-team__status { max-width: none; margin: 0; border: 0; border-radius: 0; padding: 0; background: transparent; color: #6f6f74; font: 9px/1.5 var(--font-app); letter-spacing: 0; text-transform: lowercase; }
-.recruitment-team__metadata { gap: 1px; }
-.recruitment-team__metadata > div { grid-template-columns: 84px minmax(0, 1fr); gap: 12px; }
-.recruitment-team__metadata dt { color: #636367; font: 9.5px/1.55 var(--font-app); }
-.recruitment-team__metadata dd { color: #c9c9cd; font-size: 11.5px; }
-.recruitment-team__provider { border-left: 1px solid #2b2b2b; padding: 1px 0 1px 9px; color: #7d7d82; font-size: 9.5px; line-height: 1.55; }
-.recruitment-team__provider strong { color: #9a9aa0; }
-.recruitment-team__assignment h4 { margin: 0 0 3px; color: #636367; font: 600 8.5px/1.6 var(--font-app); letter-spacing: .08em; text-transform: uppercase; }
+.recruitment-team__status {
+  max-width: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: #6f6f74;
+  font: 9px/1.5 var(--font-app);
+  letter-spacing: 0;
+  text-transform: lowercase;
+}
+.recruitment-team__metadata {
+  gap: 1px;
+}
+.recruitment-team__metadata > div {
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 12px;
+}
+.recruitment-team__metadata dt {
+  color: #636367;
+  font: 9.5px/1.55 var(--font-app);
+}
+.recruitment-team__metadata dd {
+  color: #c9c9cd;
+  font-size: 11.5px;
+}
+.recruitment-team__provider {
+  border-left: 1px solid #2b2b2b;
+  padding: 1px 0 1px 9px;
+  color: #7d7d82;
+  font-size: 9.5px;
+  line-height: 1.55;
+}
+.recruitment-team__provider strong {
+  color: #9a9aa0;
+}
+.recruitment-team__assignment h4 {
+  margin: 0 0 3px;
+  color: #636367;
+  font: 600 8.5px/1.6 var(--font-app);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 .recruitment-team__assignment p,
-.recruitment-team__receipt p { margin: 0 0 2px; font-size: 11.5px; line-height: 1.55; }
+.recruitment-team__receipt p {
+  margin: 0 0 2px;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
 .recruitment-team__assignment p strong,
-.recruitment-team__receipt p strong { color: #8f8f95; font: 500 9.5px/1.55 var(--font-app); }
-.recruitment-team__disclosure { margin-top: 3px; border-top: 0; padding-top: 0; }
-.recruitment-team__disclosure summary { width: max-content; color: #8f8f95; font: 400 9.5px/1.55 var(--font-app); }
-.recruitment-team__receipt-block h5 { margin: 5px 0 1px; color: #636367; font: 600 8.5px/1.6 var(--font-app); letter-spacing: .06em; text-transform: uppercase; }
-.recruitment-team__receipt-block ul { margin: 1px 0 0; padding-left: 14px; font-size: 11.5px; line-height: 1.55; }
+.recruitment-team__receipt p strong {
+  color: #8f8f95;
+  font: 500 9.5px/1.55 var(--font-app);
+}
+.recruitment-team__disclosure {
+  margin-top: 3px;
+  border-top: 0;
+  padding-top: 0;
+}
+.recruitment-team__disclosure summary {
+  width: max-content;
+  color: #8f8f95;
+  font: 400 9.5px/1.55 var(--font-app);
+}
+.recruitment-team__receipt-block h5 {
+  margin: 5px 0 1px;
+  color: #636367;
+  font: 600 8.5px/1.6 var(--font-app);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.recruitment-team__receipt-block ul {
+  margin: 1px 0 0;
+  padding-left: 14px;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
 .recruitment-team__receipt-block p,
-.recruitment-team__muted { font-size: 10.5px; }
-.recruitment-team__error { border-left: 2px solid var(--danger); border-radius: 0; padding: 3px 0 3px 9px; background: transparent; font-size: 11px; }
-.recruitment-team__steer { min-height: 26px; border-radius: 4px; padding: 2px 8px; background: transparent; color: #a6a6aa; font-size: 10px; }
+.recruitment-team__muted {
+  font-size: 10.5px;
+}
+.recruitment-team__error {
+  border-left: 2px solid var(--danger);
+  border-radius: 0;
+  padding: 3px 0 3px 9px;
+  background: transparent;
+  font-size: 11px;
+}
+.recruitment-team__steer {
+  min-height: 26px;
+  border-radius: 4px;
+  padding: 2px 8px;
+  background: transparent;
+  color: #a6a6aa;
+  font-size: 10px;
+}

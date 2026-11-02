@@ -5,62 +5,207 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { closeSkillLibrary, createSkill, getSkill, recordedSkillSaves } from '../dist-server/skill-library.js';
+import {
+  closeSkillLibrary,
+  createSkill,
+  getSkill,
+  recordedSkillSaves,
+} from '../dist-server/skill-library.js';
 import { skillLibraryMcpServerConfig } from '../dist-server/skill-library-mcp-config.js';
 
-const repositoryRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-async function findPackagedResources(root,depth=0){
-  if(depth>6)return undefined;
-  let entries;try{entries=await readdir(root,{withFileTypes:true});}catch{return undefined;}
-  if(path.basename(root).toLowerCase()==='resources'&&entries.some(entry=>['opnex-node','pseudoharness-node'].includes(entry.name)&&entry.isDirectory()))return root;
-  for(const entry of entries){if(entry.isDirectory()){const found=await findPackagedResources(path.join(root,entry.name),depth+1);if(found)return found;}}
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+async function findPackagedResources(root, depth = 0) {
+  if (depth > 6) return undefined;
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  if (
+    path.basename(root).toLowerCase() === 'resources' &&
+    entries.some(
+      (entry) => ['opnex-node', 'pseudoharness-node'].includes(entry.name) && entry.isDirectory()
+    )
+  )
+    return root;
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const found = await findPackagedResources(path.join(root, entry.name), depth + 1);
+      if (found) return found;
+    }
+  }
 }
-const packagedResources=process.env.OPNEX_PACKAGED_RESOURCES||process.env.PSEUDOHARNESS_PACKAGED_RESOURCES||await findPackagedResources(path.join(repositoryRoot,'desktop-release'));
-if(!packagedResources)throw new Error('No packaged app Resources folder with the bundled helper runtime was found.');
-const resourcesPath=path.resolve(packagedResources);
-process.env.OPNEX_PACKAGED_APP='1';process.env.OPNEX_RESOURCES_PATH=resourcesPath;
-const temp=await mkdtemp(path.join(os.tmpdir(),'opnex-mcp-package-smoke-'));
-const data=path.join(temp,'app-data'),taskId='packaged-smoke-task',passId='packaged-smoke-pass';
-await mkdir(data,{recursive:true});await writeFile(path.join(data,'state.json'),JSON.stringify({tasks:[{id:taskId,currentPassId:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn',passes:[{id:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn'}]}]}));process.env.OPNEX_DATA_DIR=data;
-const inheritedEnv=Object.fromEntries(['PATH','SystemRoot','WINDIR','TEMP','TMP','HOME'].flatMap(key=>process.env[key]===undefined?[]:[[key,process.env[key]]]));
+const packagedResources =
+  process.env.OPNEX_PACKAGED_RESOURCES ||
+  process.env.PSEUDOHARNESS_PACKAGED_RESOURCES ||
+  (await findPackagedResources(path.join(repositoryRoot, 'desktop-release')));
+if (!packagedResources)
+  throw new Error('No packaged app Resources folder with the bundled helper runtime was found.');
+const resourcesPath = path.resolve(packagedResources);
+process.env.OPNEX_PACKAGED_APP = '1';
+process.env.OPNEX_RESOURCES_PATH = resourcesPath;
+const temp = await mkdtemp(path.join(os.tmpdir(), 'opnex-mcp-package-smoke-'));
+const data = path.join(temp, 'app-data'),
+  taskId = 'packaged-smoke-task',
+  passId = 'packaged-smoke-pass';
+await mkdir(data, { recursive: true });
+await writeFile(
+  path.join(data, 'state.json'),
+  JSON.stringify({
+    tasks: [
+      {
+        id: taskId,
+        currentPassId: passId,
+        phase: 'direct_running',
+        activeRole: 'direct',
+        activeTurnId: 'packaged-smoke-turn',
+        passes: [
+          {
+            id: passId,
+            phase: 'direct_running',
+            activeRole: 'direct',
+            activeTurnId: 'packaged-smoke-turn',
+          },
+        ],
+      },
+    ],
+  })
+);
+process.env.OPNEX_DATA_DIR = data;
+const inheritedEnv = Object.fromEntries(
+  ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME'].flatMap((key) =>
+    process.env[key] === undefined ? [] : [[key, process.env[key]]]
+  )
+);
 
-async function connect(config,extraEnv={}){
-  if('ELECTRON_RUN_AS_NODE' in {...config.env,...extraEnv})throw new Error('Packaged helpers must not depend on Electron RunAsNode.');
-  const transport=new StdioClientTransport({command:config.command,args:config.args,cwd:config.cwd,env:{...inheritedEnv,...config.env,...extraEnv},stderr:'pipe'});
-  transport.stderr?.on('data',chunk=>process.stderr.write(`packaged helper: ${chunk}`));
-  const client=new Client({name:'opnex-packaged-helper-smoke',version:'1'});
-  await client.connect(transport);return {client,transport};
+async function connect(config, extraEnv = {}) {
+  if ('ELECTRON_RUN_AS_NODE' in { ...config.env, ...extraEnv })
+    throw new Error('Packaged helpers must not depend on Electron RunAsNode.');
+  const transport = new StdioClientTransport({
+    command: config.command,
+    args: config.args,
+    cwd: config.cwd,
+    env: { ...inheritedEnv, ...config.env, ...extraEnv },
+    stderr: 'pipe',
+  });
+  transport.stderr?.on('data', (chunk) => process.stderr.write(`packaged helper: ${chunk}`));
+  const client = new Client({ name: 'opnex-packaged-helper-smoke', version: '1' });
+  await client.connect(transport);
+  return { client, transport };
 }
 
-let failures=0;
-try{
-  const skill=await createSkill({name:'Packaged runtime smoke skill',description:'Temporary isolated packaging check',instructions:'This synthetic body exists only inside this temporary smoke-test profile.',source:'Packaged smoke fixture'});
-  const config=skillLibraryMcpServerConfig({taskId,role:'direct'});
-  const target=`${process.platform}-${process.arch}`,runtimeRoot=['opnex-node','pseudoharness-node'].map(name=>path.join(resourcesPath,name,target,process.platform==='win32'?'node.exe':'node')).find(file=>existsSync(file));
-  if(!runtimeRoot)throw new Error(`No Opnex helper runtime was found for ${target}.`);
-  const packagedNode=runtimeRoot;
-  if(config.command!==packagedNode)throw new Error(`The packaged skills server did not resolve to the staged ${target} Node executable.`);
-  const {client}=await connect(config);
-  try{
-    const tools=await client.listTools();
-    const saved=await client.callTool({name:'skills_save',arguments:{skill_id:skill.id,expected_revision:skill.revision,name:skill.name,description:'Temporary isolated packaging updated by the active task',instructions:'This revision was saved through the task-scoped helper.'}});
-    const stale=await client.callTool({name:'skills_save',arguments:{skill_id:skill.id,expected_revision:skill.revision,name:skill.name,description:'Stale packaged overwrite',instructions:'This stale revision must not replace the saved one.'}});
-    const [search,list,loaded,afterSave,taskSaves]=await Promise.all([
-      client.callTool({name:'skills_search',arguments:{query:'Temporary isolated packaging'}}),
-      client.callTool({name:'skills_list',arguments:{query:'Packaged runtime'}}),
-      client.callTool({name:'skills_load',arguments:{skill_id:skill.id}}),
+let failures = 0;
+try {
+  const skill = await createSkill({
+    name: 'Packaged runtime smoke skill',
+    description: 'Temporary isolated packaging check',
+    instructions: 'This synthetic body exists only inside this temporary smoke-test profile.',
+    source: 'Packaged smoke fixture',
+  });
+  const config = skillLibraryMcpServerConfig({ taskId, role: 'direct' });
+  const target = `${process.platform}-${process.arch}`,
+    runtimeRoot = ['opnex-node', 'pseudoharness-node']
+      .map((name) =>
+        path.join(resourcesPath, name, target, process.platform === 'win32' ? 'node.exe' : 'node')
+      )
+      .find((file) => existsSync(file));
+  if (!runtimeRoot) throw new Error(`No Opnex helper runtime was found for ${target}.`);
+  const packagedNode = runtimeRoot;
+  if (config.command !== packagedNode)
+    throw new Error(
+      `The packaged skills server did not resolve to the staged ${target} Node executable.`
+    );
+  const { client } = await connect(config);
+  try {
+    const tools = await client.listTools();
+    const saved = await client.callTool({
+      name: 'skills_save',
+      arguments: {
+        skill_id: skill.id,
+        expected_revision: skill.revision,
+        name: skill.name,
+        description: 'Temporary isolated packaging updated by the active task',
+        instructions: 'This revision was saved through the task-scoped helper.',
+      },
+    });
+    const stale = await client.callTool({
+      name: 'skills_save',
+      arguments: {
+        skill_id: skill.id,
+        expected_revision: skill.revision,
+        name: skill.name,
+        description: 'Stale packaged overwrite',
+        instructions: 'This stale revision must not replace the saved one.',
+      },
+    });
+    const [search, list, loaded, afterSave, taskSaves] = await Promise.all([
+      client.callTool({
+        name: 'skills_search',
+        arguments: { query: 'Temporary isolated packaging' },
+      }),
+      client.callTool({ name: 'skills_list', arguments: { query: 'Packaged runtime' } }),
+      client.callTool({ name: 'skills_load', arguments: { skill_id: skill.id } }),
       getSkill(skill.id),
-      recordedSkillSaves(taskId,passId),
+      recordedSkillSaves(taskId, passId),
     ]);
-    const searchText=JSON.stringify(search),listText=JSON.stringify(list),loadText=JSON.stringify(loaded),staleText=stale.content?.map(block=>block.text||'').join('\n')||'';
-    const expected=['skills_list','skills_search','skills_load','skills_read_file','skills_save'];
-    const savePassed=saved.isError!==true&&afterSave.revision!==skill.revision&&JSON.stringify(saved).includes(afterSave.revision)&&taskSaves.some(row=>row.skillId===skill.id&&row.revision===afterSave.revision&&row.role==='direct'&&row.action==='update');
-    const staleRejected=stale.isError===true&&staleText.includes('changed since it was loaded')&&afterSave.revision!==skill.revision;
-    const verified=expected.every(name=>tools.tools.some(tool=>tool.name===name))&&searchText.includes(skill.id)&&listText.includes(afterSave.revision)&&loadText.includes(afterSave.revision)&&loadText.includes('This revision was saved through the task-scoped helper.')&&savePassed&&staleRejected;
-    console.log(JSON.stringify({helper:'skills',command:config.command,tools:tools.tools.map(tool=>tool.name),revision:afterSave.revision,searchPassed:searchText.includes(skill.id),listPassed:listText.includes(afterSave.revision),loadPassed:loadText.includes('This revision was saved through the task-scoped helper.'),savePassed,staleRejected,verified}));
-    if(!verified)failures++;
-  }finally{await client.close();}
-
-}catch(error){console.error(error);failures++;}
-finally{closeSkillLibrary();await rm(temp,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
-if(failures)process.exitCode=1;
+    const searchText = JSON.stringify(search),
+      listText = JSON.stringify(list),
+      loadText = JSON.stringify(loaded),
+      staleText = stale.content?.map((block) => block.text || '').join('\n') || '';
+    const expected = [
+      'skills_list',
+      'skills_search',
+      'skills_load',
+      'skills_read_file',
+      'skills_save',
+    ];
+    const savePassed =
+      saved.isError !== true &&
+      afterSave.revision !== skill.revision &&
+      JSON.stringify(saved).includes(afterSave.revision) &&
+      taskSaves.some(
+        (row) =>
+          row.skillId === skill.id &&
+          row.revision === afterSave.revision &&
+          row.role === 'direct' &&
+          row.action === 'update'
+      );
+    const staleRejected =
+      stale.isError === true &&
+      staleText.includes('changed since it was loaded') &&
+      afterSave.revision !== skill.revision;
+    const verified =
+      expected.every((name) => tools.tools.some((tool) => tool.name === name)) &&
+      searchText.includes(skill.id) &&
+      listText.includes(afterSave.revision) &&
+      loadText.includes(afterSave.revision) &&
+      loadText.includes('This revision was saved through the task-scoped helper.') &&
+      savePassed &&
+      staleRejected;
+    console.log(
+      JSON.stringify({
+        helper: 'skills',
+        command: config.command,
+        tools: tools.tools.map((tool) => tool.name),
+        revision: afterSave.revision,
+        searchPassed: searchText.includes(skill.id),
+        listPassed: listText.includes(afterSave.revision),
+        loadPassed: loadText.includes('This revision was saved through the task-scoped helper.'),
+        savePassed,
+        staleRejected,
+        verified,
+      })
+    );
+    if (!verified) failures++;
+  } finally {
+    await client.close();
+  }
+} catch (error) {
+  console.error(error);
+  failures++;
+} finally {
+  closeSkillLibrary();
+  await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+if (failures) process.exitCode = 1;

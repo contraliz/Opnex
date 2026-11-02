@@ -3,7 +3,12 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createInitialCommit, previewInitialCommit, type InitialCommitRunner } from '../server/workspace-initial-commit.js';
+import {
+  createInitialCommit,
+  previewInitialCommit,
+  type InitialCommitRunner,
+  runInitialCommitGit,
+} from '../server/workspace-initial-commit.js';
 
 let temporary: string | undefined;
 afterEach(async () => {
@@ -38,24 +43,38 @@ describe('initial commit preview and confirmation', () => {
 
     const preview = await previewInitialCommit(root);
     expect(preview).toMatchObject({ status: 'unborn', eligible: true, empty: false });
-    expect(preview.files.map(file => file.path)).toEqual(expect.arrayContaining(['.gitignore', 'staged.txt', 'new file.txt']));
-    expect(preview.files.some(file => file.path === 'ignored.tmp')).toBe(false);
-    expect(preview.files.find(file => file.path === 'staged.txt')?.status).toBe('staged and modified');
+    expect(preview.files.map((file) => file.path)).toEqual(
+      expect.arrayContaining(['.gitignore', 'staged.txt', 'new file.txt'])
+    );
+    expect(preview.files.some((file) => file.path === 'ignored.tmp')).toBe(false);
+    expect(preview.files.find((file) => file.path === 'staged.txt')?.status).toBe(
+      'staged and modified'
+    );
 
-    const result = await createInitialCommit({ workspaceRoot: root, previewToken: preview.previewToken!, message: 'Initial project baseline' });
+    const result = await createInitialCommit({
+      workspaceRoot: root,
+      previewToken: preview.previewToken!,
+      message: 'Initial project baseline',
+    });
     expect(git(['rev-parse', 'HEAD'], root)).toBe(result.commit);
     expect(git(['show', 'HEAD:staged.txt'], root)).toBe('staged version');
     expect(git(['show', 'HEAD:new file.txt'], root)).toBe('new file');
     expect(git(['show', 'HEAD:.gitignore'], root)).toBe('ignored.tmp');
     expect(git(['status', '--short'], root)).toContain('staged.txt');
-    await expect(readFile(path.join(root, 'staged.txt'), 'utf8')).resolves.toBe('later working copy');
+    await expect(readFile(path.join(root, 'staged.txt'), 'utf8')).resolves.toBe(
+      'later working copy'
+    );
   });
 
   it('allows an explicitly confirmed empty initial commit', async () => {
     const root = await unbornRepository();
     const preview = await previewInitialCommit(root);
     expect(preview).toMatchObject({ status: 'unborn', eligible: true, empty: true, totalFiles: 0 });
-    const result = await createInitialCommit({ workspaceRoot: root, previewToken: preview.previewToken!, message: 'Empty baseline' });
+    const result = await createInitialCommit({
+      workspaceRoot: root,
+      previewToken: preview.previewToken!,
+      message: 'Empty baseline',
+    });
     expect(git(['rev-parse', 'HEAD'], root)).toBe(result.commit);
     expect(git(['show', '--format=%P', '--no-patch', 'HEAD'], root)).toBe('');
   });
@@ -64,7 +83,131 @@ describe('initial commit preview and confirmation', () => {
     const root = await unbornRepository();
     const preview = await previewInitialCommit(root);
     await writeFile(path.join(root, 'arrived-later.txt'), 'not in the preview');
-    await expect(createInitialCommit({ workspaceRoot: root, previewToken: preview.previewToken!, message: 'Initial baseline' })).rejects.toMatchObject({ code: 'stale-preview' });
+    await expect(
+      createInitialCommit({
+        workspaceRoot: root,
+        previewToken: preview.previewToken!,
+        message: 'Initial baseline',
+      })
+    ).rejects.toMatchObject({ code: 'stale-preview' });
+    expect(() => git(['rev-parse', '--verify', 'HEAD^{commit}'], root)).toThrow();
+  });
+
+  it('rejects changed untracked contents even when the preview paths are unchanged', async () => {
+    const root = await unbornRepository();
+    const file = path.join(root, 'previewed.txt');
+    await writeFile(file, 'reviewed contents');
+    const preview = await previewInitialCommit(root);
+
+    await writeFile(file, 'different contents with the same untracked status');
+
+    await expect(
+      createInitialCommit({
+        workspaceRoot: root,
+        previewToken: preview.previewToken!,
+        message: 'Initial baseline',
+      })
+    ).rejects.toMatchObject({ code: 'stale-preview' });
+    expect(() => git(['rev-parse', '--verify', 'HEAD^{commit}'], root)).toThrow();
+  });
+
+  it('rejects changed staged contents even when the preview paths are unchanged', async () => {
+    const root = await unbornRepository();
+    const file = path.join(root, 'previewed.txt');
+    await writeFile(file, 'reviewed contents');
+    git(['add', 'previewed.txt'], root);
+    const preview = await previewInitialCommit(root);
+
+    await writeFile(file, 'different contents');
+    git(['add', 'previewed.txt'], root);
+
+    await expect(
+      createInitialCommit({
+        workspaceRoot: root,
+        previewToken: preview.previewToken!,
+        message: 'Initial baseline',
+      })
+    ).rejects.toMatchObject({ code: 'stale-preview' });
+    expect(() => git(['rev-parse', '--verify', 'HEAD^{commit}'], root)).toThrow();
+  });
+
+  it('rejects a tracked file that changes while the reviewed paths are being staged', async () => {
+    const root = await unbornRepository();
+    const file = path.join(root, 'previewed.txt');
+    await writeFile(file, 'reviewed contents');
+    const preview = await previewInitialCommit(root);
+    let changedAtStage = false;
+    const runner: InitialCommitRunner = async (
+      executable,
+      args,
+      cwd,
+      maxStdoutBytes,
+      input,
+      timeoutMs
+    ) => {
+      if (args[0] === '--literal-pathspecs' && args[1] === 'add' && !changedAtStage) {
+        changedAtStage = true;
+        await writeFile(file, 'changed during the staging boundary');
+      }
+      return runInitialCommitGit(executable, args, cwd, maxStdoutBytes, input, timeoutMs);
+    };
+
+    await expect(
+      createInitialCommit(
+        {
+          workspaceRoot: root,
+          previewToken: preview.previewToken!,
+          message: 'Initial baseline',
+        },
+        runner
+      )
+    ).rejects.toMatchObject({ code: 'stale-preview' });
+    await expect(readFile(file, 'utf8')).resolves.toBe('changed during the staging boundary');
+    expect(() => git(['rev-parse', '--verify', 'HEAD^{commit}'], root)).toThrow();
+  });
+
+  it('rejects index contents changed during staging even if the worktree is restored', async () => {
+    const root = await unbornRepository();
+    const file = path.join(root, 'previewed.txt');
+    await writeFile(file, 'reviewed contents');
+    const preview = await previewInitialCommit(root);
+    let changedAtStage = false;
+    const runner: InitialCommitRunner = async (
+      executable,
+      args,
+      cwd,
+      maxStdoutBytes,
+      input,
+      timeoutMs
+    ) => {
+      const result = await runInitialCommitGit(
+        executable,
+        args,
+        cwd,
+        maxStdoutBytes,
+        input,
+        timeoutMs
+      );
+      if (args[0] === '--literal-pathspecs' && args[1] === 'add' && !changedAtStage) {
+        changedAtStage = true;
+        await writeFile(file, 'different staged contents');
+        git(['add', 'previewed.txt'], root);
+        await writeFile(file, 'reviewed contents');
+      }
+      return result;
+    };
+
+    await expect(
+      createInitialCommit(
+        {
+          workspaceRoot: root,
+          previewToken: preview.previewToken!,
+          message: 'Initial baseline',
+        },
+        runner
+      )
+    ).rejects.toMatchObject({ code: 'stale-preview' });
+    await expect(readFile(file, 'utf8')).resolves.toBe('reviewed contents');
     expect(() => git(['rev-parse', '--verify', 'HEAD^{commit}'], root)).toThrow();
   });
 
@@ -73,22 +216,44 @@ describe('initial commit preview and confirmation', () => {
     await writeFile(path.join(root, 'file.txt'), 'file');
     git(['add', 'file.txt'], root);
     git(['commit', '--quiet', '-m', 'existing'], root);
-    expect(await previewInitialCommit(root)).toMatchObject({ status: 'committed', eligible: false });
+    expect(await previewInitialCommit(root)).toMatchObject({
+      status: 'committed',
+      eligible: false,
+    });
 
     const nested = path.join(root, 'nested');
     await mkdir(nested);
-    expect(await previewInitialCommit(nested)).toMatchObject({ status: 'unavailable', eligible: false, reason: 'project-not-repository-root' });
+    expect(await previewInitialCommit(nested)).toMatchObject({
+      status: 'unavailable',
+      eligible: false,
+      reason: 'project-not-repository-root',
+    });
   });
 
   it('requires an existing repository author identity', async () => {
     const root = await unbornRepository();
     await writeFile(path.join(root, 'file.txt'), 'file');
     const preview = await previewInitialCommit(root);
-    const runner: InitialCommitRunner = async (executable, args, cwd, maxStdoutBytes, input, timeoutMs) => {
-      if (args[0] === 'var' && args[1] === 'GIT_AUTHOR_IDENT') return { code: 128, stdout: '', stderr: 'identity unavailable' };
-      return await (await import('../server/workspace-initial-commit.js')).runInitialCommitGit(executable, args, cwd, maxStdoutBytes, input, timeoutMs);
+    const runner: InitialCommitRunner = async (
+      executable,
+      args,
+      cwd,
+      maxStdoutBytes,
+      input,
+      timeoutMs
+    ) => {
+      if (args[0] === 'var' && args[1] === 'GIT_AUTHOR_IDENT')
+        return { code: 128, stdout: '', stderr: 'identity unavailable' };
+      return await (
+        await import('../server/workspace-initial-commit.js')
+      ).runInitialCommitGit(executable, args, cwd, maxStdoutBytes, input, timeoutMs);
     };
-    await expect(createInitialCommit({ workspaceRoot: root, previewToken: preview.previewToken!, message: 'Initial baseline' }, runner)).rejects.toMatchObject({ code: 'missing-author' });
+    await expect(
+      createInitialCommit(
+        { workspaceRoot: root, previewToken: preview.previewToken!, message: 'Initial baseline' },
+        runner
+      )
+    ).rejects.toMatchObject({ code: 'missing-author' });
     expect(() => git(['rev-parse', '--verify', 'HEAD^{commit}'], root)).toThrow();
   });
 
@@ -96,7 +261,13 @@ describe('initial commit preview and confirmation', () => {
     const root = await unbornRepository();
     await writeFile(path.join(root, 'file.txt'), 'file');
     const preview = await previewInitialCommit(root);
-    await expect(createInitialCommit({ workspaceRoot: root, previewToken: preview.previewToken!, message: '  ' })).rejects.toMatchObject({ code: 'invalid-message' });
+    await expect(
+      createInitialCommit({
+        workspaceRoot: root,
+        previewToken: preview.previewToken!,
+        message: '  ',
+      })
+    ).rejects.toMatchObject({ code: 'invalid-message' });
     expect(() => git(['rev-parse', '--verify', 'HEAD^{commit}'], root)).toThrow();
   });
 });

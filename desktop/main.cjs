@@ -1,4 +1,16 @@
-const { app, BrowserWindow, WebContentsView, session, ipcMain, utilityProcess, shell, dialog, Tray, Menu, nativeImage } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  WebContentsView,
+  session,
+  ipcMain,
+  utilityProcess,
+  shell,
+  dialog,
+  Tray,
+  Menu,
+  nativeImage,
+} = require('electron');
 const { createServer } = require('node:net');
 const { createHmac, randomBytes } = require('node:crypto');
 const { mkdirSync, readFileSync } = require('node:fs');
@@ -11,194 +23,989 @@ const { navigationState, navigate, attachNavigationHandlers } = require('./brows
 const { openCodexThread } = require('./codex-thread-link.cjs');
 const { createTrayController } = require('./tray-controller.cjs');
 const { stopOwnedKernel } = require('./kernel-shutdown.cjs');
-const { desktopUserDataPath, desktopUserDataPaths, desktopUserDataPathForLock, desktopStorageFallbackPaths, migrateDesktopUserData } = require('./storage-migration.cjs');
+const {
+  desktopUserDataPath,
+  desktopUserDataPaths,
+  desktopUserDataPathForLock,
+  desktopStorageFallbackPaths,
+  migrateDesktopUserData,
+} = require('./storage-migration.cjs');
 
-function appEnv(name){return process.env[`OPNEX_${name}`]??process.env[`PSEUDOHARNESS_${name}`];}
+function appEnv(name) {
+  return process.env[`OPNEX_${name}`] ?? process.env[`PSEUDOHARNESS_${name}`];
+}
 
 // Keep this partition stable so installed upgrades retain browser sessions.
 const partition = 'persist:pseudoharness-browser-v1';
-const projectRoot=path.resolve(__dirname,'..');
+const projectRoot = path.resolve(__dirname, '..');
 let mainWindow;
 let mainWindowLoadPromise;
 let backend;
-let backendExitCode=null;
-let backendExitPromise=Promise.resolve(null);
-let kernelOwnership='unknown';
+let backendExitCode = null;
+let backendExitPromise = Promise.resolve(null);
+let kernelOwnership = 'unknown';
 let trayController;
-let quitInProgress=false;
-let quitApproved=false;
-const kernelShutdownState={ownsKernel:false,shutdownAccepted:false};
+let quitInProgress = false;
+let quitApproved = false;
+const kernelShutdownState = { ownsKernel: false, shutdownAccepted: false };
 let origin;
-let bounds={main:null,side:null,chat:null};
-let assignments={main:null,side:null,chat:null};
-const workspaceBounds=new Map();
-const workspaceTabs=new Map();
-let tabSequence=0;
-const tabs=new Map();
+let bounds = { main: null, side: null, chat: null };
+let assignments = { main: null, side: null, chat: null };
+const workspaceBounds = new Map();
+const workspaceTabs = new Map();
+let tabSequence = 0;
+const tabs = new Map();
 let annotationTimer;
 
-if(appEnv('INTERACTION_TEST')==='1'&&appEnv('CDP_PORT'))app.commandLine.appendSwitch('remote-debugging-port',String(Number(appEnv('CDP_PORT'))));
+if (appEnv('INTERACTION_TEST') === '1' && appEnv('CDP_PORT'))
+  app.commandLine.appendSwitch('remote-debugging-port', String(Number(appEnv('CDP_PORT'))));
 
-const isolatedUserData=appEnv('ELECTRON_DATA_DIR');
+const isolatedUserData = appEnv('ELECTRON_DATA_DIR');
 let startupStorageError;
 let desktopDataPaths;
 let desktopLockPath;
 let desktopStorageFallback;
-if(isolatedUserData){const userData=path.resolve(isolatedUserData);mkdirSync(userData,{recursive:true});app.setPath('userData',userData);}
-else if(process.platform==='win32'){app.setPath('userData',desktopUserDataPath(app.getPath('appData'),'win32'));}
-else{desktopDataPaths=desktopUserDataPaths(app.getPath('appData'));desktopLockPath=desktopUserDataPathForLock(desktopDataPaths);app.setPath('userData',desktopLockPath);}
-let ownsDesktopInstance=app.requestSingleInstanceLock();
-if(!ownsDesktopInstance)app.quit();
-else if(!isolatedUserData&&process.platform!=='win32'){try{
-  migrateDesktopUserData(desktopDataPaths);
-  app.setPath('userData',desktopDataPaths.current);
-  if(desktopLockPath!==desktopDataPaths.current){
-    app.releaseSingleInstanceLock();
-    ownsDesktopInstance=app.requestSingleInstanceLock();
-    if(!ownsDesktopInstance)app.quit();
-  }
-}catch(error){
-  const detail=error instanceof Error?error.message:String(error);
-  console.error('Opnex desktop storage migration failed:',detail);
-  if(error?.cleanupError)console.warn('The incomplete migration staging directory was preserved because cleanup failed:',error.cleanupError instanceof Error?error.cleanupError.message:String(error.cleanupError));
-  desktopStorageFallback=desktopStorageFallbackPaths(desktopDataPaths,error);
-  if(desktopStorageFallback){
-    app.setPath('userData',desktopStorageFallback.userData);
-    console.warn('Opnex is using its intact legacy data and browser-profile directories for this session; migration will be retried at a later launch.');
-  }else{startupStorageError=error;app.setPath('userData',desktopDataPaths.current);}
-}}
-const browserProfile=browserProfilePath({platform:process.platform,localAppData:process.env.LOCALAPPDATA,userData:app.getPath('userData'),isolated:!!isolatedUserData});
-if(ownsDesktopInstance&&!startupStorageError)mkdirSync(browserProfile,{recursive:true});app.setPath('sessionData',browserProfile);
-
-function pickPort(){return new Promise((resolve,reject)=>{const server=createServer();server.once('error',reject);server.listen(0,'127.0.0.1',()=>{const port=server.address().port;server.close(error=>error?reject(error):resolve(port));});});}
-function validAppSender(event){try{return !!mainWindow&&event.sender===mainWindow.webContents&&new URL(event.senderFrame?.url).origin===origin;}catch{return false;}}
-function requireAppSender(event){if(!validAppSender(event))throw new Error('Only the local Opnex window may control browser tabs.');}
-function normalizeUrl(input){let url;try{url=new URL(input);}catch{throw new Error('Enter a complete website URL.');}if(url.protocol!=='https:'&&url.protocol!=='http:')throw new Error('Only HTTP and HTTPS browser addresses are supported.');if(url.username||url.password)throw new Error('URLs that contain credentials are not accepted.');return url.toString();}
-function stateForTab(tab){const contents=tab.view.webContents;return {id:tab.id,url:tab.url,title:tab.title||(!contents.isDestroyed()?contents.getTitle():'')||tab.url,pane:tab.workspaceId?'hidden':assignments.chat===tab.id?'chat':assignments.side===tab.id?'side':assignments.main===tab.id?'main':'hidden',loading:!contents.isDestroyed()&&contents.isLoading(),commenting:!!tab.commenting,...(tab.workspaceId?{workspaceId:tab.workspaceId}:{}),...(tab.workspaceId&&!contents.isDestroyed()?navigationState(contents):{}),...(tab.failure?{failure:{...tab.failure}}:{})};}
-function state(){return [...tabs.values()].map(stateForTab);}
-function legacyState(){return state().filter(tab=>!tab.workspaceId);}
-function sendEvent(type,tab,extra={}){if(mainWindow&&!mainWindow.isDestroyed())mainWindow.webContents.send('opnex:browser-event',{type,tabs:state(),...(tab?{tab:{id:tab.id,url:tab.url,title:tab.title, ...(tab.workspaceId?{workspaceId:tab.workspaceId}:{})}}:{}),...extra});}
-function workspaceId(value){if(typeof value!=='string'||value.length<1||value.length>160||!/^[A-Za-z0-9._:-]+$/.test(value))throw new Error('A stable browser workspace ID is required.');return value;}
-function workspaceTab(id){const host=workspaceId(id);const tabId=workspaceTabs.get(host);return tabId?tabs.get(tabId):undefined;}
-function isSensitiveAuthPage(raw){try{const url=new URL(raw);return url.hostname.toLowerCase()==='github.com'&&/^\/(?:login|oauth|session)(?:\/|$)/i.test(url.pathname);}catch{return false;}}
-function startAnnotationPolling(){if(annotationTimer)return;annotationTimer=setInterval(async()=>{for(const tab of tabs.values()){if(!tab.commenting||tab.view.webContents.isDestroyed())continue;try{const value=await tab.view.webContents.executeJavaScript('(()=>{const item=window.__opnexAnnotation;if(!item)return null;window.__opnexAnnotation=null;return item})()');if(!value||typeof value!=='object')continue;tab.annotationOverlay=true;applyBounds();sendEvent('annotation',tab,{annotation:safeAnnotation(value,{url:tab.view.webContents.getURL(),title:tab.title})});}catch{}}if(![...tabs.values()].some(tab=>tab.commenting)){clearInterval(annotationTimer);annotationTimer=undefined;}},350);annotationTimer.unref?.();}
-function applyBounds(){if(!mainWindow||mainWindow.isDestroyed())return;const [width,height]=mainWindow.getContentSize();for(const tab of tabs.values()){let rect=null;let reserved=0;if(tab.workspaceId){const host=workspaceBounds.get(tab.workspaceId);rect=host?.active?host.bounds:null;reserved=tab.annotationOverlay?host?.annotationHeight||270:0;}else{const pane=panesFor(tab.id);rect=pane?bounds[pane]:null;reserved=tab.annotationOverlay?270:0;}const target=tab.failure?null:rect?{...rect,height:Math.max(0,rect.height-reserved)}:null;tab.view.setBounds(clampNativeBounds(target,{width,height}));}}
-function panesFor(id){return ['main','side','chat'].find(pane=>assignments[pane]===id)||null;}
-function activate(id,pane='main'){const tab=tabs.get(id);if(!tab)throw new Error('Browser tab no longer exists.');if(tab.workspaceId)throw new Error('Use the owning browser workspace to select this page.');assignments=assignTabToPane(assignments,id,pane);tab.pane=pane;applyBounds();sendEvent('selected',tab);return legacyState();}
-function addTab(rawUrl,pane='main',hostId){
-  const url=normalizeUrl(rawUrl);const id=`browser-${++tabSequence}`;const browserSession=session.fromPartition(partition,{cache:true});
-  const view=new WebContentsView({webPreferences:{session:browserSession,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,allowRunningInsecureContent:false,webviewTag:false}});
-  const tab={id,url,title:url,view,...(hostId?{workspaceId:hostId}:{}),failure:null,annotationOverlay:false,commenting:false};tabs.set(id,tab);if(hostId)workspaceTabs.set(hostId,id);
-  view.webContents.setWindowOpenHandler(({url:opened})=>{try{const target=normalizeUrl(opened);if(tab.workspaceId)sendEvent('open-request',tab,{workspaceId:tab.workspaceId,url:target});else addTab(target,'main');}catch{}return {action:'deny'};});
-  attachNavigationHandlers(view.webContents,{validateUrl:normalizeUrl,onMainFrameStart:url=>{tab.failure=null;tab.url=url;applyBounds();sendEvent('loading',tab);}});
-  view.webContents.on('page-title-updated',(_event,title)=>{tab.title=title.slice(0,180);tab.url=view.webContents.getURL()||tab.url;sendEvent('updated',tab);});
-  view.webContents.on('did-finish-load',()=>{if(tab.commenting)void view.webContents.executeJavaScript(captureScript).catch(()=>{});});
-  view.webContents.on('did-navigate',(_event,next)=>{tab.url=next;tab.failure=null;if(tab.commenting&&isSensitiveAuthPage(next)){tab.commenting=false;tab.annotationOverlay=false;void view.webContents.executeJavaScript(disableScript).catch(()=>{});}applyBounds();sendEvent('updated',tab);});
-  view.webContents.on('did-navigate-in-page',(_event,next)=>{tab.url=next;tab.failure=null;sendEvent('updated',tab);});
-  view.webContents.on('did-fail-load',(_event,code,description,isMainFrame)=>{if(isMainFrame&&code!==-3){tab.failure={code,description:String(description||'The page could not be loaded.').slice(0,240)};tab.title=`Could not load page (${code})`;applyBounds();sendEvent('failed',tab);}});
-  mainWindow.contentView.addChildView(view);if(hostId)applyBounds();else activate(id,pane);void view.webContents.loadURL(url).catch(()=>{});return legacyState();
+if (isolatedUserData) {
+  const userData = path.resolve(isolatedUserData);
+  mkdirSync(userData, { recursive: true });
+  app.setPath('userData', userData);
+} else if (process.platform === 'win32') {
+  app.setPath('userData', desktopUserDataPath(app.getPath('appData'), 'win32'));
+} else {
+  desktopDataPaths = desktopUserDataPaths(app.getPath('appData'));
+  desktopLockPath = desktopUserDataPathForLock(desktopDataPaths);
+  app.setPath('userData', desktopLockPath);
 }
-function closeTab(id){const tab=tabs.get(id);if(!tab)return legacyState();mainWindow.contentView.removeChildView(tab.view);tab.view.webContents.close();tabs.delete(id);if(tab.workspaceId){workspaceTabs.delete(tab.workspaceId);workspaceBounds.delete(tab.workspaceId);}const wasMain=assignments.main===id;assignments=removeTabFromPanes(assignments,id);if(wasMain)assignments.main=[...tabs.keys()].find(key=>!tabs.get(key)?.workspaceId&&key!==assignments.side&&key!==assignments.chat)||null;applyBounds();return legacyState();}
-
-async function attachToExistingKernel(data){
-  const infoPath=path.join(data,'kernel-instance.json');let record;
-  try{record=JSON.parse(readFileSync(infoPath,'utf8'));}catch{return false;}
-  if(!record||record.version!==1||record.protocolVersion!==1||record.host!=='127.0.0.1'||!Number.isInteger(record.port)||record.port<1||record.port>65535||typeof record.instanceId!=='string'||typeof record.startupSecret!=='string'||!/^[A-Za-z0-9_-]{32,128}$/.test(record.startupSecret))return false;
-  const candidate=`http://${record.host}:${record.port}`;const challenge=randomBytes(32).toString('hex');const expected=createHmac('sha256',record.startupSecret).update(challenge).digest('hex');
-  try{
-    const response=await fetch(`${candidate}/api/health`,{headers:{'x-opnex-startup-challenge':challenge,'x-pseudoharness-startup-challenge':challenge},signal:AbortSignal.timeout(1500)});
-    if(!response.ok)return false;
-    const health=await response.json();
-    if(health.startupProof!==expected||health.kernelInstanceId!==record.instanceId||health.protocolVersion!==1)return false;
-    if(health.stateCode){const error=new Error(health.stateError||'Opnex could not claim its local state directory.');error.code=health.stateCode;throw error;}
-    origin=candidate;kernelOwnership='attached';return true;
-  }catch(error){if(error instanceof Error&&['STATE_DIRECTORY_IN_USE','STATE_OWNER_UNAVAILABLE'].includes(error.code))throw error;return false;}
-}
-async function startBackend(){const data=path.join(app.getPath('userData'),'local-state');if(await attachToExistingKernel(data))return;const port=await pickPort();origin=`http://127.0.0.1:${port}`;const launcher=path.join(projectRoot,'bin','opnex.js');const startupSecret=randomBytes(32).toString('hex');const backendEnv={...process.env,NODE_ENV:'production',PORT:String(port),OPNEX_DATA_DIR:data,OPNEX_DESKTOP:'1',OPNEX_STARTUP_SECRET:startupSecret,OPNEX_PACKAGED_APP:app.isPackaged?'1':'0',OPNEX_RESOURCES_PATH:process.resourcesPath};backend=utilityProcess.fork(launcher,[],{cwd:app.getPath('userData'),env:backendEnv,stdio:appEnv('SMOKE_TEST')==='1'?'inherit':'ignore',serviceName:'Opnex headless kernel'});kernelOwnership='owned';kernelShutdownState.ownsKernel=true;backendExitPromise=new Promise(resolve=>backend.once('exit',code=>{backendExitCode=code;resolve(code);}));backend.once('error',error=>console.error('Opnex kernel failed to start:',error.message));
-  const deadline=Date.now()+20_000;while(Date.now()<deadline){if(backendExitCode!==null)throw new Error('Opnex backend exited during startup.');try{const challenge=randomBytes(32).toString('hex');const expected=createHmac('sha256',startupSecret).update(challenge).digest('hex');const response=await fetch(`${origin}/api/health`,{headers:{'x-opnex-startup-challenge':challenge,'x-pseudoharness-startup-challenge':challenge}});if(response.ok){const health=await response.json();if(health.startupProof!==expected)throw new Error('The selected local port is not serving the Opnex backend. Startup was stopped.');if(health.stateCode){const error=new Error(health.stateError||'Opnex could not claim its local state directory.');error.code=health.stateCode;throw error;}return;}}catch(error){if(error instanceof Error&&(error.code==='STATE_DIRECTORY_IN_USE'||error.code==='STATE_OWNER_UNAVAILABLE'||error.message.includes('not serving the Opnex backend')))throw error;}await new Promise(resolve=>setTimeout(resolve,200));}throw new Error('Opnex backend did not become ready.');}
-
-function waitForBackendExit(timeoutMs){if(backendExitCode!==null)return Promise.resolve(true);return new Promise(resolve=>{const timer=setTimeout(()=>resolve(false),timeoutMs);backendExitPromise.then(()=>{clearTimeout(timer);resolve(true);});});}
-async function requestAppQuit(){if(quitInProgress)return;quitInProgress=true;try{if(kernelOwnership==='owned')await stopOwnedKernel({ownsKernel:true,origin,state:kernelShutdownState,isBackendExited:()=>backendExitCode!==null,waitForBackendExit});quitApproved=true;app.quit();}catch(error){dialog.showErrorBox('Opnex could not quit safely',error instanceof Error?error.message:String(error));}finally{quitInProgress=false;}}
-function createSystemTray(){
-  if(trayController)return;
-  try{
-    const image=nativeImage.createFromPath(path.join(projectRoot,'desktop','opnex-tray-icon.png'));
-    if(image.isEmpty())throw new Error('The Opnex tray mark could not be loaded.');
-    trayController=createTrayController({Tray,Menu,image,openWindow:focusOrReopenAppWindow,quitApp:requestAppQuit});
-    const tray=trayController.start();
-    if(appEnv('SMOKE_TEST')==='1'){
-      const labels=trayController.getMenu()?.items?.map(item=>item.label||item.type)||[];
-      const bounds=tray.getBounds();
-      const usableBounds=[bounds.x,bounds.y,bounds.width,bounds.height].every(Number.isFinite)
-        &&bounds.width>0
-        &&(process.platform==='darwin'?bounds.height>=0:bounds.height>0);
-      if(labels.join('|')!=='Open Opnex|separator|Quit'||!usableBounds)throw new Error(`Native tray smoke failed: menu=${labels.join(', ')}, bounds=${JSON.stringify(bounds)}.`);
-      console.log(`System tray smoke passed: tooltip Opnex; menu ${labels.join(', ')}; bounds ${JSON.stringify(bounds)}.`);
+let ownsDesktopInstance = app.requestSingleInstanceLock();
+if (!ownsDesktopInstance) app.quit();
+else if (!isolatedUserData && process.platform !== 'win32') {
+  try {
+    migrateDesktopUserData(desktopDataPaths);
+    app.setPath('userData', desktopDataPaths.current);
+    if (desktopLockPath !== desktopDataPaths.current) {
+      app.releaseSingleInstanceLock();
+      ownsDesktopInstance = app.requestSingleInstanceLock();
+      if (!ownsDesktopInstance) app.quit();
     }
-  }catch(error){
-    trayController?.destroy();
-    trayController=undefined;
-    if(appEnv('SMOKE_TEST')==='1')throw error;
-    console.error('Opnex could not initialize the system tray:',error instanceof Error?error.message:String(error));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('Opnex desktop storage migration failed:', detail);
+    if (error?.cleanupError)
+      console.warn(
+        'The incomplete migration staging directory was preserved because cleanup failed:',
+        error.cleanupError instanceof Error
+          ? error.cleanupError.message
+          : String(error.cleanupError)
+      );
+    desktopStorageFallback = desktopStorageFallbackPaths(desktopDataPaths, error);
+    if (desktopStorageFallback) {
+      app.setPath('userData', desktopStorageFallback.userData);
+      console.warn(
+        'Opnex is using its intact legacy data and browser-profile directories for this session; migration will be retried at a later launch.'
+      );
+    } else {
+      startupStorageError = error;
+      app.setPath('userData', desktopDataPaths.current);
+    }
   }
 }
-
-async function createAppWindow(){
-  mainWindow=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:620,frame:process.platform!=='win32',title:'Opnex',backgroundColor:'#141414',...(process.platform==='win32'?{icon:path.join(projectRoot,'desktop','opnex.ico')}:{ }),show:appEnv('SMOKE_TEST')!=='1',webPreferences:{preload:path.join(projectRoot,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
-  if(process.platform!=='darwin')mainWindow.setMenuBarVisibility(false);
-  mainWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
-  for(const [id,tab] of tabs){if(tab.view.webContents.isDestroyed()){tabs.delete(id);if(tab.workspaceId)workspaceTabs.delete(tab.workspaceId);}else mainWindow.contentView.addChildView(tab.view);}
-  attachNavigationHandlers(mainWindow.webContents,{validateUrl:url=>{if(new URL(url).origin!==origin)throw new Error('Only the local Opnex origin may navigate the main window.');},onMainFrameStart:()=>{}});
-  mainWindow.on('resize',applyBounds);mainWindow.on('maximize',()=>mainWindow.webContents.send('opnex:window-state',true));mainWindow.on('unmaximize',()=>mainWindow.webContents.send('opnex:window-state',false));mainWindow.on('closed',()=>{mainWindow=null;});
-  mainWindowLoadPromise=mainWindow.loadURL(origin);await mainWindowLoadPromise;applyBounds();
-}
-
-function registerIpc(){
-  ipcMain.handle('opnex:window-minimize',event=>{requireAppSender(event);mainWindow.minimize();});
-  ipcMain.handle('opnex:window-toggle-maximize',event=>{requireAppSender(event);if(mainWindow.isMaximized())mainWindow.restore();else mainWindow.maximize();return mainWindow.isMaximized();});
-  ipcMain.handle('opnex:window-close',event=>{requireAppSender(event);mainWindow.close();});
-  ipcMain.handle('opnex:app-quit',async event=>{requireAppSender(event);await requestAppQuit();});
-  ipcMain.handle('opnex:open-codex-thread',(event,threadId)=>{requireAppSender(event);return openCodexThread(threadId,url=>shell.openExternal(url));});
-  ipcMain.handle('opnex:browser-list',event=>{requireAppSender(event);return legacyState();});
-  ipcMain.handle('opnex:browser-open',(event,payload)=>{requireAppSender(event);return addTab(payload?.url,payload?.pane);});
-  ipcMain.handle('opnex:browser-select',(event,payload)=>{requireAppSender(event);return activate(payload?.id,payload?.pane);});
-  ipcMain.handle('opnex:browser-side',(event,id)=>{requireAppSender(event);return activate(id,'side');});
-  ipcMain.handle('opnex:browser-main',(event,id)=>{requireAppSender(event);return activate(id,'main');});
-  ipcMain.handle('opnex:browser-chat',(event,id)=>{requireAppSender(event);return tabs.has(id)?activate(id,'chat'):legacyState();});
-  ipcMain.handle('opnex:browser-undock',(event,id)=>{requireAppSender(event);return activate(id,'main');});
-  ipcMain.handle('opnex:browser-close',(event,id)=>{requireAppSender(event);if(tabs.get(id)?.workspaceId)throw new Error('Use the owning browser workspace to close this page.');return closeTab(id);});
-  ipcMain.handle('opnex:browser-navigate',(event,payload)=>{requireAppSender(event);const tab=tabs.get(payload?.id);if(!tab||tab.workspaceId)throw new Error('Browser tab is no longer available to the legacy workspace.');navigate(tab.view.webContents,payload.action);return legacyState();});
-  ipcMain.handle('opnex:browser-commenting',async(event,payload)=>{requireAppSender(event);const tab=tabs.get(payload?.id);if(!tab||tab.workspaceId)throw new Error('Browser tab is no longer available to the legacy workspace.');if(payload?.enabled&&isSensitiveAuthPage(tab.view.webContents.getURL()))throw new Error('Commenting is disabled on GitHub sign-in pages.');tab.commenting=payload?.enabled===true;tab.annotationOverlay=false;applyBounds();await tab.view.webContents.executeJavaScript(tab.commenting?captureScript:disableScript);if(tab.commenting)startAnnotationPolling();return legacyState();});
-  ipcMain.handle('opnex:browser-annotation-overlay',(event,payload)=>{requireAppSender(event);const tab=tabs.get(payload?.id);if(!tab||tab.workspaceId)return legacyState();tab.annotationOverlay=payload?.visible===true;applyBounds();return legacyState();});
-  ipcMain.handle('opnex:browser-workspace-get',(event,payload)=>{requireAppSender(event);const host=workspaceId(payload?.workspaceId);const tab=workspaceTab(host);return tab?stateForTab(tab):null;});
-  ipcMain.handle('opnex:browser-workspace-open',(event,payload)=>{requireAppSender(event);const host=workspaceId(payload?.workspaceId);const existing=workspaceTab(host);if(existing)return stateForTab(existing);const url=normalizeUrl(payload?.url);addTab(url,'hidden',host);const created=workspaceTab(host);if(!created)throw new Error('The browser workspace could not be opened.');return stateForTab(created);});
-  ipcMain.handle('opnex:browser-workspace-release',(event,payload)=>{requireAppSender(event);const host=workspaceId(payload?.workspaceId);const tab=workspaceTab(host);if(tab)closeTab(tab.id);else workspaceBounds.delete(host);});
-  ipcMain.handle('opnex:browser-workspace-bounds',(event,payload)=>{requireAppSender(event);const host=workspaceId(payload?.workspaceId);const rect=payload?.bounds;const accepted=rect&&[rect.x,rect.y,rect.width,rect.height].every(Number.isFinite)&&rect.width>0&&rect.height>0?{x:rect.x,y:rect.y,width:rect.width,height:rect.height,annotationHeight:Number.isFinite(rect.annotationHeight)?Math.max(0,Math.min(480,rect.annotationHeight)):270}:null;workspaceBounds.set(host,{bounds:accepted,active:payload?.active===true});applyBounds();});
-  ipcMain.handle('opnex:browser-workspace-navigate',(event,payload)=>{requireAppSender(event);const host=workspaceId(payload?.workspaceId);const tab=workspaceTab(host);if(!tab)throw new Error('This browser workspace is no longer open.');const navigation=payload?.navigation;const contents=tab.view.webContents;if(typeof navigation==='object'&&navigation&&typeof navigation.url==='string'){const url=normalizeUrl(navigation.url);tab.failure=null;tab.url=url;tab.title=url;applyBounds();sendEvent('loading',tab);void contents.loadURL(url).catch(()=>{});}else if(['back','forward'].includes(navigation))navigate(contents,navigation);else if(navigation==='reload'){tab.failure=null;applyBounds();navigate(contents,navigation);}else if(!['back','forward','reload'].includes(navigation))throw new Error('Choose a valid browser navigation action.');return stateForTab(tab);});
-  ipcMain.handle('opnex:browser-workspace-commenting',async(event,payload)=>{requireAppSender(event);const host=workspaceId(payload?.workspaceId);const tab=workspaceTab(host);if(!tab)throw new Error('This browser workspace is no longer open.');if(payload?.enabled&&isSensitiveAuthPage(tab.view.webContents.getURL()))throw new Error('Commenting is disabled on GitHub sign-in pages.');tab.commenting=payload?.enabled===true;tab.annotationOverlay=false;applyBounds();await tab.view.webContents.executeJavaScript(tab.commenting?captureScript:disableScript);if(tab.commenting)startAnnotationPolling();sendEvent('commenting',tab);});
-  ipcMain.handle('opnex:browser-workspace-annotation-overlay',(event,payload)=>{requireAppSender(event);const host=workspaceId(payload?.workspaceId);const tab=workspaceTab(host);if(!tab)return;tab.annotationOverlay=payload?.visible===true;applyBounds();});
-  if(appEnv('INTERACTION_TEST')==='1'){
-    ipcMain.handle('opnex:interaction-state',event=>{requireAppSender(event);return [...tabs.values()].map(tab=>({id:tab.id,url:tab.view.webContents.getURL(),bounds:tab.view.getBounds(),annotationOverlay:!!tab.annotationOverlay,pane:panesFor(tab.id),...(tab.workspaceId?{workspaceId:tab.workspaceId}:{})}));});
-    ipcMain.handle('opnex:interaction-resize',(event,size)=>{requireAppSender(event);if(Number.isInteger(size?.width)&&Number.isInteger(size?.height))mainWindow.setSize(Math.max(900,size.width),Math.max(620,size.height));return mainWindow.getSize();});
-    ipcMain.handle('opnex:interaction-focus',event=>{requireAppSender(event);if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();return {visible:mainWindow.isVisible(),focused:mainWindow.isFocused(),minimized:mainWindow.isMinimized()};});
-  }
-  ipcMain.handle('opnex:browser-bounds',(event,value)=>{requireAppSender(event);const [width,height]=mainWindow.getContentSize();for(const pane of ['main','side','chat']){const r=value?.[pane];bounds[pane]=r&&[r.x,r.y,r.width,r.height].every(Number.isFinite)&&r.width>0&&r.height>0?clampNativeBounds(r,{width,height}):null;}applyBounds();});
-  ipcMain.handle('opnex:browser-hide',event=>{requireAppSender(event);bounds={main:null,side:null,chat:null};applyBounds();});
-  ipcMain.handle('opnex:browser-clear-data',async event=>{requireAppSender(event);await session.fromPartition(partition).clearStorageData();await session.fromPartition(partition).clearCache();for(const tab of tabs.values())try{tab.view.webContents.reload();}catch{}return true;});
-}
-
-function focusOrReopenAppWindow(){if(mainWindow&&!mainWindow.isDestroyed()){if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();return mainWindow;}if(origin)return createAppWindow().then(()=>mainWindow).catch(error=>{console.error('Opnex window could not reopen:',error.message);return undefined;});return undefined;}
-async function kernelInstanceId(){const response=await fetch(`${origin}/api/v1/info`,{headers:{'x-opnex-protocol-version':'1','x-pseudoharness-protocol-version':'1'},signal:AbortSignal.timeout(1500)});if(!response.ok)throw new Error(`Kernel identity check failed with HTTP ${response.status}.`);return (await response.json()).kernelInstanceId;}
-async function smokeTrayWindowLifecycle(){const original=mainWindow;const instanceBefore=await kernelInstanceId();await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('The source smoke window did not close.')),5000);original.once('closed',()=>{clearTimeout(timer);resolve();});original.close();});if(mainWindow)throw new Error('Closing the window did not clear the wrapper reference.');const tray=trayController?.getTray();if(!tray||tray.isDestroyed())throw new Error('Closing the window removed the system tray icon.');const openItem=trayController.getMenu()?.items?.[0];if(typeof openItem?.click!=='function')throw new Error('The native Open Opnex menu action is unavailable.');openItem.click();const reopened=mainWindow;if(!reopened||reopened===original)throw new Error('Open Opnex did not recreate the closed window.');await mainWindowLoadPromise;await trayController.open();if(mainWindow!==reopened)throw new Error('Repeated tray activation created a duplicate window.');if(await kernelInstanceId()!==instanceBefore)throw new Error('Reopening the wrapper started or attached to a different kernel instance.');reopened.hide();console.log('System tray lifecycle smoke passed: window close, menu reopen, repeated focus, and one unchanged kernel instance.');}
-if(ownsDesktopInstance){
-  app.on('second-instance',()=>focusOrReopenAppWindow());
-  app.on('activate',focusOrReopenAppWindow);
-}
-app.whenReady().then(async()=>{
-  if(!ownsDesktopInstance)return;
-  if(startupStorageError){dialog.showErrorBox('Opnex storage needs attention',startupStorageError.message);app.quit();return;}
-  try{await startBackend();createSystemTray();await session.fromPartition(partition).setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));registerIpc();await createAppWindow();if(appEnv('SMOKE_TEST')==='1'){await smokeTrayWindowLifecycle();const smokeUrl=appEnv('SMOKE_URL');if(smokeUrl){const [smokeTab]=addTab(smokeUrl,'main');tabs.get(smokeTab.id)?.view.webContents.once('did-finish-load',()=>void session.fromPartition(partition).cookies.flushStore().finally(()=>void requestAppQuit()));}else void requestAppQuit();}}
-  catch(error){console.error(error);if(error instanceof Error&&error.code==='STATE_DIRECTORY_IN_USE')dialog.showErrorBox('Opnex is already running',error.message);else if(error instanceof Error&&error.code==='STATE_OWNER_UNAVAILABLE')dialog.showErrorBox('Opnex could not use local state',error.message);process.exitCode=1;app.quit();}
+const browserProfile = browserProfilePath({
+  platform: process.platform,
+  localAppData: process.env.LOCALAPPDATA,
+  userData: app.getPath('userData'),
+  isolated: !!isolatedUserData,
 });
-app.on('before-quit',event=>{if(kernelOwnership==='owned'&&!quitApproved){event.preventDefault();void requestAppQuit();return;}if(annotationTimer)clearInterval(annotationTimer);for(const tab of tabs.values())try{tab.view.webContents.close();}catch{}tabs.clear();trayController?.destroy();trayController=undefined;});
-app.on('window-all-closed',()=>{});
+if (ownsDesktopInstance && !startupStorageError) mkdirSync(browserProfile, { recursive: true });
+app.setPath('sessionData', browserProfile);
+
+function pickPort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+function validAppSender(event) {
+  try {
+    return (
+      !!mainWindow &&
+      event.sender === mainWindow.webContents &&
+      new URL(event.senderFrame?.url).origin === origin
+    );
+  } catch {
+    return false;
+  }
+}
+function requireAppSender(event) {
+  if (!validAppSender(event))
+    throw new Error('Only the local Opnex window may control browser tabs.');
+}
+function normalizeUrl(input) {
+  let url;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new Error('Enter a complete website URL.');
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:')
+    throw new Error('Only HTTP and HTTPS browser addresses are supported.');
+  if (url.username || url.password)
+    throw new Error('URLs that contain credentials are not accepted.');
+  return url.toString();
+}
+function stateForTab(tab) {
+  const contents = tab.view.webContents;
+  return {
+    id: tab.id,
+    url: tab.url,
+    title: tab.title || (!contents.isDestroyed() ? contents.getTitle() : '') || tab.url,
+    pane: tab.workspaceId
+      ? 'hidden'
+      : assignments.chat === tab.id
+        ? 'chat'
+        : assignments.side === tab.id
+          ? 'side'
+          : assignments.main === tab.id
+            ? 'main'
+            : 'hidden',
+    loading: !contents.isDestroyed() && contents.isLoading(),
+    commenting: !!tab.commenting,
+    ...(tab.workspaceId ? { workspaceId: tab.workspaceId } : {}),
+    ...(tab.workspaceId && !contents.isDestroyed() ? navigationState(contents) : {}),
+    ...(tab.failure ? { failure: { ...tab.failure } } : {}),
+  };
+}
+function state() {
+  return [...tabs.values()].map(stateForTab);
+}
+function legacyState() {
+  return state().filter((tab) => !tab.workspaceId);
+}
+function sendEvent(type, tab, extra = {}) {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send('opnex:browser-event', {
+      type,
+      tabs: state(),
+      ...(tab
+        ? {
+            tab: {
+              id: tab.id,
+              url: tab.url,
+              title: tab.title,
+              ...(tab.workspaceId ? { workspaceId: tab.workspaceId } : {}),
+            },
+          }
+        : {}),
+      ...extra,
+    });
+}
+function workspaceId(value) {
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > 160 ||
+    !/^[A-Za-z0-9._:-]+$/.test(value)
+  )
+    throw new Error('A stable browser workspace ID is required.');
+  return value;
+}
+function workspaceTab(id) {
+  const host = workspaceId(id);
+  const tabId = workspaceTabs.get(host);
+  return tabId ? tabs.get(tabId) : undefined;
+}
+function isSensitiveAuthPage(raw) {
+  try {
+    const url = new URL(raw);
+    return (
+      url.hostname.toLowerCase() === 'github.com' &&
+      /^\/(?:login|oauth|session)(?:\/|$)/i.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+function startAnnotationPolling() {
+  if (annotationTimer) return;
+  annotationTimer = setInterval(async () => {
+    for (const tab of tabs.values()) {
+      if (!tab.commenting || tab.view.webContents.isDestroyed()) continue;
+      try {
+        const value = await tab.view.webContents.executeJavaScript(
+          '(()=>{const item=window.__opnexAnnotation;if(!item)return null;window.__opnexAnnotation=null;return item})()'
+        );
+        if (!value || typeof value !== 'object') continue;
+        tab.annotationOverlay = true;
+        applyBounds();
+        sendEvent('annotation', tab, {
+          annotation: safeAnnotation(value, {
+            url: tab.view.webContents.getURL(),
+            title: tab.title,
+          }),
+        });
+      } catch {}
+    }
+    if (![...tabs.values()].some((tab) => tab.commenting)) {
+      clearInterval(annotationTimer);
+      annotationTimer = undefined;
+    }
+  }, 350);
+  annotationTimer.unref?.();
+}
+function applyBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const [width, height] = mainWindow.getContentSize();
+  for (const tab of tabs.values()) {
+    let rect = null;
+    let reserved = 0;
+    if (tab.workspaceId) {
+      const host = workspaceBounds.get(tab.workspaceId);
+      rect = host?.active ? host.bounds : null;
+      reserved = tab.annotationOverlay ? host?.annotationHeight || 270 : 0;
+    } else {
+      const pane = panesFor(tab.id);
+      rect = pane ? bounds[pane] : null;
+      reserved = tab.annotationOverlay ? 270 : 0;
+    }
+    const target = tab.failure
+      ? null
+      : rect
+        ? { ...rect, height: Math.max(0, rect.height - reserved) }
+        : null;
+    tab.view.setBounds(clampNativeBounds(target, { width, height }));
+  }
+}
+function panesFor(id) {
+  return ['main', 'side', 'chat'].find((pane) => assignments[pane] === id) || null;
+}
+function activate(id, pane = 'main') {
+  const tab = tabs.get(id);
+  if (!tab) throw new Error('Browser tab no longer exists.');
+  if (tab.workspaceId) throw new Error('Use the owning browser workspace to select this page.');
+  assignments = assignTabToPane(assignments, id, pane);
+  tab.pane = pane;
+  applyBounds();
+  sendEvent('selected', tab);
+  return legacyState();
+}
+function addTab(rawUrl, pane = 'main', hostId) {
+  const url = normalizeUrl(rawUrl);
+  const id = `browser-${++tabSequence}`;
+  const browserSession = session.fromPartition(partition, { cache: true });
+  const view = new WebContentsView({
+    webPreferences: {
+      session: browserSession,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+    },
+  });
+  const tab = {
+    id,
+    url,
+    title: url,
+    view,
+    ...(hostId ? { workspaceId: hostId } : {}),
+    failure: null,
+    annotationOverlay: false,
+    commenting: false,
+  };
+  tabs.set(id, tab);
+  if (hostId) workspaceTabs.set(hostId, id);
+  view.webContents.setWindowOpenHandler(({ url: opened }) => {
+    try {
+      const target = normalizeUrl(opened);
+      if (tab.workspaceId)
+        sendEvent('open-request', tab, { workspaceId: tab.workspaceId, url: target });
+      else addTab(target, 'main');
+    } catch {}
+    return { action: 'deny' };
+  });
+  attachNavigationHandlers(view.webContents, {
+    validateUrl: normalizeUrl,
+    onMainFrameStart: (url) => {
+      tab.failure = null;
+      tab.url = url;
+      applyBounds();
+      sendEvent('loading', tab);
+    },
+  });
+  view.webContents.on('page-title-updated', (_event, title) => {
+    tab.title = title.slice(0, 180);
+    tab.url = view.webContents.getURL() || tab.url;
+    sendEvent('updated', tab);
+  });
+  view.webContents.on('did-finish-load', () => {
+    if (tab.commenting) void view.webContents.executeJavaScript(captureScript).catch(() => {});
+  });
+  view.webContents.on('did-navigate', (_event, next) => {
+    tab.url = next;
+    tab.failure = null;
+    if (tab.commenting && isSensitiveAuthPage(next)) {
+      tab.commenting = false;
+      tab.annotationOverlay = false;
+      void view.webContents.executeJavaScript(disableScript).catch(() => {});
+    }
+    applyBounds();
+    sendEvent('updated', tab);
+  });
+  view.webContents.on('did-navigate-in-page', (_event, next) => {
+    tab.url = next;
+    tab.failure = null;
+    sendEvent('updated', tab);
+  });
+  view.webContents.on('did-fail-load', (_event, code, description, isMainFrame) => {
+    if (isMainFrame && code !== -3) {
+      tab.failure = {
+        code,
+        description: String(description || 'The page could not be loaded.').slice(0, 240),
+      };
+      tab.title = `Could not load page (${code})`;
+      applyBounds();
+      sendEvent('failed', tab);
+    }
+  });
+  mainWindow.contentView.addChildView(view);
+  if (hostId) applyBounds();
+  else activate(id, pane);
+  void view.webContents.loadURL(url).catch(() => {});
+  return legacyState();
+}
+function closeTab(id) {
+  const tab = tabs.get(id);
+  if (!tab) return legacyState();
+  mainWindow.contentView.removeChildView(tab.view);
+  tab.view.webContents.close();
+  tabs.delete(id);
+  if (tab.workspaceId) {
+    workspaceTabs.delete(tab.workspaceId);
+    workspaceBounds.delete(tab.workspaceId);
+  }
+  const wasMain = assignments.main === id;
+  assignments = removeTabFromPanes(assignments, id);
+  if (wasMain)
+    assignments.main =
+      [...tabs.keys()].find(
+        (key) => !tabs.get(key)?.workspaceId && key !== assignments.side && key !== assignments.chat
+      ) || null;
+  applyBounds();
+  return legacyState();
+}
+
+async function attachToExistingKernel(data) {
+  const infoPath = path.join(data, 'kernel-instance.json');
+  let record;
+  try {
+    record = JSON.parse(readFileSync(infoPath, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (
+    !record ||
+    record.version !== 1 ||
+    record.protocolVersion !== 1 ||
+    record.host !== '127.0.0.1' ||
+    !Number.isInteger(record.port) ||
+    record.port < 1 ||
+    record.port > 65535 ||
+    typeof record.instanceId !== 'string' ||
+    typeof record.startupSecret !== 'string' ||
+    !/^[A-Za-z0-9_-]{32,128}$/.test(record.startupSecret)
+  )
+    return false;
+  const candidate = `http://${record.host}:${record.port}`;
+  const challenge = randomBytes(32).toString('hex');
+  const expected = createHmac('sha256', record.startupSecret).update(challenge).digest('hex');
+  try {
+    const response = await fetch(`${candidate}/api/health`, {
+      headers: {
+        'x-opnex-startup-challenge': challenge,
+        'x-pseudoharness-startup-challenge': challenge,
+      },
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!response.ok) return false;
+    const health = await response.json();
+    if (
+      health.startupProof !== expected ||
+      health.kernelInstanceId !== record.instanceId ||
+      health.protocolVersion !== 1
+    )
+      return false;
+    if (health.stateCode) {
+      const error = new Error(
+        health.stateError || 'Opnex could not claim its local state directory.'
+      );
+      error.code = health.stateCode;
+      throw error;
+    }
+    origin = candidate;
+    kernelOwnership = 'attached';
+    return true;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      ['STATE_DIRECTORY_IN_USE', 'STATE_OWNER_UNAVAILABLE'].includes(error.code)
+    )
+      throw error;
+    return false;
+  }
+}
+async function startBackend() {
+  const data = path.join(app.getPath('userData'), 'local-state');
+  if (await attachToExistingKernel(data)) return;
+  const port = await pickPort();
+  origin = `http://127.0.0.1:${port}`;
+  const launcher = path.join(projectRoot, 'bin', 'opnex.js');
+  const startupSecret = randomBytes(32).toString('hex');
+  const backendEnv = {
+    ...process.env,
+    NODE_ENV: 'production',
+    PORT: String(port),
+    OPNEX_DATA_DIR: data,
+    OPNEX_DESKTOP: '1',
+    OPNEX_STARTUP_SECRET: startupSecret,
+    OPNEX_PACKAGED_APP: app.isPackaged ? '1' : '0',
+    OPNEX_RESOURCES_PATH: process.resourcesPath,
+  };
+  backend = utilityProcess.fork(launcher, [], {
+    cwd: app.getPath('userData'),
+    env: backendEnv,
+    stdio: appEnv('SMOKE_TEST') === '1' ? 'inherit' : 'ignore',
+    serviceName: 'Opnex headless kernel',
+  });
+  kernelOwnership = 'owned';
+  kernelShutdownState.ownsKernel = true;
+  backendExitPromise = new Promise((resolve) =>
+    backend.once('exit', (code) => {
+      backendExitCode = code;
+      resolve(code);
+    })
+  );
+  backend.once('error', (error) => console.error('Opnex kernel failed to start:', error.message));
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (backendExitCode !== null) throw new Error('Opnex backend exited during startup.');
+    try {
+      const challenge = randomBytes(32).toString('hex');
+      const expected = createHmac('sha256', startupSecret).update(challenge).digest('hex');
+      const response = await fetch(`${origin}/api/health`, {
+        headers: {
+          'x-opnex-startup-challenge': challenge,
+          'x-pseudoharness-startup-challenge': challenge,
+        },
+      });
+      if (response.ok) {
+        const health = await response.json();
+        if (health.startupProof !== expected)
+          throw new Error(
+            'The selected local port is not serving the Opnex backend. Startup was stopped.'
+          );
+        if (health.stateCode) {
+          const error = new Error(
+            health.stateError || 'Opnex could not claim its local state directory.'
+          );
+          error.code = health.stateCode;
+          throw error;
+        }
+        return;
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.code === 'STATE_DIRECTORY_IN_USE' ||
+          error.code === 'STATE_OWNER_UNAVAILABLE' ||
+          error.message.includes('not serving the Opnex backend'))
+      )
+        throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('Opnex backend did not become ready.');
+}
+
+function waitForBackendExit(timeoutMs) {
+  if (backendExitCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    backendExitPromise.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+async function requestAppQuit() {
+  if (quitInProgress) return;
+  quitInProgress = true;
+  try {
+    if (kernelOwnership === 'owned')
+      await stopOwnedKernel({
+        ownsKernel: true,
+        origin,
+        state: kernelShutdownState,
+        isBackendExited: () => backendExitCode !== null,
+        waitForBackendExit,
+      });
+    quitApproved = true;
+    app.quit();
+  } catch (error) {
+    dialog.showErrorBox(
+      'Opnex could not quit safely',
+      error instanceof Error ? error.message : String(error)
+    );
+  } finally {
+    quitInProgress = false;
+  }
+}
+function createSystemTray() {
+  if (trayController) return;
+  try {
+    const image = nativeImage.createFromPath(
+      path.join(projectRoot, 'desktop', 'opnex-tray-icon.png')
+    );
+    if (image.isEmpty()) throw new Error('The Opnex tray mark could not be loaded.');
+    trayController = createTrayController({
+      Tray,
+      Menu,
+      image,
+      openWindow: focusOrReopenAppWindow,
+      quitApp: requestAppQuit,
+    });
+    const tray = trayController.start();
+    if (appEnv('SMOKE_TEST') === '1') {
+      const labels = trayController.getMenu()?.items?.map((item) => item.label || item.type) || [];
+      const bounds = tray.getBounds();
+      const usableBounds =
+        [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) &&
+        bounds.width > 0 &&
+        (process.platform === 'darwin' ? bounds.height >= 0 : bounds.height > 0);
+      if (labels.join('|') !== 'Open Opnex|separator|Quit' || !usableBounds)
+        throw new Error(
+          `Native tray smoke failed: menu=${labels.join(', ')}, bounds=${JSON.stringify(bounds)}.`
+        );
+      console.log(
+        `System tray smoke passed: tooltip Opnex; menu ${labels.join(', ')}; bounds ${JSON.stringify(bounds)}.`
+      );
+    }
+  } catch (error) {
+    trayController?.destroy();
+    trayController = undefined;
+    if (appEnv('SMOKE_TEST') === '1') throw error;
+    console.error(
+      'Opnex could not initialize the system tray:',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+}
+
+async function createAppWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 960,
+    minWidth: 900,
+    minHeight: 620,
+    frame: process.platform !== 'win32',
+    title: 'Opnex',
+    backgroundColor: '#141414',
+    ...(process.platform === 'win32'
+      ? { icon: path.join(projectRoot, 'desktop', 'opnex.ico') }
+      : {}),
+    show: appEnv('SMOKE_TEST') !== '1',
+    webPreferences: {
+      preload: path.join(projectRoot, 'desktop', 'preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  if (process.platform !== 'darwin') mainWindow.setMenuBarVisibility(false);
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  for (const [id, tab] of tabs) {
+    if (tab.view.webContents.isDestroyed()) {
+      tabs.delete(id);
+      if (tab.workspaceId) workspaceTabs.delete(tab.workspaceId);
+    } else mainWindow.contentView.addChildView(tab.view);
+  }
+  attachNavigationHandlers(mainWindow.webContents, {
+    validateUrl: (url) => {
+      if (new URL(url).origin !== origin)
+        throw new Error('Only the local Opnex origin may navigate the main window.');
+    },
+    onMainFrameStart: () => {},
+  });
+  mainWindow.on('resize', applyBounds);
+  mainWindow.on('maximize', () => mainWindow.webContents.send('opnex:window-state', true));
+  mainWindow.on('unmaximize', () => mainWindow.webContents.send('opnex:window-state', false));
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+  mainWindowLoadPromise = mainWindow.loadURL(origin);
+  await mainWindowLoadPromise;
+  applyBounds();
+}
+
+function registerIpc() {
+  ipcMain.handle('opnex:window-minimize', (event) => {
+    requireAppSender(event);
+    mainWindow.minimize();
+  });
+  ipcMain.handle('opnex:window-toggle-maximize', (event) => {
+    requireAppSender(event);
+    if (mainWindow.isMaximized()) mainWindow.restore();
+    else mainWindow.maximize();
+    return mainWindow.isMaximized();
+  });
+  ipcMain.handle('opnex:window-close', (event) => {
+    requireAppSender(event);
+    mainWindow.close();
+  });
+  ipcMain.handle('opnex:app-quit', async (event) => {
+    requireAppSender(event);
+    await requestAppQuit();
+  });
+  ipcMain.handle('opnex:open-codex-thread', (event, threadId) => {
+    requireAppSender(event);
+    return openCodexThread(threadId, (url) => shell.openExternal(url));
+  });
+  ipcMain.handle('opnex:browser-list', (event) => {
+    requireAppSender(event);
+    return legacyState();
+  });
+  ipcMain.handle('opnex:browser-open', (event, payload) => {
+    requireAppSender(event);
+    return addTab(payload?.url, payload?.pane);
+  });
+  ipcMain.handle('opnex:browser-select', (event, payload) => {
+    requireAppSender(event);
+    return activate(payload?.id, payload?.pane);
+  });
+  ipcMain.handle('opnex:browser-side', (event, id) => {
+    requireAppSender(event);
+    return activate(id, 'side');
+  });
+  ipcMain.handle('opnex:browser-main', (event, id) => {
+    requireAppSender(event);
+    return activate(id, 'main');
+  });
+  ipcMain.handle('opnex:browser-chat', (event, id) => {
+    requireAppSender(event);
+    return tabs.has(id) ? activate(id, 'chat') : legacyState();
+  });
+  ipcMain.handle('opnex:browser-undock', (event, id) => {
+    requireAppSender(event);
+    return activate(id, 'main');
+  });
+  ipcMain.handle('opnex:browser-close', (event, id) => {
+    requireAppSender(event);
+    if (tabs.get(id)?.workspaceId)
+      throw new Error('Use the owning browser workspace to close this page.');
+    return closeTab(id);
+  });
+  ipcMain.handle('opnex:browser-navigate', (event, payload) => {
+    requireAppSender(event);
+    const tab = tabs.get(payload?.id);
+    if (!tab || tab.workspaceId)
+      throw new Error('Browser tab is no longer available to the legacy workspace.');
+    navigate(tab.view.webContents, payload.action);
+    return legacyState();
+  });
+  ipcMain.handle('opnex:browser-commenting', async (event, payload) => {
+    requireAppSender(event);
+    const tab = tabs.get(payload?.id);
+    if (!tab || tab.workspaceId)
+      throw new Error('Browser tab is no longer available to the legacy workspace.');
+    if (payload?.enabled && isSensitiveAuthPage(tab.view.webContents.getURL()))
+      throw new Error('Commenting is disabled on GitHub sign-in pages.');
+    tab.commenting = payload?.enabled === true;
+    tab.annotationOverlay = false;
+    applyBounds();
+    await tab.view.webContents.executeJavaScript(tab.commenting ? captureScript : disableScript);
+    if (tab.commenting) startAnnotationPolling();
+    return legacyState();
+  });
+  ipcMain.handle('opnex:browser-annotation-overlay', (event, payload) => {
+    requireAppSender(event);
+    const tab = tabs.get(payload?.id);
+    if (!tab || tab.workspaceId) return legacyState();
+    tab.annotationOverlay = payload?.visible === true;
+    applyBounds();
+    return legacyState();
+  });
+  ipcMain.handle('opnex:browser-workspace-get', (event, payload) => {
+    requireAppSender(event);
+    const host = workspaceId(payload?.workspaceId);
+    const tab = workspaceTab(host);
+    return tab ? stateForTab(tab) : null;
+  });
+  ipcMain.handle('opnex:browser-workspace-open', (event, payload) => {
+    requireAppSender(event);
+    const host = workspaceId(payload?.workspaceId);
+    const existing = workspaceTab(host);
+    if (existing) return stateForTab(existing);
+    const url = normalizeUrl(payload?.url);
+    addTab(url, 'hidden', host);
+    const created = workspaceTab(host);
+    if (!created) throw new Error('The browser workspace could not be opened.');
+    return stateForTab(created);
+  });
+  ipcMain.handle('opnex:browser-workspace-release', (event, payload) => {
+    requireAppSender(event);
+    const host = workspaceId(payload?.workspaceId);
+    const tab = workspaceTab(host);
+    if (tab) closeTab(tab.id);
+    else workspaceBounds.delete(host);
+  });
+  ipcMain.handle('opnex:browser-workspace-bounds', (event, payload) => {
+    requireAppSender(event);
+    const host = workspaceId(payload?.workspaceId);
+    const rect = payload?.bounds;
+    const accepted =
+      rect &&
+      [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) &&
+      rect.width > 0 &&
+      rect.height > 0
+        ? {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            annotationHeight: Number.isFinite(rect.annotationHeight)
+              ? Math.max(0, Math.min(480, rect.annotationHeight))
+              : 270,
+          }
+        : null;
+    workspaceBounds.set(host, { bounds: accepted, active: payload?.active === true });
+    applyBounds();
+  });
+  ipcMain.handle('opnex:browser-workspace-navigate', (event, payload) => {
+    requireAppSender(event);
+    const host = workspaceId(payload?.workspaceId);
+    const tab = workspaceTab(host);
+    if (!tab) throw new Error('This browser workspace is no longer open.');
+    const navigation = payload?.navigation;
+    const contents = tab.view.webContents;
+    if (typeof navigation === 'object' && navigation && typeof navigation.url === 'string') {
+      const url = normalizeUrl(navigation.url);
+      tab.failure = null;
+      tab.url = url;
+      tab.title = url;
+      applyBounds();
+      sendEvent('loading', tab);
+      void contents.loadURL(url).catch(() => {});
+    } else if (['back', 'forward'].includes(navigation)) navigate(contents, navigation);
+    else if (navigation === 'reload') {
+      tab.failure = null;
+      applyBounds();
+      navigate(contents, navigation);
+    } else if (!['back', 'forward', 'reload'].includes(navigation))
+      throw new Error('Choose a valid browser navigation action.');
+    return stateForTab(tab);
+  });
+  ipcMain.handle('opnex:browser-workspace-commenting', async (event, payload) => {
+    requireAppSender(event);
+    const host = workspaceId(payload?.workspaceId);
+    const tab = workspaceTab(host);
+    if (!tab) throw new Error('This browser workspace is no longer open.');
+    if (payload?.enabled && isSensitiveAuthPage(tab.view.webContents.getURL()))
+      throw new Error('Commenting is disabled on GitHub sign-in pages.');
+    tab.commenting = payload?.enabled === true;
+    tab.annotationOverlay = false;
+    applyBounds();
+    await tab.view.webContents.executeJavaScript(tab.commenting ? captureScript : disableScript);
+    if (tab.commenting) startAnnotationPolling();
+    sendEvent('commenting', tab);
+  });
+  ipcMain.handle('opnex:browser-workspace-annotation-overlay', (event, payload) => {
+    requireAppSender(event);
+    const host = workspaceId(payload?.workspaceId);
+    const tab = workspaceTab(host);
+    if (!tab) return;
+    tab.annotationOverlay = payload?.visible === true;
+    applyBounds();
+  });
+  if (appEnv('INTERACTION_TEST') === '1') {
+    ipcMain.handle('opnex:interaction-state', (event) => {
+      requireAppSender(event);
+      return [...tabs.values()].map((tab) => ({
+        id: tab.id,
+        url: tab.view.webContents.getURL(),
+        bounds: tab.view.getBounds(),
+        annotationOverlay: !!tab.annotationOverlay,
+        pane: panesFor(tab.id),
+        ...(tab.workspaceId ? { workspaceId: tab.workspaceId } : {}),
+      }));
+    });
+    ipcMain.handle('opnex:interaction-resize', (event, size) => {
+      requireAppSender(event);
+      if (Number.isInteger(size?.width) && Number.isInteger(size?.height))
+        mainWindow.setSize(Math.max(900, size.width), Math.max(620, size.height));
+      return mainWindow.getSize();
+    });
+    ipcMain.handle('opnex:interaction-focus', (event) => {
+      requireAppSender(event);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      return {
+        visible: mainWindow.isVisible(),
+        focused: mainWindow.isFocused(),
+        minimized: mainWindow.isMinimized(),
+      };
+    });
+  }
+  ipcMain.handle('opnex:browser-bounds', (event, value) => {
+    requireAppSender(event);
+    const [width, height] = mainWindow.getContentSize();
+    for (const pane of ['main', 'side', 'chat']) {
+      const r = value?.[pane];
+      bounds[pane] =
+        r && [r.x, r.y, r.width, r.height].every(Number.isFinite) && r.width > 0 && r.height > 0
+          ? clampNativeBounds(r, { width, height })
+          : null;
+    }
+    applyBounds();
+  });
+  ipcMain.handle('opnex:browser-hide', (event) => {
+    requireAppSender(event);
+    bounds = { main: null, side: null, chat: null };
+    applyBounds();
+  });
+  ipcMain.handle('opnex:browser-clear-data', async (event) => {
+    requireAppSender(event);
+    await session.fromPartition(partition).clearStorageData();
+    await session.fromPartition(partition).clearCache();
+    for (const tab of tabs.values())
+      try {
+        tab.view.webContents.reload();
+      } catch {}
+    return true;
+  });
+}
+
+function focusOrReopenAppWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return mainWindow;
+  }
+  if (origin)
+    return createAppWindow()
+      .then(() => mainWindow)
+      .catch((error) => {
+        console.error('Opnex window could not reopen:', error.message);
+        return undefined;
+      });
+  return undefined;
+}
+async function kernelInstanceId() {
+  const response = await fetch(`${origin}/api/v1/info`, {
+    headers: { 'x-opnex-protocol-version': '1', 'x-pseudoharness-protocol-version': '1' },
+    signal: AbortSignal.timeout(1500),
+  });
+  if (!response.ok) throw new Error(`Kernel identity check failed with HTTP ${response.status}.`);
+  return (await response.json()).kernelInstanceId;
+}
+async function smokeTrayWindowLifecycle() {
+  const original = mainWindow;
+  const instanceBefore = await kernelInstanceId();
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('The source smoke window did not close.')),
+      5000
+    );
+    original.once('closed', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    original.close();
+  });
+  if (mainWindow) throw new Error('Closing the window did not clear the wrapper reference.');
+  const tray = trayController?.getTray();
+  if (!tray || tray.isDestroyed())
+    throw new Error('Closing the window removed the system tray icon.');
+  const openItem = trayController.getMenu()?.items?.[0];
+  if (typeof openItem?.click !== 'function')
+    throw new Error('The native Open Opnex menu action is unavailable.');
+  openItem.click();
+  const reopened = mainWindow;
+  if (!reopened || reopened === original)
+    throw new Error('Open Opnex did not recreate the closed window.');
+  await mainWindowLoadPromise;
+  await trayController.open();
+  if (mainWindow !== reopened)
+    throw new Error('Repeated tray activation created a duplicate window.');
+  if ((await kernelInstanceId()) !== instanceBefore)
+    throw new Error('Reopening the wrapper started or attached to a different kernel instance.');
+  reopened.hide();
+  console.log(
+    'System tray lifecycle smoke passed: window close, menu reopen, repeated focus, and one unchanged kernel instance.'
+  );
+}
+if (ownsDesktopInstance) {
+  app.on('second-instance', () => focusOrReopenAppWindow());
+  app.on('activate', focusOrReopenAppWindow);
+}
+app.whenReady().then(async () => {
+  if (!ownsDesktopInstance) return;
+  if (startupStorageError) {
+    dialog.showErrorBox('Opnex storage needs attention', startupStorageError.message);
+    app.quit();
+    return;
+  }
+  try {
+    await startBackend();
+    createSystemTray();
+    await session
+      .fromPartition(partition)
+      .setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    registerIpc();
+    await createAppWindow();
+    if (appEnv('SMOKE_TEST') === '1') {
+      await smokeTrayWindowLifecycle();
+      const smokeUrl = appEnv('SMOKE_URL');
+      if (smokeUrl) {
+        const [smokeTab] = addTab(smokeUrl, 'main');
+        tabs.get(smokeTab.id)?.view.webContents.once(
+          'did-finish-load',
+          () =>
+            void session
+              .fromPartition(partition)
+              .cookies.flushStore()
+              .finally(() => void requestAppQuit())
+        );
+      } else void requestAppQuit();
+    }
+  } catch (error) {
+    console.error(error);
+    if (error instanceof Error && error.code === 'STATE_DIRECTORY_IN_USE')
+      dialog.showErrorBox('Opnex is already running', error.message);
+    else if (error instanceof Error && error.code === 'STATE_OWNER_UNAVAILABLE')
+      dialog.showErrorBox('Opnex could not use local state', error.message);
+    process.exitCode = 1;
+    app.quit();
+  }
+});
+app.on('before-quit', (event) => {
+  if (kernelOwnership === 'owned' && !quitApproved) {
+    event.preventDefault();
+    void requestAppQuit();
+    return;
+  }
+  if (annotationTimer) clearInterval(annotationTimer);
+  for (const tab of tabs.values())
+    try {
+      tab.view.webContents.close();
+    } catch {}
+  tabs.clear();
+  trayController?.destroy();
+  trayController = undefined;
+});
+app.on('window-all-closed', () => {});

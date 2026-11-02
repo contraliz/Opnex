@@ -2,331 +2,1507 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
-import { AppServer, AppServerRequestError, approvalResponse, assertAgentRuntimeConfig, assertInstructionIsolation, appAgentBaseInstructions, appAgentConfig, buildOrchestratorDeveloperInstructions, makeAppServerUserInput, makeThreadParams, makeThreadResumeParams, makeTurnParams, normalCodexSqliteHome } from '../server/codex.js';
+import { pathToFileURL } from 'node:url';
+import {
+  AppServer,
+  AppServerRequestError,
+  approvalResponse,
+  assertAgentRuntimeConfig,
+  assertInstructionIsolation,
+  appAgentBaseInstructions,
+  appAgentConfig,
+  buildOrchestratorDeveloperInstructions,
+  makeAppServerUserInput,
+  makeThreadParams,
+  makeThreadResumeParams,
+  makeTurnParams,
+  normalCodexSqliteHome,
+} from '../server/codex.js';
 import { settingsSchema } from '../server/contracts.js';
-import { authorizesWorkerWorkspaceTool, authorizesWorkspaceRepositoryInitialization, normalizeAgentWorkspaceUrl, recruitedWorkerWorkspaceTool, workerWorkspaceTool, workspaceToolRequiresDesktop } from '../server/workspace-tools.js';
+import {
+  authorizesWorkerWorkspaceTool,
+  authorizesWorkspaceRepositoryInitialization,
+  normalizeAgentWorkspaceUrl,
+  recruitedWorkerWorkspaceTool,
+  workerWorkspaceTool,
+  workspaceToolRequiresDesktop,
+} from '../server/workspace-tools.js';
 
-describe('Codex approval and turn configuration',()=>{
-  it('injects only the generic saved-skills server and leaves host MCP configuration external',()=>{
-    for(const role of ['router','direct','simple','orchestrator','worker'] as const){const config=appAgentConfig('/repo',role);expect(config).not.toHaveProperty('mcp_servers');}
-    const skills={command:'node',args:['gateway.js'],enabled:true,enabled_tools:['skills_list']};
-    const worker=appAgentConfig('/repo','worker',skills) as any;
-    expect(worker.mcp_servers).toEqual({opnex_skills:skills});
-    const router=appAgentConfig('/repo','router',skills,['github']) as any;expect(router.mcp_servers).toBeUndefined();expect(router['mcp_servers.github.enabled']).toBe(false);
-    const qa=appAgentConfig('/repo','qa',skills,['github']) as any;expect(qa.mcp_servers).toBeUndefined();expect(qa['mcp_servers.github.enabled']).toBe(false);
+describe('Codex approval and turn configuration', () => {
+  it('injects only the generic saved-skills server and leaves host MCP configuration external', () => {
+    for (const role of ['router', 'direct', 'simple', 'orchestrator', 'worker'] as const) {
+      const config = appAgentConfig('/repo', role);
+      expect(config).not.toHaveProperty('mcp_servers');
+    }
+    const skills = {
+      command: 'node',
+      args: ['gateway.js'],
+      enabled: true,
+      enabled_tools: ['skills_list'],
+    };
+    const worker = appAgentConfig('/repo', 'worker', skills) as any;
+    expect(worker.mcp_servers).toEqual({ opnex_skills: skills });
+    const router = appAgentConfig('/repo', 'router', skills, ['github']) as any;
+    expect(router.mcp_servers).toBeUndefined();
+    expect(router['mcp_servers.github.enabled']).toBe(false);
+    const qa = appAgentConfig('/repo', 'qa', skills, ['github']) as any;
+    expect(qa.mcp_servers).toBeUndefined();
+    expect(qa['mcp_servers.github.enabled']).toBe(false);
   });
-  it('adds only explicitly selected registered MCP servers to restricted Codex roles',()=>{
-    const configured={'opnex_docs':{command:'node',args:['docs.js'],cwd:'/repo',env_vars:['DOCS_TOKEN'],default_tools_approval_mode:'auto',enabled:true}};
-    const router=makeThreadParams({role:'router',root:'/repo',model:'gpt-6-luna',approvalPolicy:'on-request',registeredMcpServers:configured,disabledMcpServerNames:['github']});
-    expect(router.config).toMatchObject({mcp_servers:configured,'mcp_servers.github.enabled':false,features:{plugins:false,mcp_2026_07_28:true}});
-    expect(router.developerInstructions).toContain('Human-enabled MCP servers for this role: opnex_docs');
-    expect(router.developerInstructions).toContain('You may call only the explicitly enabled MCP servers');
-    const qa=makeThreadParams({role:'qa',root:'/repo',model:'gpt-6.1-terra',approvalPolicy:'never',registeredMcpServers:configured,disabledMcpServerNames:['github']});
-    expect(qa.config).toMatchObject({mcp_servers:configured,'mcp_servers.github.enabled':false,features:{plugins:false,mcp_2026_07_28:true}});
-    expect(qa.developerInstructions).toContain('Human-enabled MCP servers for this role: opnex_docs');
-    expect(makeThreadParams({role:'router',root:'/repo',model:'gpt-6-luna',approvalPolicy:'on-request'}).config).not.toHaveProperty('mcp_servers');
+  it('adds only explicitly selected registered MCP servers to restricted Codex roles', () => {
+    const configured = {
+      opnex_docs: {
+        command: 'node',
+        args: ['docs.js'],
+        cwd: '/repo',
+        env_vars: ['DOCS_TOKEN'],
+        default_tools_approval_mode: 'auto',
+        enabled: true,
+      },
+    };
+    const router = makeThreadParams({
+      role: 'router',
+      root: '/repo',
+      model: 'gpt-6-luna',
+      approvalPolicy: 'on-request',
+      registeredMcpServers: configured,
+      disabledMcpServerNames: ['github'],
+    });
+    expect(router.config).toMatchObject({
+      mcp_servers: configured,
+      'mcp_servers.github.enabled': false,
+      features: { plugins: false, mcp_2026_07_28: true },
+    });
+    expect(router.developerInstructions).toContain(
+      'Human-enabled MCP servers for this role: opnex_docs'
+    );
+    expect(router.developerInstructions).toContain(
+      'You may call only the explicitly enabled MCP servers'
+    );
+    const qa = makeThreadParams({
+      role: 'qa',
+      root: '/repo',
+      model: 'gpt-6.1-terra',
+      approvalPolicy: 'never',
+      registeredMcpServers: configured,
+      disabledMcpServerNames: ['github'],
+    });
+    expect(qa.config).toMatchObject({
+      mcp_servers: configured,
+      'mcp_servers.github.enabled': false,
+      features: { plugins: false, mcp_2026_07_28: true },
+    });
+    expect(qa.developerInstructions).toContain(
+      'Human-enabled MCP servers for this role: opnex_docs'
+    );
+    expect(
+      makeThreadParams({
+        role: 'router',
+        root: '/repo',
+        model: 'gpt-6-luna',
+        approvalPolicy: 'on-request',
+      }).config
+    ).not.toHaveProperty('mcp_servers');
   });
-  it('resolves the normal Codex SQLite home while keeping the instruction-filtered home separate',async()=>{
-    expect(normalCodexSqliteHome({CODEX_HOME:'D:/Users/test/.codex'},'C:/Users/test')).toBe('D:/Users/test/.codex');
-    expect(normalCodexSqliteHome({CODEX_HOME:'D:/Users/test/.codex',CODEX_SQLITE_HOME:'E:/codex-state'},'C:/Users/test')).toBe('E:/codex-state');
-    expect(normalCodexSqliteHome({},'C:/Users/test')).toBe(path.join('C:/Users/test','.codex'));
-    const previousProfile=process.env.CODEX_PROFILE,previousConfig=process.env.CODEX_CONFIG;process.env.CODEX_PROFILE='qa-profile';process.env.CODEX_CONFIG='D:/codex/custom-config.toml';let options:any;
-    const fakeSpawn=(_exe:string,_args:string[],spawnOptions:any)=>{options=spawnOptions;const child:any=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.killed=false;const write=child.stdin.write.bind(child.stdin);child.stdin.write=(chunk:string,...args:any[])=>{const result=write(chunk,...args);for(const line of String(chunk).trim().split('\n')){const request=JSON.parse(line);if(request.method==='initialize')queueMicrotask(()=>child.stdout.write(`${JSON.stringify({id:request.id,result:{}})}\n`));}return result;};child.kill=()=>{child.killed=true;return true;};return child;};
-    try{const client=new AppServer({codexHome:'/instruction-filtered-home',sqliteHome:'C:/Users/test/.codex',spawnProcess:fakeSpawn as any});await client.connect();expect(options.env).toMatchObject({CODEX_HOME:'/instruction-filtered-home',CODEX_SQLITE_HOME:'C:/Users/test/.codex',CODEX_PROFILE:'qa-profile',CODEX_CONFIG:'D:/codex/custom-config.toml'});client.close();}finally{if(previousProfile===undefined)delete process.env.CODEX_PROFILE;else process.env.CODEX_PROFILE=previousProfile;if(previousConfig===undefined)delete process.env.CODEX_CONFIG;else process.env.CODEX_CONFIG=previousConfig;}
+  it('resolves the normal Codex SQLite home while keeping the instruction-filtered home separate', async () => {
+    expect(normalCodexSqliteHome({ CODEX_HOME: 'D:/Users/test/.codex' }, 'C:/Users/test')).toBe(
+      'D:/Users/test/.codex'
+    );
+    expect(
+      normalCodexSqliteHome(
+        { CODEX_HOME: 'D:/Users/test/.codex', CODEX_SQLITE_HOME: 'E:/codex-state' },
+        'C:/Users/test'
+      )
+    ).toBe('E:/codex-state');
+    expect(normalCodexSqliteHome({}, 'C:/Users/test')).toBe(path.join('C:/Users/test', '.codex'));
+    const previousProfile = process.env.CODEX_PROFILE,
+      previousConfig = process.env.CODEX_CONFIG;
+    process.env.CODEX_PROFILE = 'qa-profile';
+    process.env.CODEX_CONFIG = 'D:/codex/custom-config.toml';
+    let options: any;
+    const fakeSpawn = (_exe: string, _args: string[], spawnOptions: any) => {
+      options = spawnOptions;
+      const child: any = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = new PassThrough();
+      child.killed = false;
+      const write = child.stdin.write.bind(child.stdin);
+      child.stdin.write = (chunk: string, ...args: any[]) => {
+        const result = write(chunk, ...args);
+        for (const line of String(chunk).trim().split('\n')) {
+          const request = JSON.parse(line);
+          if (request.method === 'initialize')
+            queueMicrotask(() =>
+              child.stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\n`)
+            );
+        }
+        return result;
+      };
+      child.kill = () => {
+        child.killed = true;
+        return true;
+      };
+      return child;
+    };
+    try {
+      const client = new AppServer({
+        codexHome: '/instruction-filtered-home',
+        sqliteHome: 'C:/Users/test/.codex',
+        spawnProcess: fakeSpawn as any,
+      });
+      await client.connect();
+      expect(options.env).toMatchObject({
+        CODEX_HOME: '/instruction-filtered-home',
+        CODEX_SQLITE_HOME: 'C:/Users/test/.codex',
+        CODEX_PROFILE: 'qa-profile',
+        CODEX_CONFIG: 'D:/codex/custom-config.toml',
+      });
+      client.close();
+    } finally {
+      if (previousProfile === undefined) delete process.env.CODEX_PROFILE;
+      else process.env.CODEX_PROFILE = previousProfile;
+      if (previousConfig === undefined) delete process.env.CODEX_CONFIG;
+      else process.env.CODEX_CONFIG = previousConfig;
+    }
   });
-  const verifiedRuntimeConfig={config:{mcp_servers:{project_notes:{command:'project-notes'}},plugins:{example:{enabled:true}}}};
-  it('keeps orchestrator instructions independent of a built-in knowledge service',()=>{
-    const instructions=buildOrchestratorDeveloperInstructions('ORCHESTRATOR POLICY COPY');
-    expect(instructions).toContain('ORCHESTRATOR POLICY COPY');expect(instructions).toContain('policy-bound orchestration model');expect(instructions).not.toMatch(/AgentMem|prefetch|setup\/tool-use stage/i);
-    const direct=makeThreadParams({role:'direct',root:'/repo',model:'gpt-6-luna',approvalPolicy:'on-request',skillsMcpConfig:{command:'node',args:['skills.js']}});
-    expect(direct.developerInstructions).toContain('Use explicitly selected project skills and configured MCP tools when relevant. Their absence does not block normal work.');
+  const verifiedRuntimeConfig = {
+    config: {
+      mcp_servers: { project_notes: { command: 'project-notes' } },
+      plugins: { example: { enabled: true } },
+    },
+  };
+  it('keeps orchestrator instructions independent of a built-in knowledge service', () => {
+    const instructions = buildOrchestratorDeveloperInstructions('ORCHESTRATOR POLICY COPY');
+    expect(instructions).toContain('ORCHESTRATOR POLICY COPY');
+    expect(instructions).toContain('policy-bound orchestration model');
+    expect(instructions).not.toMatch(/AgentMem|prefetch|setup\/tool-use stage/i);
+    const direct = makeThreadParams({
+      role: 'direct',
+      root: '/repo',
+      model: 'gpt-6-luna',
+      approvalPolicy: 'on-request',
+      skillsMcpConfig: { command: 'node', args: ['skills.js'] },
+    });
+    expect(direct.developerInstructions).toContain(
+      'Use explicitly selected project skills and configured MCP tools when relevant. Their absence does not block normal work.'
+    );
     expect(JSON.stringify(direct)).not.toMatch(/agentmem|attach_project|knowledge_base/i);
   });
-  it('keeps application settings global and rejects project-owned fields',()=>{
-    const base={orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low'};
+  it('keeps application settings global and rejects project-owned fields', () => {
+    const base = { orchestratorModel: 'gpt-6.1-sol', orchestratorEffort: 'low' };
     expect(settingsSchema.parse(base).approvalPolicy).toBe('on-request');
-    expect(settingsSchema.parse(base)).toMatchObject({deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',deepseekConversationStorageMode:'isolated'});
-    expect(settingsSchema.parse({...base,deepseekConversationStorageMode:'native'}).deepseekConversationStorageMode).toBe('native');
-    expect(settingsSchema.safeParse({...base,deepseekConversationStorageMode:'other'}).success).toBe(false);
-    expect(settingsSchema.safeParse({...base,deepseekConversationStorageDirectory:'D:/bad\npath'}).success).toBe(false);
+    expect(settingsSchema.parse(base)).toMatchObject({
+      deepseekProvider: 'opencode-go',
+      deepseekModel: 'deepseek-v4.1-flash',
+      deepseekReasoningEffort: 'max',
+      deepseekConversationStorageMode: 'isolated',
+    });
+    expect(
+      settingsSchema.parse({ ...base, deepseekConversationStorageMode: 'native' })
+        .deepseekConversationStorageMode
+    ).toBe('native');
+    expect(
+      settingsSchema.safeParse({ ...base, deepseekConversationStorageMode: 'other' }).success
+    ).toBe(false);
+    expect(
+      settingsSchema.safeParse({ ...base, deepseekConversationStorageDirectory: 'D:/bad\npath' })
+        .success
+    ).toBe(false);
     expect(settingsSchema.parse(base)).not.toHaveProperty('executionProfile');
-    for(const approvalPolicy of ['on-request','untrusted','never','full-access'])expect(settingsSchema.safeParse({...base,approvalPolicy}).success).toBe(true);
-    expect(settingsSchema.safeParse({...base,approvalPolicy:'custom'}).success).toBe(false);
-    expect(settingsSchema.safeParse({...base,projectRoot:'D:/repo'}).success).toBe(false);
-    expect(settingsSchema.safeParse({...base,agentmemProjectId:'demo'}).success).toBe(false);
-    expect(settingsSchema.safeParse({...base,agentmemAutoSetup:true}).success).toBe(false);
+    for (const approvalPolicy of ['on-request', 'untrusted', 'never', 'full-access'])
+      expect(settingsSchema.safeParse({ ...base, approvalPolicy }).success).toBe(true);
+    expect(settingsSchema.safeParse({ ...base, approvalPolicy: 'custom' }).success).toBe(false);
+    expect(settingsSchema.safeParse({ ...base, projectRoot: 'D:/repo' }).success).toBe(false);
+    expect(settingsSchema.safeParse({ ...base, agentmemProjectId: 'demo' }).success).toBe(false);
+    expect(settingsSchema.safeParse({ ...base, agentmemAutoSetup: true }).success).toBe(false);
   });
-  it('requests the most detailed supported summaries and available provider text for new and resumed role threads',()=>{
-    const orchestrator=makeThreadParams({role:'orchestrator',root:'D:/repo',model:'gpt-6.1-sol',approvalPolicy:'on-request',ownedPolicy:'policy'});
-    const worker=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request'});
-    expect(orchestrator.config).toMatchObject({model_reasoning_summary:'auto',model_supports_reasoning_summaries:true,include_permissions_instructions:false,include_apps_instructions:false,include_collaboration_mode_instructions:false,include_environment_context:false,projects:{'D:/repo':{trust_level:'trusted'}},memories:{use_memories:false,dedicated_tools:false},features:{apps:true,hooks:false,plugins:true,memories:false,multi_agent:false,mcp_2026_07_28:true,codex_apps_mcp_2026_07_28:true}});expect(orchestrator.config).not.toHaveProperty('project_doc_fallback_filenames');expect(orchestrator.config).not.toHaveProperty('project_root_markers');expect(orchestrator.config).not.toHaveProperty('show_raw_agent_reasoning');
+  it('requests the most detailed supported summaries and available provider text for new and resumed role threads', () => {
+    const orchestrator = makeThreadParams({
+      role: 'orchestrator',
+      root: 'D:/repo',
+      model: 'gpt-6.1-sol',
+      approvalPolicy: 'on-request',
+      ownedPolicy: 'policy',
+    });
+    const worker = makeThreadParams({
+      role: 'worker',
+      root: 'D:/repo',
+      model: 'gpt-6-luna',
+      approvalPolicy: 'on-request',
+    });
+    expect(orchestrator.config).toMatchObject({
+      model_reasoning_summary: 'auto',
+      model_supports_reasoning_summaries: true,
+      include_permissions_instructions: false,
+      include_apps_instructions: false,
+      include_collaboration_mode_instructions: false,
+      include_environment_context: false,
+      projects: { 'D:/repo': { trust_level: 'trusted' } },
+      memories: { use_memories: false, dedicated_tools: false },
+      features: {
+        apps: true,
+        hooks: false,
+        plugins: true,
+        memories: false,
+        multi_agent: false,
+        mcp_2026_07_28: true,
+        codex_apps_mcp_2026_07_28: true,
+      },
+    });
+    expect(orchestrator.config).not.toHaveProperty('project_doc_fallback_filenames');
+    expect(orchestrator.config).not.toHaveProperty('project_root_markers');
+    expect(orchestrator.config).not.toHaveProperty('show_raw_agent_reasoning');
     expect(worker.config).toMatchObject(orchestrator.config);
     expect(orchestrator.baseInstructions).toBe(appAgentBaseInstructions('D:/repo'));
-    expect(makeThreadResumeParams('thread-1','on-request','orchestrator','D:/repo','policy')).toMatchObject({threadId:'thread-1',excludeTurns:true,config:orchestrator.config,baseInstructions:appAgentBaseInstructions('D:/repo'),developerInstructions:orchestrator.developerInstructions});
+    expect(
+      makeThreadResumeParams('thread-1', 'on-request', 'orchestrator', 'D:/repo', 'policy')
+    ).toMatchObject({
+      threadId: 'thread-1',
+      excludeTurns: true,
+      config: orchestrator.config,
+      baseInstructions: appAgentBaseInstructions('D:/repo'),
+      developerInstructions: orchestrator.developerInstructions,
+    });
     expect(orchestrator.developerInstructions).toContain('policy');
   });
-  it('registers only the scoped workspace tool on worker threads and rejects stale or pre-execution calls',()=>{
-    const params=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request',dynamicTools:workerWorkspaceTool});
+  it('registers only the scoped workspace tool on worker threads and rejects stale or pre-execution calls', () => {
+    const params = makeThreadParams({
+      role: 'worker',
+      root: 'D:/repo',
+      model: 'gpt-6-luna',
+      approvalPolicy: 'on-request',
+      dynamicTools: workerWorkspaceTool,
+    });
     expect(params.dynamicTools).toEqual(workerWorkspaceTool);
-    expect(recruitedWorkerWorkspaceTool[0].inputSchema.properties.action.enum).not.toContain('initialize_git_repository');
-    expect(workerWorkspaceTool[0].inputSchema).toMatchObject({properties:{action:{enum:expect.not.arrayContaining(['push','create_pr'])}}});
-    expect(makeThreadParams({role:'router',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request',dynamicTools:workerWorkspaceTool}).dynamicTools).toEqual([]);
-    const task:any={id:'task',currentPassId:'pass',phase:'worker_running',workerStage:'execute',workerThreadId:'worker-thread'};const pass:any={id:'pass',workerStage:'execute'};const target={taskId:'task',passId:'pass'};
-    expect(authorizesWorkerWorkspaceTool(task,pass,target,'worker-thread')).toBe(true);
-    expect(authorizesWorkerWorkspaceTool({...task,workerStage:'context_compose'},pass,target,'worker-thread')).toBe(false);
-    expect(authorizesWorkerWorkspaceTool({...task,currentPassId:'corrected-pass'},pass,target,'worker-thread')).toBe(false);
-    expect(authorizesWorkerWorkspaceTool(task,pass,target,'another-thread')).toBe(false);
-    expect(authorizesWorkerWorkspaceTool(task,pass,{...target,taskId:'other-task'},'worker-thread')).toBe(false);
-    expect(normalizeAgentWorkspaceUrl('https://github.com/org/repo')).toBe('https://github.com/org/repo');
-    expect(()=>normalizeAgentWorkspaceUrl('https://github.com/org/repo?access_token=secret')).toThrow('authentication parameters');
-    expect(()=>normalizeAgentWorkspaceUrl('https://user:password@example.com')).toThrow('credentials');
-    expect(workspaceToolRequiresDesktop('open_browser')).toBe(true);expect(workspaceToolRequiresDesktop('inspect_github')).toBe(false);
+    expect(recruitedWorkerWorkspaceTool[0].inputSchema.properties.action.enum).not.toContain(
+      'initialize_git_repository'
+    );
+    expect(workerWorkspaceTool[0].inputSchema).toMatchObject({
+      properties: { action: { enum: expect.not.arrayContaining(['push', 'create_pr']) } },
+    });
+    expect(
+      makeThreadParams({
+        role: 'router',
+        root: 'D:/repo',
+        model: 'gpt-6-luna',
+        approvalPolicy: 'on-request',
+        dynamicTools: workerWorkspaceTool,
+      }).dynamicTools
+    ).toEqual([]);
+    const task: any = {
+      id: 'task',
+      currentPassId: 'pass',
+      phase: 'worker_running',
+      workerStage: 'execute',
+      workerThreadId: 'worker-thread',
+    };
+    const pass: any = { id: 'pass', workerStage: 'execute' };
+    const target = { taskId: 'task', passId: 'pass' };
+    expect(authorizesWorkerWorkspaceTool(task, pass, target, 'worker-thread')).toBe(true);
+    expect(
+      authorizesWorkerWorkspaceTool(
+        { ...task, workerStage: 'context_compose' },
+        pass,
+        target,
+        'worker-thread'
+      )
+    ).toBe(false);
+    expect(
+      authorizesWorkerWorkspaceTool(
+        { ...task, currentPassId: 'corrected-pass' },
+        pass,
+        target,
+        'worker-thread'
+      )
+    ).toBe(false);
+    expect(authorizesWorkerWorkspaceTool(task, pass, target, 'another-thread')).toBe(false);
+    expect(
+      authorizesWorkerWorkspaceTool(
+        task,
+        pass,
+        { ...target, taskId: 'other-task' },
+        'worker-thread'
+      )
+    ).toBe(false);
+    expect(normalizeAgentWorkspaceUrl('https://github.com/org/repo')).toBe(
+      'https://github.com/org/repo'
+    );
+    expect(() =>
+      normalizeAgentWorkspaceUrl('https://github.com/org/repo?access_token=secret')
+    ).toThrow('authentication parameters');
+    expect(() => normalizeAgentWorkspaceUrl('https://user:password@example.com')).toThrow(
+      'credentials'
+    );
+    expect(workspaceToolRequiresDesktop('open_browser')).toBe(true);
+    expect(workspaceToolRequiresDesktop('inspect_github')).toBe(false);
   });
-  it('requires full workspace-root write scope before the agent may initialize Git',async()=>{
-    const root=path.resolve('repo'),nestedRoot=path.join(root,'src');
-    const task:any={id:'task',currentPassId:'pass',phase:'worker_running',workerStage:'execute',activeRole:'worker',activeTurnId:'turn',workerThreadId:'worker-thread',userRoot:root};const target={taskId:'task',passId:'pass'};
-    const nestedPass:any={id:'pass',workerStage:'execute',executionProfile:{provider:'codex'},assignment:{write_scope:[nestedRoot]}};
-    expect(await authorizesWorkspaceRepositoryInitialization(task,nestedPass,target,'worker-thread')).toBe(false);
-    const rootPass:any={...nestedPass,assignment:{write_scope:[root]}};
-    expect(await authorizesWorkspaceRepositoryInitialization(task,rootPass,target,'worker-thread')).toBe(true);
-    const recruitedPass:any={...rootPass,recruitmentTeam:{sealed:true,passId:'pass',workers:[{workerId:'worker-a',threadId:'worker-thread',status:'running',workerStage:'execute',assignment:{write_scope:[root]}}],integration:{status:'queued',branch:'recruitment/task/integration',worktreeRoot:'D:/task/integration',assignment:{write_scope:[root]}}}};
-    expect(await authorizesWorkspaceRepositoryInitialization({...task,workerThreadId:undefined,workerStage:undefined},recruitedPass,target,'worker-thread')).toBe(false);
-    expect(await authorizesWorkspaceRepositoryInitialization({...task,phase:'routing',activeRole:'router',workerThreadId:undefined},rootPass,target,'router-thread')).toBe(false);
+  it('requires full workspace-root write scope before the agent may initialize Git', async () => {
+    const root = path.resolve('repo'),
+      nestedRoot = path.join(root, 'src');
+    const task: any = {
+      id: 'task',
+      currentPassId: 'pass',
+      phase: 'worker_running',
+      workerStage: 'execute',
+      activeRole: 'worker',
+      activeTurnId: 'turn',
+      workerThreadId: 'worker-thread',
+      userRoot: root,
+    };
+    const target = { taskId: 'task', passId: 'pass' };
+    const nestedPass: any = {
+      id: 'pass',
+      workerStage: 'execute',
+      executionProfile: { provider: 'codex' },
+      assignment: { write_scope: [nestedRoot] },
+    };
+    expect(
+      await authorizesWorkspaceRepositoryInitialization(task, nestedPass, target, 'worker-thread')
+    ).toBe(false);
+    const rootPass: any = { ...nestedPass, assignment: { write_scope: [root] } };
+    expect(
+      await authorizesWorkspaceRepositoryInitialization(task, rootPass, target, 'worker-thread')
+    ).toBe(true);
+    const recruitedPass: any = {
+      ...rootPass,
+      recruitmentTeam: {
+        sealed: true,
+        passId: 'pass',
+        workers: [
+          {
+            workerId: 'worker-a',
+            threadId: 'worker-thread',
+            status: 'running',
+            workerStage: 'execute',
+            assignment: { write_scope: [root] },
+          },
+        ],
+        integration: {
+          status: 'queued',
+          branch: 'recruitment/task/integration',
+          worktreeRoot: 'D:/task/integration',
+          assignment: { write_scope: [root] },
+        },
+      },
+    };
+    expect(
+      await authorizesWorkspaceRepositoryInitialization(
+        { ...task, workerThreadId: undefined, workerStage: undefined },
+        recruitedPass,
+        target,
+        'worker-thread'
+      )
+    ).toBe(false);
+    expect(
+      await authorizesWorkspaceRepositoryInitialization(
+        { ...task, phase: 'routing', activeRole: 'router', workerThreadId: undefined },
+        rootPass,
+        target,
+        'router-thread'
+      )
+    ).toBe(false);
   });
-  it('gives QA a distinct read-only thread config with external MCP, plugins, apps, and dynamic tools disabled',()=>{
-    const qa=makeThreadParams({role:'qa',root:'/tmp/project',model:'gpt-6.1-terra',approvalPolicy:'full-access',dynamicTools:workerWorkspaceTool,skillsMcpConfig:{command:'skills'},disabledMcpServerNames:['github','linear']});
-    expect(qa).toMatchObject({approvalPolicy:'never',sandbox:'read-only',dynamicTools:[],config:{'mcp_servers.github.enabled':false,'mcp_servers.linear.enabled':false,features:{apps:false,plugins:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false},web_search:'disabled'}});
-    expect(qa.config).not.toHaveProperty('mcp_servers');expect(qa.developerInstructions).not.toContain('PROJECT KNOWLEDGE AND REPOSITORY INDEX USE');expect(()=>appAgentConfig('/tmp/project','qa',undefined,['server.with-dot'])).toThrow('cannot safely disable');
-    const turn=makeTurnParams({threadId:'qa-thread',input:'Audit read only',role:'qa',model:'gpt-6.1-terra',effort:'high',writeRoots:['/tmp/project'],approvalPolicy:'on-request',schema:null});
-    expect(turn).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'readOnly',networkAccess:false}});
-    const resumed=makeThreadResumeParams('qa-thread','full-access','qa','/tmp/project',undefined,{command:'skills'},workerWorkspaceTool,['github','linear']);
-    expect(resumed).toMatchObject({approvalPolicy:'never',sandbox:'read-only',dynamicTools:[],config:qa.config,developerInstructions:qa.developerInstructions});
+  it('gives QA a distinct read-only thread config with external MCP, plugins, apps, and dynamic tools disabled', () => {
+    const qa = makeThreadParams({
+      role: 'qa',
+      root: '/tmp/project',
+      model: 'gpt-6.1-terra',
+      approvalPolicy: 'full-access',
+      dynamicTools: workerWorkspaceTool,
+      skillsMcpConfig: { command: 'skills' },
+      disabledMcpServerNames: ['github', 'linear'],
+    });
+    expect(qa).toMatchObject({
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      dynamicTools: [],
+      config: {
+        'mcp_servers.github.enabled': false,
+        'mcp_servers.linear.enabled': false,
+        features: {
+          apps: false,
+          plugins: false,
+          mcp_2026_07_28: false,
+          codex_apps_mcp_2026_07_28: false,
+        },
+        web_search: 'disabled',
+      },
+    });
+    expect(qa.config).not.toHaveProperty('mcp_servers');
+    expect(qa.developerInstructions).not.toContain('PROJECT KNOWLEDGE AND REPOSITORY INDEX USE');
+    expect(() => appAgentConfig('/tmp/project', 'qa', undefined, ['server.with-dot'])).toThrow(
+      'cannot safely disable'
+    );
+    const turn = makeTurnParams({
+      threadId: 'qa-thread',
+      input: 'Audit read only',
+      role: 'qa',
+      model: 'gpt-6.1-terra',
+      effort: 'high',
+      writeRoots: ['/tmp/project'],
+      approvalPolicy: 'on-request',
+      schema: null,
+    });
+    expect(turn).toMatchObject({
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    });
+    const resumed = makeThreadResumeParams(
+      'qa-thread',
+      'full-access',
+      'qa',
+      '/tmp/project',
+      undefined,
+      { command: 'skills' },
+      workerWorkspaceTool,
+      ['github', 'linear']
+    );
+    expect(resumed).toMatchObject({
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      dynamicTools: [],
+      config: qa.config,
+      developerInstructions: qa.developerInstructions,
+    });
   });
-  it('refreshes configured MCP names and disables them for QA start and resume without copying credentials',async()=>{
-    const client=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
-    const first={config:{mcp_servers:{github:{command:'github',env:{TOKEN:'SENSITIVE_CONFIG_VALUE_42'}},linear:{url:'https://linear.invalid'}},plugins:{fixture:{enabled:true}}},layers:[{config:{mcp_servers:{project_private:{command:'hidden-project-server',env:{TOKEN:'SENSITIVE_CONFIG_VALUE_42'}}}}}]};const second={config:{mcp_servers:{github:{command:'github'},private_server:{command:'private'}},plugins:{fixture:{enabled:true}}},layers:[{config:{mcp_servers:{workspace_private:{command:'hidden-workspace-server'}}}}]};
-    const request=vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'qa-thread'}}).mockResolvedValueOnce(second).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'qa-thread'}});(client as any).request=request;
-    await expect(client.startThread('qa','/repo','gpt-6.1-terra','high','on-request')).resolves.toBe('qa-thread');
-    const start=request.mock.calls[1][1];expect(start).toMatchObject({model:'gpt-6.1-terra',approvalPolicy:'never',sandbox:'read-only',dynamicTools:[],config:{'mcp_servers.github.enabled':false,'mcp_servers.linear.enabled':false,'mcp_servers.project_private.enabled':false,features:{apps:false,plugins:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false},web_search:'disabled'}});expect(start.config).not.toHaveProperty('mcp_servers');expect(JSON.stringify(start.config)).not.toContain('SENSITIVE_CONFIG_VALUE_42');
-    await expect(client.resumeThread('qa-thread','on-request','qa','/repo')).resolves.toBe('qa-thread');
-    const resume=request.mock.calls[3][1];expect(resume).toMatchObject({approvalPolicy:'never',sandbox:'read-only'});expect(resume.config).toMatchObject({'mcp_servers.github.enabled':false,'mcp_servers.private_server.enabled':false,'mcp_servers.workspace_private.enabled':false});expect(resume.config).not.toHaveProperty('mcp_servers');const configReads=request.mock.calls.filter(([method]:any[])=>method==='config/read');expect(configReads).toHaveLength(2);expect(configReads.map(([,params]:any[])=>params)).toEqual([{cwd:'/repo',includeLayers:true},{cwd:'/repo',includeLayers:true}]);client.close();
-    const incomplete=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(incomplete as any).ready=true;(incomplete as any).child={killed:false,stdin:{write:()=>{}}};const missingLayers=(incomplete as any).request=vi.fn().mockResolvedValue({config:{mcp_servers:{github:{}},plugins:{fixture:{enabled:true}}}});await expect(incomplete.startThread('qa','/repo','gpt-6.1-terra','high','on-request')).rejects.toThrow('could not report all configuration layers');expect(missingLayers).toHaveBeenCalledTimes(1);incomplete.close();
+  it('refreshes configured MCP names and disables them for QA start and resume without copying credentials', async () => {
+    const client = new AppServer({
+      codexHome: '/instruction-filtered-home',
+      cwd: '/instruction-filtered-home/workspace',
+    });
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    const first = {
+      config: {
+        mcp_servers: {
+          github: { command: 'github', env: { TOKEN: 'SENSITIVE_CONFIG_VALUE_42' } },
+          linear: { url: 'https://linear.invalid' },
+        },
+        plugins: { fixture: { enabled: true } },
+      },
+      layers: [
+        {
+          config: {
+            mcp_servers: {
+              project_private: {
+                command: 'hidden-project-server',
+                env: { TOKEN: 'SENSITIVE_CONFIG_VALUE_42' },
+              },
+            },
+          },
+        },
+      ],
+    };
+    const second = {
+      config: {
+        mcp_servers: { github: { command: 'github' }, private_server: { command: 'private' } },
+        plugins: { fixture: { enabled: true } },
+      },
+      layers: [
+        { config: { mcp_servers: { workspace_private: { command: 'hidden-workspace-server' } } } },
+      ],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce({
+        instructionSources: ['/repo/AGENTS.md'],
+        thread: { id: 'qa-thread' },
+      })
+      .mockResolvedValueOnce(second)
+      .mockResolvedValueOnce({
+        instructionSources: ['/repo/AGENTS.md'],
+        thread: { id: 'qa-thread' },
+      });
+    (client as any).request = request;
+    await expect(
+      client.startThread('qa', '/repo', 'gpt-6.1-terra', 'high', 'on-request')
+    ).resolves.toBe('qa-thread');
+    const start = request.mock.calls[1][1];
+    expect(start).toMatchObject({
+      model: 'gpt-6.1-terra',
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      dynamicTools: [],
+      config: {
+        'mcp_servers.github.enabled': false,
+        'mcp_servers.linear.enabled': false,
+        'mcp_servers.project_private.enabled': false,
+        features: {
+          apps: false,
+          plugins: false,
+          mcp_2026_07_28: false,
+          codex_apps_mcp_2026_07_28: false,
+        },
+        web_search: 'disabled',
+      },
+    });
+    expect(start.config).not.toHaveProperty('mcp_servers');
+    expect(JSON.stringify(start.config)).not.toContain('SENSITIVE_CONFIG_VALUE_42');
+    await expect(client.resumeThread('qa-thread', 'on-request', 'qa', '/repo')).resolves.toBe(
+      'qa-thread'
+    );
+    const resume = request.mock.calls[3][1];
+    expect(resume).toMatchObject({ approvalPolicy: 'never', sandbox: 'read-only' });
+    expect(resume.config).toMatchObject({
+      'mcp_servers.github.enabled': false,
+      'mcp_servers.private_server.enabled': false,
+      'mcp_servers.workspace_private.enabled': false,
+    });
+    expect(resume.config).not.toHaveProperty('mcp_servers');
+    const configReads = request.mock.calls.filter(([method]: any[]) => method === 'config/read');
+    expect(configReads).toHaveLength(2);
+    expect(configReads.map(([, params]: any[]) => params)).toEqual([
+      { cwd: '/repo', includeLayers: true },
+      { cwd: '/repo', includeLayers: true },
+    ]);
+    client.close();
+    const incomplete = new AppServer({
+      codexHome: '/instruction-filtered-home',
+      cwd: '/instruction-filtered-home/workspace',
+    });
+    (incomplete as any).ready = true;
+    (incomplete as any).child = { killed: false, stdin: { write: () => {} } };
+    const missingLayers = ((incomplete as any).request = vi.fn().mockResolvedValue({
+      config: { mcp_servers: { github: {} }, plugins: { fixture: { enabled: true } } },
+    }));
+    await expect(
+      incomplete.startThread('qa', '/repo', 'gpt-6.1-terra', 'high', 'on-request')
+    ).rejects.toThrow('could not report all configuration layers');
+    expect(missingLayers).toHaveBeenCalledTimes(1);
+    incomplete.close();
   });
-  it('disables host and project MCP servers for router start and resume',async()=>{
-    const client=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
-    const config={config:{mcp_servers:{agentmem:{command:'agentmem',env:{TOKEN:'DO_NOT_COPY'}},github:{url:'https://github.invalid'}},plugins:{fixture:{enabled:true}}},layers:[{config:{mcp_servers:{project_private:{command:'project-service'}}}}]};
-    const request=vi.fn().mockResolvedValueOnce(config).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'router-thread'}}).mockResolvedValueOnce(config).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'router-thread'}});(client as any).request=request;
-    await expect(client.startThread('router','/repo','gpt-6-luna','low','on-request')).resolves.toBe('router-thread');
-    const started=request.mock.calls[1][1];expect(started.config).toMatchObject({'mcp_servers.agentmem.enabled':false,'mcp_servers.github.enabled':false,'mcp_servers.project_private.enabled':false});expect(started.config).not.toHaveProperty('mcp_servers');expect(JSON.stringify(started.config)).not.toContain('DO_NOT_COPY');expect(started.dynamicTools).toEqual([]);
-    await expect(client.resumeThread('router-thread','on-request','router','/repo')).resolves.toBe('router-thread');
-    const resumed=request.mock.calls[3][1];expect(resumed.config).toMatchObject({'mcp_servers.agentmem.enabled':false,'mcp_servers.github.enabled':false,'mcp_servers.project_private.enabled':false});expect(resumed.config).not.toHaveProperty('mcp_servers');expect(resumed.dynamicTools).toEqual([]);expect(request.mock.calls.filter(([method]:any[])=>method==='config/read').map(([,params]:any[])=>params)).toEqual([{cwd:'/repo',includeLayers:true},{cwd:'/repo',includeLayers:true}]);client.close();
+  it('disables host and project MCP servers for router start and resume', async () => {
+    const client = new AppServer({
+      codexHome: '/instruction-filtered-home',
+      cwd: '/instruction-filtered-home/workspace',
+    });
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    const config = {
+      config: {
+        mcp_servers: {
+          agentmem: { command: 'agentmem', env: { TOKEN: 'DO_NOT_COPY' } },
+          github: { url: 'https://github.invalid' },
+        },
+        plugins: { fixture: { enabled: true } },
+      },
+      layers: [{ config: { mcp_servers: { project_private: { command: 'project-service' } } } }],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(config)
+      .mockResolvedValueOnce({
+        instructionSources: ['/repo/AGENTS.md'],
+        thread: { id: 'router-thread' },
+      })
+      .mockResolvedValueOnce(config)
+      .mockResolvedValueOnce({
+        instructionSources: ['/repo/AGENTS.md'],
+        thread: { id: 'router-thread' },
+      });
+    (client as any).request = request;
+    await expect(
+      client.startThread('router', '/repo', 'gpt-6-luna', 'low', 'on-request')
+    ).resolves.toBe('router-thread');
+    const started = request.mock.calls[1][1];
+    expect(started.config).toMatchObject({
+      'mcp_servers.agentmem.enabled': false,
+      'mcp_servers.github.enabled': false,
+      'mcp_servers.project_private.enabled': false,
+    });
+    expect(started.config).not.toHaveProperty('mcp_servers');
+    expect(JSON.stringify(started.config)).not.toContain('DO_NOT_COPY');
+    expect(started.dynamicTools).toEqual([]);
+    await expect(
+      client.resumeThread('router-thread', 'on-request', 'router', '/repo')
+    ).resolves.toBe('router-thread');
+    const resumed = request.mock.calls[3][1];
+    expect(resumed.config).toMatchObject({
+      'mcp_servers.agentmem.enabled': false,
+      'mcp_servers.github.enabled': false,
+      'mcp_servers.project_private.enabled': false,
+    });
+    expect(resumed.config).not.toHaveProperty('mcp_servers');
+    expect(resumed.dynamicTools).toEqual([]);
+    expect(
+      request.mock.calls
+        .filter(([method]: any[]) => method === 'config/read')
+        .map(([, params]: any[]) => params)
+    ).toEqual([
+      { cwd: '/repo', includeLayers: true },
+      { cwd: '/repo', includeLayers: true },
+    ]);
+    client.close();
   });
-  it('isolates the router with a classification-only thread and assigns the Fast tier only to its low-effort turn',()=>{
-    const router=makeThreadParams({role:'router',root:'/tmp/project',model:'gpt-6-luna',effort:'low',approvalPolicy:'on-request'});
+  it('isolates the router with a classification-only thread and assigns the Fast tier only to its low-effort turn', () => {
+    const router = makeThreadParams({
+      role: 'router',
+      root: '/tmp/project',
+      model: 'gpt-6-luna',
+      effort: 'low',
+      approvalPolicy: 'on-request',
+    });
     expect((router as any).dynamicTools).toEqual([]);
-    expect(router.config).toMatchObject({project_doc_max_bytes:0,projects:{'/tmp/project':{trust_level:'trusted'}},web_search:'disabled',features:{apps:false,hooks:false,plugins:false,memories:false,multi_agent:false,mcp_2026_07_28:false,codex_apps_mcp_2026_07_28:false}});
+    expect(router.config).toMatchObject({
+      project_doc_max_bytes: 0,
+      projects: { '/tmp/project': { trust_level: 'trusted' } },
+      web_search: 'disabled',
+      features: {
+        apps: false,
+        hooks: false,
+        plugins: false,
+        memories: false,
+        multi_agent: false,
+        mcp_2026_07_28: false,
+        codex_apps_mcp_2026_07_28: false,
+      },
+    });
     expect(router.developerInstructions).toContain('classification-only');
-    const turn=makeTurnParams({threadId:'router',input:'Classify only',role:'router',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'},serviceTierForTurn:'priority'});
-    expect(turn).toMatchObject({model:'gpt-6-luna',effort:'low',serviceTierForTurn:'priority',sandboxPolicy:{type:'readOnly',networkAccess:false}});
-    const direct=makeTurnParams({threadId:'direct',input:'Answer',role:'direct',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'}});
-    const simple=makeTurnParams({threadId:'simple',input:'Edit',role:'simple',model:'gpt-6-luna',effort:'xhigh',writeRoots:['/tmp/project'],approvalPolicy:'on-request',schema:{type:'object'}});
-    const simpleInstructions=makeThreadParams({role:'simple',root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'}).developerInstructions;
-    expect(simpleInstructions).toContain('Updating focused tests or docs needed to verify the requested behavior is an ordinary implementation decision');expect(simpleInstructions).toContain('never weaken or rewrite a test merely to hide a failure');
-    expect(direct).not.toHaveProperty('serviceTierForTurn');expect(direct.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
-    expect(simple).not.toHaveProperty('serviceTierForTurn');expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:false});
-    const toolFirst=makeTurnParams({threadId:'setup',input:'Use the setup tools first',role:'orchestrator',model:'gpt-6.1-sol',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:undefined});
+    const turn = makeTurnParams({
+      threadId: 'router',
+      input: 'Classify only',
+      role: 'router',
+      model: 'gpt-6-luna',
+      effort: 'low',
+      writeRoots: [],
+      approvalPolicy: 'on-request',
+      schema: { type: 'object' },
+      serviceTierForTurn: 'priority',
+    });
+    expect(turn).toMatchObject({
+      model: 'gpt-6-luna',
+      effort: 'low',
+      serviceTierForTurn: 'priority',
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    });
+    const direct = makeTurnParams({
+      threadId: 'direct',
+      input: 'Answer',
+      role: 'direct',
+      model: 'gpt-6-luna',
+      effort: 'low',
+      writeRoots: [],
+      approvalPolicy: 'on-request',
+      schema: { type: 'object' },
+    });
+    const simple = makeTurnParams({
+      threadId: 'simple',
+      input: 'Edit',
+      role: 'simple',
+      model: 'gpt-6-luna',
+      effort: 'xhigh',
+      writeRoots: ['/tmp/project'],
+      approvalPolicy: 'on-request',
+      schema: { type: 'object' },
+    });
+    const simpleInstructions = makeThreadParams({
+      role: 'simple',
+      root: '/tmp/project',
+      model: 'gpt-6-luna',
+      approvalPolicy: 'on-request',
+    }).developerInstructions;
+    expect(simpleInstructions).toContain(
+      'Updating focused tests or docs needed to verify the requested behavior is an ordinary implementation decision'
+    );
+    expect(simpleInstructions).toContain('never weaken or rewrite a test merely to hide a failure');
+    expect(direct).not.toHaveProperty('serviceTierForTurn');
+    expect(direct.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
+    expect(simple).not.toHaveProperty('serviceTierForTurn');
+    expect(simple.sandboxPolicy).toEqual({
+      type: 'workspaceWrite',
+      writableRoots: ['/tmp/project'],
+      networkAccess: false,
+    });
+    const toolFirst = makeTurnParams({
+      threadId: 'setup',
+      input: 'Use the setup tools first',
+      role: 'orchestrator',
+      model: 'gpt-6.1-sol',
+      effort: 'low',
+      writeRoots: [],
+      approvalPolicy: 'on-request',
+      schema: undefined,
+    });
     expect(toolFirst).not.toHaveProperty('outputSchema');
-    for(const role of ['router','direct','simple','orchestrator','worker','qa'] as const){const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'on-request'});expect(thread.config).toMatchObject({projects:{'/tmp/project':{trust_level:'trusted'}}});expect(thread.baseInstructions).toBe(appAgentBaseInstructions('/tmp/project'));expect(thread.baseInstructions).toContain(`Host platform: ${process.platform}`);if(role==='router')expect(thread.config).toHaveProperty('project_doc_max_bytes',0);else{expect(thread.config).not.toHaveProperty('project_doc_fallback_filenames');expect(thread.config).not.toHaveProperty('project_root_markers');}}
+    for (const role of ['router', 'direct', 'simple', 'orchestrator', 'worker', 'qa'] as const) {
+      const thread = makeThreadParams({
+        role,
+        root: '/tmp/project',
+        model: 'gpt-6-luna',
+        approvalPolicy: 'on-request',
+      });
+      expect(thread.config).toMatchObject({
+        projects: { '/tmp/project': { trust_level: 'trusted' } },
+      });
+      expect(thread.baseInstructions).toBe(appAgentBaseInstructions('/tmp/project'));
+      expect(thread.baseInstructions).toContain(`Host platform: ${process.platform}`);
+      if (role === 'router') expect(thread.config).toHaveProperty('project_doc_max_bytes', 0);
+      else {
+        expect(thread.config).not.toHaveProperty('project_doc_fallback_filenames');
+        expect(thread.config).not.toHaveProperty('project_root_markers');
+      }
+    }
   });
-  it('serializes attachment image data through the app-server user-input adapter',()=>{
-    const image={mediaType:'image/png' as const,data:'iVBORw0KGgo='};
-    const input=makeAppServerUserInput('Describe the image',[image]);
-    expect(input).toEqual([{type:'text',text:'Describe the image'},{type:'image',url:'data:image/png;base64,iVBORw0KGgo='}]);
-    const turn=makeTurnParams({threadId:'router',input:'Describe the image',role:'router',model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'},images:[image]});
+  it('serializes attachment image data through the app-server user-input adapter', () => {
+    const image = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' };
+    const input = makeAppServerUserInput('Describe the image', [image]);
+    expect(input).toEqual([
+      { type: 'text', text: 'Describe the image' },
+      { type: 'image', url: 'data:image/png;base64,iVBORw0KGgo=' },
+    ]);
+    const turn = makeTurnParams({
+      threadId: 'router',
+      input: 'Describe the image',
+      role: 'router',
+      model: 'gpt-6-luna',
+      effort: 'low',
+      writeRoots: [],
+      approvalPolicy: 'on-request',
+      schema: { type: 'object' },
+      images: [image],
+    });
     expect(turn.input).toEqual(input);
   });
-  it('uses the native turn/steer RPC with the expected turn, input attachments, and stable message id',async()=>{
-    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};(client as any).verifiedAgentThreads.add('worker-thread');const request=vi.fn().mockResolvedValue({turnId:'active-turn'});(client as any).request=request;
-    await expect(client.steerTurn('worker-thread','active-turn','Please check this image',[{mediaType:'image/png',data:'iVBORw0KGgo='}],'message-1')).resolves.toEqual({turnId:'active-turn'});
-    expect(request).toHaveBeenCalledWith('turn/steer',{threadId:'worker-thread',expectedTurnId:'active-turn',input:[{type:'text',text:'Please check this image'},{type:'image',url:'data:image/png;base64,iVBORw0KGgo='}],clientUserMessageId:'message-1'},30000);client.close();
-  });
-  it('preserves method identity on native server rejection for race-safe steering fallback',async()=>{
-    const client=new AppServer();(client as any).child={killed:false,stdin:{write:()=>{}}};const response=client.request('turn/steer',{threadId:'worker-thread',expectedTurnId:'stale'});const pending=[...(client as any).pending.entries()][0];(client as any).consume(JSON.stringify({id:pending[0],error:{code:-32600,message:'no active turn to steer'}})+'\n');await expect(response).rejects.toMatchObject({method:'turn/steer',message:'no active turn to steer'});expect((await response.catch(error=>error)) instanceof AppServerRequestError).toBe(true);client.close();
-  });
-  it('uses the same app-server user-input adapter for review turns',async()=>{
-    const client=new AppServer();(client as any).verifiedAgentThreads.add('thread');const request=vi.fn().mockResolvedValue({turn:{id:'review'}});(client as any).request=request;
-    await client.reviewTurn('thread','Review this image','gpt-6.1-sol','low','on-request',[{mediaType:'image/webp',data:'UklGRg=='}]);
-    expect(request.mock.calls[0][1].input).toEqual([{type:'text',text:'Review this image'},{type:'image',url:'data:image/webp;base64,UklGRg=='}]);client.close();
-  });
-  it('allows project AGENTS files while rejecting Codex-home or out-of-root instructions',()=>{
-    expect(()=>assertInstructionIsolation({instructionSources:['D:/repo/AGENTS.md']},'D:/repo','C:/app/instruction-filtered-home')).not.toThrow();
-    expect(()=>assertInstructionIsolation({instructionSources:['C:/app/instruction-filtered-home/AGENTS.md']},'D:/repo','C:/app/instruction-filtered-home')).toThrow('global Codex-home AGENTS.md');
-    expect(()=>assertInstructionIsolation({instructionSources:['C:/Users/user/.codex/AGENTS.md']},'D:/repo','C:/app/instruction-filtered-home')).toThrow('outside the selected project root');
-    expect(()=>assertInstructionIsolation({})).toThrow('instruction loading could not be verified');
-    expect(()=>assertInstructionIsolation({instructionSources:null})).toThrow('instruction loading could not be verified');
-  });
-  it('requires normal MCP and plugin configuration before starting agent threads',async()=>{
-    expect(()=>assertAgentRuntimeConfig(verifiedRuntimeConfig)).not.toThrow();
-    expect(()=>assertAgentRuntimeConfig({config:{mcp_servers:{},plugins:{example:{enabled:true}}}})).toThrow('does not expose the normal configured MCP and plugin settings');
-    expect(()=>assertAgentRuntimeConfig({config:{mcp_servers:{},plugins:{example:{enabled:true}}}})).toThrow('does not expose the normal configured MCP and plugin settings');
-    const client=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};const request=vi.fn().mockResolvedValue(verifiedRuntimeConfig);(client as any).request=request;
-    await client.verifyAgentRuntimeConfig();await client.verifyAgentRuntimeConfig();expect(request).toHaveBeenCalledTimes(1);expect(request).toHaveBeenCalledWith('config/read',{cwd:'/instruction-filtered-home/workspace',includeLayers:false},10000);client.close();
-    const unsafe=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(unsafe as any).ready=true;(unsafe as any).child={killed:false,stdin:{write:()=>{}}};const unsafeRequest=vi.fn().mockResolvedValue({config:{mcp_servers:{},plugins:{}}});(unsafe as any).request=unsafeRequest;
-    await expect(unsafe.startThread('worker','/repo','gpt-6-luna','high')).rejects.toThrow('does not expose the normal configured MCP and plugin settings');expect(unsafeRequest).toHaveBeenCalledTimes(1);expect(unsafeRequest.mock.calls[0][0]).toBe('config/read');unsafe.close();
-  });
-  it('checks instruction sources on every role start and resume and preserves MCP-free routing',async()=>{
-    const client=new AppServer({codexHome:'/instruction-filtered-home',cwd:'/instruction-filtered-home/workspace'});(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
-    const routerConfig={...verifiedRuntimeConfig,layers:[]};const request=vi.fn().mockResolvedValueOnce(routerConfig).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'router-thread'}}).mockResolvedValueOnce(routerConfig).mockResolvedValueOnce({instructionSources:['/outside/AGENTS.md'],thread:{id:'unsafe-thread'}}).mockResolvedValueOnce({instructionSources:['/repo/AGENTS.md'],thread:{id:'direct-thread'}}).mockResolvedValueOnce({turn:{id:'safe-turn'}});
-    (client as any).request=request;
-    await expect(client.startThread('router','/repo','gpt-6-luna','low')).resolves.toBe('router-thread');
-    expect(request.mock.calls[0]).toEqual(['config/read',{cwd:'/repo',includeLayers:true},10000]);
-    expect(request.mock.calls[1][1]).toMatchObject({cwd:'/repo',baseInstructions:appAgentBaseInstructions('/repo'),config:{project_doc_max_bytes:0,projects:{'/repo':{trust_level:'trusted'}},'mcp_servers.project_notes.enabled':false,features:{plugins:false,mcp_2026_07_28:false}}});expect(request.mock.calls[1][1].config).not.toHaveProperty('mcp_servers');
-    await expect(client.resumeThread('router-thread','on-request','router','/repo')).rejects.toThrow('outside the selected project root');
-    expect(request.mock.calls[3][1].config).toMatchObject({'mcp_servers.project_notes.enabled':false});expect(request.mock.calls[3][1].config).not.toHaveProperty('mcp_servers');
-    await expect(client.startTurn('unsafe-thread','classify','router','gpt-6-luna','low','/isolated/home')).rejects.toThrow('not verified');
-    await expect(client.startThread('direct','/repo','gpt-6-luna','low')).resolves.toBe('direct-thread');
-    expect(request.mock.calls[4][1].config).toMatchObject({features:{plugins:true,mcp_2026_07_28:true,codex_apps_mcp_2026_07_28:true}});expect(request.mock.calls[4][1].config).not.toHaveProperty('project_doc_fallback_filenames');
-    await expect(client.startTurn('direct-thread','answer','direct','gpt-6-luna','low','/repo')).resolves.toMatchObject({turn:{id:'safe-turn'}});
+  it('uses the native turn/steer RPC with the expected turn, input attachments, and stable message id', async () => {
+    const client = new AppServer();
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    (client as any).verifiedAgentThreads.add('worker-thread');
+    const request = vi.fn().mockResolvedValue({ turnId: 'active-turn' });
+    (client as any).request = request;
+    await expect(
+      client.steerTurn(
+        'worker-thread',
+        'active-turn',
+        'Please check this image',
+        [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }],
+        'message-1'
+      )
+    ).resolves.toEqual({ turnId: 'active-turn' });
+    expect(request).toHaveBeenCalledWith(
+      'turn/steer',
+      {
+        threadId: 'worker-thread',
+        expectedTurnId: 'active-turn',
+        input: [
+          { type: 'text', text: 'Please check this image' },
+          { type: 'image', url: 'data:image/png;base64,iVBORw0KGgo=' },
+        ],
+        clientUserMessageId: 'message-1',
+      },
+      30000
+    );
     client.close();
   });
-  it('keeps the original Codex process threadless with an RPC allowlist',async()=>{
-    const broker=new AppServer({metadataOnly:true});
-    await expect(broker.startThread('worker','/repo','gpt-6-luna','high')).rejects.toThrow('metadata-only');
-    await expect(broker.request('turn/start',{})).rejects.toThrow('does not permit turn/start');
-    await expect(broker.request('thread/resume',{})).rejects.toThrow('does not permit thread/resume');
-    const writes:string[]=[];(broker as any).child={killed:false,stdin:{write:(data:string)=>writes.push(data)}};
-    expect(()=>broker.respondServerRequest('unexpected-thread',{})).toThrow('does not host agent requests');
-    broker.respondServerError('unexpected-request',-32601,'Unsupported');
-    expect(JSON.parse(writes[0])).toEqual({id:'unexpected-request',error:{code:-32601,message:'Unsupported'}});
+  it('preserves method identity on native server rejection for race-safe steering fallback', async () => {
+    const client = new AppServer();
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    const response = client.request('turn/steer', {
+      threadId: 'worker-thread',
+      expectedTurnId: 'stale',
+    });
+    const pending = [...(client as any).pending.entries()][0];
+    (client as any).consume(
+      JSON.stringify({
+        id: pending[0],
+        error: { code: -32600, message: 'no active turn to steer' },
+      }) + '\n'
+    );
+    await expect(response).rejects.toMatchObject({
+      method: 'turn/steer',
+      message: 'no active turn to steer',
+    });
+    expect((await response.catch((error) => error)) instanceof AppServerRequestError).toBe(true);
+    client.close();
+  });
+  it('uses the same app-server user-input adapter for review turns', async () => {
+    const client = new AppServer();
+    (client as any).verifiedAgentThreads.add('thread');
+    const request = vi.fn().mockResolvedValue({ turn: { id: 'review' } });
+    (client as any).request = request;
+    await client.reviewTurn('thread', 'Review this image', 'gpt-6.1-sol', 'low', 'on-request', [
+      { mediaType: 'image/webp', data: 'UklGRg==' },
+    ]);
+    expect(request.mock.calls[0][1].input).toEqual([
+      { type: 'text', text: 'Review this image' },
+      { type: 'image', url: 'data:image/webp;base64,UklGRg==' },
+    ]);
+    client.close();
+  });
+  it('allows project AGENTS files while rejecting Codex-home or out-of-root instructions', () => {
+    expect(() =>
+      assertInstructionIsolation(
+        { instructionSources: ['D:/repo/AGENTS.md'] },
+        'D:/repo',
+        'C:/app/instruction-filtered-home'
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertInstructionIsolation(
+        { instructionSources: ['C:/app/instruction-filtered-home/AGENTS.md'] },
+        'D:/repo',
+        'C:/app/instruction-filtered-home'
+      )
+    ).toThrow('global Codex-home AGENTS.md');
+    expect(() =>
+      assertInstructionIsolation(
+        { instructionSources: ['C:/Users/user/.codex/AGENTS.md'] },
+        'D:/repo',
+        'C:/app/instruction-filtered-home'
+      )
+    ).toThrow('outside the selected project root');
+    expect(() => assertInstructionIsolation({})).toThrow(
+      'instruction loading could not be verified'
+    );
+    expect(() => assertInstructionIsolation({ instructionSources: null })).toThrow(
+      'instruction loading could not be verified'
+    );
+  });
+  it('parses instruction file URLs as absolute paths before checking isolation', () => {
+    const root = path.resolve('instruction-isolation');
+    const project = path.join(root, 'project');
+    const inProject = pathToFileURL(path.join(project, 'AGENTS.md')).href;
+    const outside = pathToFileURL(path.join(root, 'outside', 'AGENTS.md')).href;
+
+    expect(() =>
+      assertInstructionIsolation({ instructionSources: [inProject] }, project)
+    ).not.toThrow();
+    expect(() => assertInstructionIsolation({ instructionSources: [outside] }, project)).toThrow(
+      'outside the selected project root'
+    );
+
+    if (process.platform === 'win32')
+      expect(() =>
+        assertInstructionIsolation({ instructionSources: ['file:///D:/repo/AGENTS.md'] }, 'D:/repo')
+      ).not.toThrow();
+    if (process.platform !== 'win32')
+      expect(() =>
+        assertInstructionIsolation(
+          { instructionSources: ['/repo/Allowed/AGENTS.md'] },
+          '/repo/allowed'
+        )
+      ).toThrow('outside the selected project root');
+  });
+  it('accepts agent configuration without optional MCP servers or plugins', async () => {
+    expect(() => assertAgentRuntimeConfig(verifiedRuntimeConfig)).not.toThrow();
+    expect(() =>
+      assertAgentRuntimeConfig({ config: { mcp_servers: {}, plugins: {} } })
+    ).not.toThrow();
+    expect(() => assertAgentRuntimeConfig({ config: {} })).not.toThrow();
+    expect(() => assertAgentRuntimeConfig({ config: { mcp_servers: [] } })).toThrow(
+      'Codex returned an invalid agent configuration.'
+    );
+    const client = new AppServer({
+      codexHome: '/instruction-filtered-home',
+      cwd: '/instruction-filtered-home/workspace',
+    });
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ config: {} })
+      .mockResolvedValueOnce({
+        instructionSources: [],
+        thread: { id: 'thread-without-optional-tools' },
+      });
+    (client as any).request = request;
+    await client.verifyAgentRuntimeConfig();
+    await client.verifyAgentRuntimeConfig();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      'config/read',
+      { cwd: '/instruction-filtered-home/workspace', includeLayers: false },
+      10000
+    );
+    await expect(client.startThread('worker', '/repo', 'gpt-6-luna', 'high')).resolves.toBe(
+      'thread-without-optional-tools'
+    );
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['config/read', 'thread/start']);
+    client.close();
+    const malformed = new AppServer({
+      codexHome: '/instruction-filtered-home',
+      cwd: '/instruction-filtered-home/workspace',
+    });
+    (malformed as any).ready = true;
+    (malformed as any).child = { killed: false, stdin: { write: () => {} } };
+    const malformedRequest = vi
+      .fn()
+      .mockResolvedValue({ config: { mcp_servers: 'not-a-map', plugins: {} } });
+    (malformed as any).request = malformedRequest;
+    await expect(malformed.startThread('worker', '/repo', 'gpt-6-luna', 'high')).rejects.toThrow(
+      'Codex returned an invalid agent configuration.'
+    );
+    expect(malformedRequest).toHaveBeenCalledTimes(1);
+    expect(malformedRequest.mock.calls[0][0]).toBe('config/read');
+    malformed.close();
+  });
+  it('checks instruction sources on every role start and resume and preserves MCP-free routing', async () => {
+    const client = new AppServer({
+      codexHome: '/instruction-filtered-home',
+      cwd: '/instruction-filtered-home/workspace',
+    });
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    const routerConfig = { ...verifiedRuntimeConfig, layers: [] };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(routerConfig)
+      .mockResolvedValueOnce({
+        instructionSources: ['/repo/AGENTS.md'],
+        thread: { id: 'router-thread' },
+      })
+      .mockResolvedValueOnce(routerConfig)
+      .mockResolvedValueOnce({
+        instructionSources: ['/outside/AGENTS.md'],
+        thread: { id: 'unsafe-thread' },
+      })
+      .mockResolvedValueOnce({
+        instructionSources: ['/repo/AGENTS.md'],
+        thread: { id: 'direct-thread' },
+      })
+      .mockResolvedValueOnce({ turn: { id: 'safe-turn' } });
+    (client as any).request = request;
+    await expect(client.startThread('router', '/repo', 'gpt-6-luna', 'low')).resolves.toBe(
+      'router-thread'
+    );
+    expect(request.mock.calls[0]).toEqual([
+      'config/read',
+      { cwd: '/repo', includeLayers: true },
+      10000,
+    ]);
+    expect(request.mock.calls[1][1]).toMatchObject({
+      cwd: '/repo',
+      baseInstructions: appAgentBaseInstructions('/repo'),
+      config: {
+        project_doc_max_bytes: 0,
+        projects: { '/repo': { trust_level: 'trusted' } },
+        'mcp_servers.project_notes.enabled': false,
+        features: { plugins: false, mcp_2026_07_28: false },
+      },
+    });
+    expect(request.mock.calls[1][1].config).not.toHaveProperty('mcp_servers');
+    await expect(
+      client.resumeThread('router-thread', 'on-request', 'router', '/repo')
+    ).rejects.toThrow('outside the selected project root');
+    expect(request.mock.calls[3][1].config).toMatchObject({
+      'mcp_servers.project_notes.enabled': false,
+    });
+    expect(request.mock.calls[3][1].config).not.toHaveProperty('mcp_servers');
+    await expect(
+      client.startTurn('unsafe-thread', 'classify', 'router', 'gpt-6-luna', 'low', '/isolated/home')
+    ).rejects.toThrow('not verified');
+    await expect(client.startThread('direct', '/repo', 'gpt-6-luna', 'low')).resolves.toBe(
+      'direct-thread'
+    );
+    expect(request.mock.calls[4][1].config).toMatchObject({
+      features: { plugins: true, mcp_2026_07_28: true, codex_apps_mcp_2026_07_28: true },
+    });
+    expect(request.mock.calls[4][1].config).not.toHaveProperty('project_doc_fallback_filenames');
+    await expect(
+      client.startTurn('direct-thread', 'answer', 'direct', 'gpt-6-luna', 'low', '/repo')
+    ).resolves.toMatchObject({ turn: { id: 'safe-turn' } });
+    client.close();
+  });
+  it('keeps the original Codex process threadless with an RPC allowlist', async () => {
+    const broker = new AppServer({ metadataOnly: true });
+    await expect(broker.startThread('worker', '/repo', 'gpt-6-luna', 'high')).rejects.toThrow(
+      'metadata-only'
+    );
+    await expect(broker.request('turn/start', {})).rejects.toThrow('does not permit turn/start');
+    await expect(broker.request('thread/resume', {})).rejects.toThrow(
+      'does not permit thread/resume'
+    );
+    const writes: string[] = [];
+    (broker as any).child = {
+      killed: false,
+      stdin: { write: (data: string) => writes.push(data) },
+    };
+    expect(() => broker.respondServerRequest('unexpected-thread', {})).toThrow(
+      'does not host agent requests'
+    );
+    broker.respondServerError('unexpected-request', -32601, 'Unsupported');
+    expect(JSON.parse(writes[0])).toEqual({
+      id: 'unexpected-request',
+      error: { code: -32601, message: 'Unsupported' },
+    });
     broker.close();
   });
-  it('shares one in-flight app-server startup across concurrent callers',async()=>{
-    let spawnCount=0;
-    const spawnOptions:any[]=[];
-    const fakeSpawn=(_exe:string,_args:string[],options:any)=>{
+  it('shares one in-flight app-server startup across concurrent callers', async () => {
+    let spawnCount = 0;
+    const spawnOptions: any[] = [];
+    const fakeSpawn = (_exe: string, _args: string[], options: any) => {
       spawnCount++;
       spawnOptions.push(options);
-      const child:any=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.killed=false;
-      const write=child.stdin.write.bind(child.stdin);child.stdin.write=(chunk:string,...args:any[])=>{const result=write(chunk,...args);for(const line of String(chunk).trim().split('\n')){const request=JSON.parse(line);if(request.method==='initialize')queueMicrotask(()=>child.stdout.write(`${JSON.stringify({id:request.id,result:{}})}\n`));}return result;};
-      child.kill=()=>{child.killed=true;return true;};return child;
+      const child: any = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = new PassThrough();
+      child.killed = false;
+      const write = child.stdin.write.bind(child.stdin);
+      child.stdin.write = (chunk: string, ...args: any[]) => {
+        const result = write(chunk, ...args);
+        for (const line of String(chunk).trim().split('\n')) {
+          const request = JSON.parse(line);
+          if (request.method === 'initialize')
+            queueMicrotask(() =>
+              child.stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\n`)
+            );
+        }
+        return result;
+      };
+      child.kill = () => {
+        child.killed = true;
+        return true;
+      };
+      return child;
     };
-    const client=new AppServer({spawnProcess:fakeSpawn as any,cwd:'/isolated/agent/workspace'});
-    await Promise.all([client.connect(),client.connect(),client.connect()]);expect(spawnCount).toBe(1);expect(spawnOptions[0].cwd).toBe('/isolated/agent/workspace');client.close();
+    const client = new AppServer({
+      spawnProcess: fakeSpawn as any,
+      cwd: '/isolated/agent/workspace',
+    });
+    await Promise.all([client.connect(), client.connect(), client.connect()]);
+    expect(spawnCount).toBe(1);
+    expect(spawnOptions[0].cwd).toBe('/isolated/agent/workspace');
+    client.close();
   });
-  it('preserves the selected normal Codex profile and explicit config path with the instruction-filtered home',async()=>{
-    const previousProfile=process.env.CODEX_PROFILE,previousConfig=process.env.CODEX_CONFIG;process.env.CODEX_PROFILE='qa-profile';process.env.CODEX_CONFIG='D:/codex/custom-config.toml';let options:any;
-    const fakeSpawn=(_exe:string,_args:string[],spawnOptions:any)=>{options=spawnOptions;const child:any=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.killed=false;const write=child.stdin.write.bind(child.stdin);child.stdin.write=(chunk:string,...args:any[])=>{const result=write(chunk,...args);for(const line of String(chunk).trim().split('\n')){const request=JSON.parse(line);if(request.method==='initialize')queueMicrotask(()=>child.stdout.write(`${JSON.stringify({id:request.id,result:{}})}\n`));}return result;};child.kill=()=>{child.killed=true;return true;};return child;};
-    try{const client=new AppServer({codexHome:'/instruction-filtered-home',spawnProcess:fakeSpawn as any});await client.connect();expect(options.env).toMatchObject({CODEX_HOME:'/instruction-filtered-home',CODEX_PROFILE:'qa-profile',CODEX_CONFIG:'D:/codex/custom-config.toml'});client.close();}finally{if(previousProfile===undefined)delete process.env.CODEX_PROFILE;else process.env.CODEX_PROFILE=previousProfile;if(previousConfig===undefined)delete process.env.CODEX_CONFIG;else process.env.CODEX_CONFIG=previousConfig;}
+  it('preserves the selected normal Codex profile and explicit config path with the instruction-filtered home', async () => {
+    const previousProfile = process.env.CODEX_PROFILE,
+      previousConfig = process.env.CODEX_CONFIG;
+    process.env.CODEX_PROFILE = 'qa-profile';
+    process.env.CODEX_CONFIG = 'D:/codex/custom-config.toml';
+    let options: any;
+    const fakeSpawn = (_exe: string, _args: string[], spawnOptions: any) => {
+      options = spawnOptions;
+      const child: any = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = new PassThrough();
+      child.killed = false;
+      const write = child.stdin.write.bind(child.stdin);
+      child.stdin.write = (chunk: string, ...args: any[]) => {
+        const result = write(chunk, ...args);
+        for (const line of String(chunk).trim().split('\n')) {
+          const request = JSON.parse(line);
+          if (request.method === 'initialize')
+            queueMicrotask(() =>
+              child.stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\n`)
+            );
+        }
+        return result;
+      };
+      child.kill = () => {
+        child.killed = true;
+        return true;
+      };
+      return child;
+    };
+    try {
+      const client = new AppServer({
+        codexHome: '/instruction-filtered-home',
+        spawnProcess: fakeSpawn as any,
+      });
+      await client.connect();
+      expect(options.env).toMatchObject({
+        CODEX_HOME: '/instruction-filtered-home',
+        CODEX_PROFILE: 'qa-profile',
+        CODEX_CONFIG: 'D:/codex/custom-config.toml',
+      });
+      client.close();
+    } finally {
+      if (previousProfile === undefined) delete process.env.CODEX_PROFILE;
+      else process.env.CODEX_PROFILE = previousProfile;
+      if (previousConfig === undefined) delete process.env.CODEX_CONFIG;
+      else process.env.CODEX_CONFIG = previousConfig;
+    }
   });
-  it('bridges short-lived ChatGPT auth only in memory and redacts bridge failures',async()=>{
-    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
-    const token=`header.${Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+300,'https://api.openai.com/auth':{chatgpt_account_id:'account-123',chatgpt_plan_type:'plus'}})).toString('base64url')}.signature`;
-    const request=vi.fn().mockResolvedValue({authMethod:'chatgpt',authToken:token});(client as any).request=request;
-    await expect(client.exportChatGPTAuthTokens()).resolves.toEqual({accessToken:token,chatgptAccountId:'account-123',chatgptPlanType:'plus'});
-    expect(request).toHaveBeenCalledWith('getAuthStatus',{includeToken:true,refreshToken:false},15000);
-    request.mockResolvedValueOnce({type:'chatgptAuthTokens'});
-    await client.useExternalChatGPTAuth({accessToken:token,chatgptAccountId:'account-123',chatgptPlanType:'plus'});
-    expect(request).toHaveBeenLastCalledWith('account/login/start',{type:'chatgptAuthTokens',accessToken:token,chatgptAccountId:'account-123',chatgptPlanType:'plus'},15000);
+  it('bridges short-lived ChatGPT auth only in memory and redacts bridge failures', async () => {
+    const client = new AppServer();
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    const token = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 300, 'https://api.openai.com/auth': { chatgpt_account_id: 'account-123', chatgpt_plan_type: 'plus' } })).toString('base64url')}.signature`;
+    const request = vi.fn().mockResolvedValue({ authMethod: 'chatgpt', authToken: token });
+    (client as any).request = request;
+    await expect(client.exportChatGPTAuthTokens()).resolves.toEqual({
+      accessToken: token,
+      chatgptAccountId: 'account-123',
+      chatgptPlanType: 'plus',
+    });
+    expect(request).toHaveBeenCalledWith(
+      'getAuthStatus',
+      { includeToken: true, refreshToken: false },
+      15000
+    );
+    request.mockResolvedValueOnce({ type: 'chatgptAuthTokens' });
+    await client.useExternalChatGPTAuth({
+      accessToken: token,
+      chatgptAccountId: 'account-123',
+      chatgptPlanType: 'plus',
+    });
+    expect(request).toHaveBeenLastCalledWith(
+      'account/login/start',
+      {
+        type: 'chatgptAuthTokens',
+        accessToken: token,
+        chatgptAccountId: 'account-123',
+        chatgptPlanType: 'plus',
+      },
+      15000
+    );
     request.mockRejectedValueOnce(new Error(`unexpected token ${token}`));
-    let errorText='';try{await client.exportChatGPTAuthTokens();}catch(error){errorText=(error as Error).message;}
-    expect(errorText).toContain('short-lived sign-in bridge');expect(errorText).not.toContain(token);
+    let errorText = '';
+    try {
+      await client.exportChatGPTAuthTokens();
+    } catch (error) {
+      errorText = (error as Error).message;
+    }
+    expect(errorText).toContain('short-lived sign-in bridge');
+    expect(errorText).not.toContain(token);
     client.close();
   });
-  it('refreshes the ChatGPT auth bridge only when the current token is near expiry',async()=>{
-    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};
-    const token=(exp:number)=>`header.${Buffer.from(JSON.stringify({exp,'https://api.openai.com/auth':{chatgpt_account_id:'account-123'}})).toString('base64url')}.signature`;
-    const request=vi.fn().mockResolvedValueOnce({authMethod:'chatgpt',authToken:token(Math.floor(Date.now()/1000)+20)}).mockResolvedValueOnce({authMethod:'chatgpt',authToken:token(Math.floor(Date.now()/1000)+300)});(client as any).request=request;
-    await expect(client.exportChatGPTAuthTokens()).resolves.toMatchObject({chatgptAccountId:'account-123'});
-    expect(request.mock.calls).toEqual([['getAuthStatus',{includeToken:true,refreshToken:false},15000],['getAuthStatus',{includeToken:true,refreshToken:true},15000]]);client.close();
+  it('refreshes the ChatGPT auth bridge only when the current token is near expiry', async () => {
+    const client = new AppServer();
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    const token = (exp: number) =>
+      `header.${Buffer.from(JSON.stringify({ exp, 'https://api.openai.com/auth': { chatgpt_account_id: 'account-123' } })).toString('base64url')}.signature`;
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        authMethod: 'chatgpt',
+        authToken: token(Math.floor(Date.now() / 1000) + 20),
+      })
+      .mockResolvedValueOnce({
+        authMethod: 'chatgpt',
+        authToken: token(Math.floor(Date.now() / 1000) + 300),
+      });
+    (client as any).request = request;
+    await expect(client.exportChatGPTAuthTokens()).resolves.toMatchObject({
+      chatgptAccountId: 'account-123',
+    });
+    expect(request.mock.calls).toEqual([
+      ['getAuthStatus', { includeToken: true, refreshToken: false }, 15000],
+      ['getAuthStatus', { includeToken: true, refreshToken: true }, 15000],
+    ]);
+    client.close();
   });
-  it('requires both roles to verify public-source provenance instead of trusting local paths or KB claims',()=>{
-    const orchestrator=buildOrchestratorDeveloperInstructions();
-    const worker=makeThreadParams({role:'worker',root:'D:/repo',model:'gpt-6-luna',approvalPolicy:'on-request'}).developerInstructions;
-    for(const instructions of [orchestrator,worker]){
+  it('requires both roles to verify public-source provenance instead of trusting local paths or KB claims', () => {
+    const orchestrator = buildOrchestratorDeveloperInstructions();
+    const worker = makeThreadParams({
+      role: 'worker',
+      root: 'D:/repo',
+      model: 'gpt-6-luna',
+      approvalPolicy: 'on-request',
+    }).developerInstructions;
+    for (const instructions of [orchestrator, worker]) {
       expect(instructions).toContain('tracked and present in the relevant remote repository');
-      expect(instructions).toContain('local workspace path or project-knowledge statement alone does not establish publication');
+      expect(instructions).toContain(
+        'local workspace path or project-knowledge statement alone does not establish publication'
+      );
     }
   });
-  it('does not add reasoning config to turn parameters or send reasoning through the prompt',()=>{
-    const params=makeTurnParams({threadId:'t',input:'safe user prompt',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'}});
-    expect(params).not.toHaveProperty('config');expect(params.input).toEqual([{type:'text',text:'safe user prompt'}]);
+  it('does not add reasoning config to turn parameters or send reasoning through the prompt', () => {
+    const params = makeTurnParams({
+      threadId: 't',
+      input: 'safe user prompt',
+      role: 'worker',
+      model: 'gpt-6-luna',
+      effort: 'high',
+      writeRoots: [],
+      approvalPolicy: 'on-request',
+      schema: { type: 'object' },
+    });
+    expect(params).not.toHaveProperty('config');
+    expect(params.input).toEqual([{ type: 'text', text: 'safe user prompt' }]);
   });
-  it('serializes selected approval mode with read-only or bounded write sandbox',()=>{
-    const readOnly=makeTurnParams({threadId:'t',input:'answer',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:[],approvalPolicy:'on-request',schema:{type:'object'}});
-    expect(readOnly.approvalPolicy).toBe('on-request');expect(readOnly.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
+  it('serializes selected approval mode with read-only or bounded write sandbox', () => {
+    const readOnly = makeTurnParams({
+      threadId: 't',
+      input: 'answer',
+      role: 'worker',
+      model: 'gpt-6-luna',
+      effort: 'high',
+      writeRoots: [],
+      approvalPolicy: 'on-request',
+      schema: { type: 'object' },
+    });
+    expect(readOnly.approvalPolicy).toBe('on-request');
+    expect(readOnly.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
     expect(readOnly.summary).toBe('auto');
-    const write=makeTurnParams({threadId:'t',input:'edit',role:'worker',model:'gpt-6-luna',effort:'high',writeRoots:['D:/repo/src'],approvalPolicy:'untrusted',schema:{type:'object'}});
-    expect(write.approvalPolicy).toBe('untrusted');expect(write.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['D:/repo/src'],networkAccess:false});
-    const orchestration=makeTurnParams({threadId:'t',input:'plan',role:'orchestrator',model:'gpt-6.1-sol',effort:'low',writeRoots:['D:/ignored'],approvalPolicy:'never',schema:{type:'object'}});
-    expect(orchestration.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
+    const write = makeTurnParams({
+      threadId: 't',
+      input: 'edit',
+      role: 'worker',
+      model: 'gpt-6-luna',
+      effort: 'high',
+      writeRoots: ['D:/repo/src'],
+      approvalPolicy: 'untrusted',
+      schema: { type: 'object' },
+    });
+    expect(write.approvalPolicy).toBe('untrusted');
+    expect(write.sandboxPolicy).toEqual({
+      type: 'workspaceWrite',
+      writableRoots: ['D:/repo/src'],
+      networkAccess: false,
+    });
+    const orchestration = makeTurnParams({
+      threadId: 't',
+      input: 'plan',
+      role: 'orchestrator',
+      model: 'gpt-6.1-sol',
+      effort: 'low',
+      writeRoots: ['D:/ignored'],
+      approvalPolicy: 'never',
+      schema: { type: 'object' },
+    });
+    expect(orchestration.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
   });
-  it('maps full access to the installed app-server never-approve and danger-full-access policies for all roles',()=>{
-    for(const role of ['orchestrator','worker'] as const){
-      const thread=makeThreadParams({role,root:'D:/repo',model:role==='worker'?'gpt-6-luna':'gpt-6.1-sol',approvalPolicy:'full-access'});
-      expect(thread).toMatchObject({approvalPolicy:'never',sandbox:'danger-full-access'});
-      const turn=makeTurnParams({threadId:'thread',input:'work',role,model:'model',effort:'high',writeRoots:[],approvalPolicy:'full-access',schema:{type:'object'}});
-      expect(turn).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
+  it('maps full access to the installed app-server never-approve and danger-full-access policies for all roles', () => {
+    for (const role of ['orchestrator', 'worker'] as const) {
+      const thread = makeThreadParams({
+        role,
+        root: 'D:/repo',
+        model: role === 'worker' ? 'gpt-6-luna' : 'gpt-6.1-sol',
+        approvalPolicy: 'full-access',
+      });
+      expect(thread).toMatchObject({ approvalPolicy: 'never', sandbox: 'danger-full-access' });
+      const turn = makeTurnParams({
+        threadId: 'thread',
+        input: 'work',
+        role,
+        model: 'model',
+        effort: 'high',
+        writeRoots: [],
+        approvalPolicy: 'full-access',
+        schema: { type: 'object' },
+      });
+      expect(turn).toMatchObject({
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+      });
     }
-    expect(()=>makeThreadResumeParams('thread','full-access' as any,undefined as any,undefined as any)).toThrow('role and project root are required');
-    expect(makeThreadResumeParams('router','full-access','router','/tmp/project')).toMatchObject({approvalPolicy:'never',sandbox:'read-only',config:{project_doc_max_bytes:0,projects:{'/tmp/project':{trust_level:'trusted'}}},baseInstructions:appAgentBaseInstructions('/tmp/project')});
-    expect(()=>((makeThreadResumeParams as any)('thread'))).toThrow('role and project root are required');
-    for(const role of ['router','direct'] as const){
-      const thread=makeThreadParams({role,root:'/tmp/project',model:'gpt-6-luna',approvalPolicy:'full-access'});
-      const turn=makeTurnParams({threadId:'thread',input:'answer',role,model:'gpt-6-luna',effort:'low',writeRoots:[],approvalPolicy:'full-access',schema:{type:'object'}});
-      expect(thread.sandbox).toBe('read-only');expect(turn.sandboxPolicy).toEqual({type:'readOnly',networkAccess:false});
+    expect(() =>
+      makeThreadResumeParams('thread', 'full-access' as any, undefined as any, undefined as any)
+    ).toThrow('role and project root are required');
+    expect(makeThreadResumeParams('router', 'full-access', 'router', '/tmp/project')).toMatchObject(
+      {
+        approvalPolicy: 'never',
+        sandbox: 'read-only',
+        config: {
+          project_doc_max_bytes: 0,
+          projects: { '/tmp/project': { trust_level: 'trusted' } },
+        },
+        baseInstructions: appAgentBaseInstructions('/tmp/project'),
+      }
+    );
+    expect(() => (makeThreadResumeParams as any)('thread')).toThrow(
+      'role and project root are required'
+    );
+    for (const role of ['router', 'direct'] as const) {
+      const thread = makeThreadParams({
+        role,
+        root: '/tmp/project',
+        model: 'gpt-6-luna',
+        approvalPolicy: 'full-access',
+      });
+      const turn = makeTurnParams({
+        threadId: 'thread',
+        input: 'answer',
+        role,
+        model: 'gpt-6-luna',
+        effort: 'low',
+        writeRoots: [],
+        approvalPolicy: 'full-access',
+        schema: { type: 'object' },
+      });
+      expect(thread.sandbox).toBe('read-only');
+      expect(turn.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false });
     }
-    const simple=makeTurnParams({threadId:'simple',input:'edit',role:'simple',model:'gpt-6-luna',effort:'xhigh',writeRoots:['/tmp/project'],approvalPolicy:'full-access',schema:{type:'object'}});
-    expect(simple.sandboxPolicy).toEqual({type:'workspaceWrite',writableRoots:['/tmp/project'],networkAccess:true});
+    const simple = makeTurnParams({
+      threadId: 'simple',
+      input: 'edit',
+      role: 'simple',
+      model: 'gpt-6-luna',
+      effort: 'xhigh',
+      writeRoots: ['/tmp/project'],
+      approvalPolicy: 'full-access',
+      schema: { type: 'object' },
+    });
+    expect(simple.sandboxPolicy).toEqual({
+      type: 'workspaceWrite',
+      writableRoots: ['/tmp/project'],
+      networkAccess: true,
+    });
   });
-  it('uses the full-access sandbox for review turns as well as ordinary turns',async()=>{
-    const client=new AppServer();const request=vi.fn().mockResolvedValue({turn:{id:'review'}});(client as any).request=request;(client as any).verifiedAgentThreads.add('thread');
-    await client.reviewTurn('thread','review','gpt-6.1-sol','low','full-access');
-    expect(request.mock.calls[0][1]).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
+  it('uses the full-access sandbox for review turns as well as ordinary turns', async () => {
+    const client = new AppServer();
+    const request = vi.fn().mockResolvedValue({ turn: { id: 'review' } });
+    (client as any).request = request;
+    (client as any).verifiedAgentThreads.add('thread');
+    await client.reviewTurn('thread', 'review', 'gpt-6.1-sol', 'low', 'full-access');
+    expect(request.mock.calls[0][1]).toMatchObject({
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'dangerFullAccess' },
+    });
   });
-  it('forces QA review turns to never approval and the read-only sandbox',async()=>{
-    const client=new AppServer();const request=vi.fn().mockResolvedValue({turn:{id:'qa-review'}});(client as any).request=request;(client as any).verifiedAgentThreads.add('qa-thread');
-    await client.reviewTurn('qa-thread','Audit only','gpt-6.1-terra','high','on-request',[],undefined,'qa');
-    expect(request.mock.calls[0][1]).toMatchObject({approvalPolicy:'never',sandboxPolicy:{type:'readOnly',networkAccess:false}});
+  it('forces QA review turns to never approval and the read-only sandbox', async () => {
+    const client = new AppServer();
+    const request = vi.fn().mockResolvedValue({ turn: { id: 'qa-review' } });
+    (client as any).request = request;
+    (client as any).verifiedAgentThreads.add('qa-thread');
+    await client.reviewTurn(
+      'qa-thread',
+      'Audit only',
+      'gpt-6.1-terra',
+      'high',
+      'on-request',
+      [],
+      undefined,
+      'qa'
+    );
+    expect(request.mock.calls[0][1]).toMatchObject({
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    });
   });
-  it('converts user approval decisions into the app-server response schema',()=>{
-    expect(approvalResponse('item/commandExecution/requestApproval',null,'accept')).toEqual({decision:'accept'});
-    expect(approvalResponse('item/fileChange/requestApproval',null,'decline')).toEqual({decision:'decline'});
-    const requested={network:{enabled:true}};
-    expect(approvalResponse('item/permissions/requestApproval',requested,'accept')).toEqual({permissions:requested,scope:'turn'});
-    expect(approvalResponse('item/permissions/requestApproval',requested,'decline')).toEqual({permissions:{},scope:'turn'});
-    expect(approvalResponse('mcpServer/elicitation/request',undefined,'accept',{confirmed:true})).toEqual({action:'accept',content:{confirmed:true}});
-    expect(approvalResponse('mcpServer/elicitation/request',undefined,'decline')).toEqual({action:'decline'});
+  it('converts user approval decisions into the app-server response schema', () => {
+    expect(approvalResponse('item/commandExecution/requestApproval', null, 'accept')).toEqual({
+      decision: 'accept',
+    });
+    expect(approvalResponse('item/fileChange/requestApproval', null, 'decline')).toEqual({
+      decision: 'decline',
+    });
+    const requested = { network: { enabled: true } };
+    expect(approvalResponse('item/permissions/requestApproval', requested, 'accept')).toEqual({
+      permissions: requested,
+      scope: 'turn',
+    });
+    expect(approvalResponse('item/permissions/requestApproval', requested, 'decline')).toEqual({
+      permissions: {},
+      scope: 'turn',
+    });
+    expect(
+      approvalResponse('mcpServer/elicitation/request', undefined, 'accept', { confirmed: true })
+    ).toEqual({ action: 'accept', content: { confirmed: true } });
+    expect(approvalResponse('mcpServer/elicitation/request', undefined, 'decline')).toEqual({
+      action: 'decline',
+    });
   });
-  it('routes app-server requests separately from client responses and answers by original request id',()=>{
-    const client=new AppServer();const writes:string[]=[];
-    (client as any).child={killed:false,stdin:{write:(s:string)=>{writes.push(s);}}};
-    let request:any;
-    client.on('serverRequest',(id,method,params)=>{request={id,method,params};});
-    (client as any).consume('{"id":"server-approval-7","method":"item/commandExecution/requestApproval","params":{"itemId":"item-1","threadId":"worker-1","turnId":"turn-1"}}\n');
-    expect(request).toEqual({id:'server-approval-7',method:'item/commandExecution/requestApproval',params:{itemId:'item-1',threadId:'worker-1',turnId:'turn-1'}});
-    client.respondServerRequest(request.id,{decision:'accept'});
-    expect(JSON.parse(writes[0])).toEqual({id:'server-approval-7',result:{decision:'accept'}});
+  it('routes app-server requests separately from client responses and answers by original request id', () => {
+    const client = new AppServer();
+    const writes: string[] = [];
+    (client as any).child = {
+      killed: false,
+      stdin: {
+        write: (s: string) => {
+          writes.push(s);
+        },
+      },
+    };
+    let request: any;
+    client.on('serverRequest', (id, method, params) => {
+      request = { id, method, params };
+    });
+    (client as any).consume(
+      '{"id":"server-approval-7","method":"item/commandExecution/requestApproval","params":{"itemId":"item-1","threadId":"worker-1","turnId":"turn-1"}}\n'
+    );
+    expect(request).toEqual({
+      id: 'server-approval-7',
+      method: 'item/commandExecution/requestApproval',
+      params: { itemId: 'item-1', threadId: 'worker-1', turnId: 'turn-1' },
+    });
+    client.respondServerRequest(request.id, { decision: 'accept' });
+    expect(JSON.parse(writes[0])).toEqual({
+      id: 'server-approval-7',
+      result: { decision: 'accept' },
+    });
     client.close();
   });
-  it('requests usage for the exact thread rather than reading account-wide activity',async()=>{
-    const client=new AppServer();(client as any).ready=true;(client as any).verifiedAgentThreads.add('worker-thread');
-    const request=vi.fn().mockResolvedValue({threadUsage:{threadId:'worker-thread',estimatedUsageCreditsMicros:125000,groups:[]}});(client as any).request=request;
-    await expect(client.threadUsage('worker-thread')).resolves.toEqual({threadId:'worker-thread',estimatedUsageCreditsMicros:125000,groups:[]});
-    expect(request).toHaveBeenCalledWith('account/usage/read',{threadId:'worker-thread'},10000);
+  it('requests usage for the exact thread rather than reading account-wide activity', async () => {
+    const client = new AppServer();
+    (client as any).ready = true;
+    (client as any).verifiedAgentThreads.add('worker-thread');
+    const request = vi.fn().mockResolvedValue({
+      threadUsage: { threadId: 'worker-thread', estimatedUsageCreditsMicros: 125000, groups: [] },
+    });
+    (client as any).request = request;
+    await expect(client.threadUsage('worker-thread')).resolves.toEqual({
+      threadId: 'worker-thread',
+      estimatedUsageCreditsMicros: 125000,
+      groups: [],
+    });
+    expect(request).toHaveBeenCalledWith(
+      'account/usage/read',
+      { threadId: 'worker-thread' },
+      10000
+    );
   });
-  it('queries MCP tools from the active thread catalog with pagination',async()=>{
-    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};(client as any).verifiedAgentThreads.add('direct-thread');const request=vi.fn().mockResolvedValueOnce({data:[{name:'project_notes',tools:{search:{}}}],nextCursor:'next'}).mockResolvedValueOnce({data:[{name:'node_repl',tools:{js:{}}}]});(client as any).request=request;
-    await expect(client.mcpServerStatus('direct-thread')).resolves.toEqual([{name:'project_notes',tools:{search:{}}},{name:'node_repl',tools:{js:{}}}]);
-    expect(request).toHaveBeenNthCalledWith(1,'mcpServerStatus/list',{threadId:'direct-thread',detail:'toolsAndAuthOnly',limit:100},15000);expect(request).toHaveBeenNthCalledWith(2,'mcpServerStatus/list',{threadId:'direct-thread',detail:'toolsAndAuthOnly',limit:100,cursor:'next'},15000);client.close();
+  it('queries MCP tools from the active thread catalog with pagination', async () => {
+    const client = new AppServer();
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    (client as any).verifiedAgentThreads.add('direct-thread');
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: [{ name: 'project_notes', tools: { search: {} } }],
+        nextCursor: 'next',
+      })
+      .mockResolvedValueOnce({ data: [{ name: 'node_repl', tools: { js: {} } }] });
+    (client as any).request = request;
+    await expect(client.mcpServerStatus('direct-thread')).resolves.toEqual([
+      { name: 'project_notes', tools: { search: {} } },
+      { name: 'node_repl', tools: { js: {} } },
+    ]);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      'mcpServerStatus/list',
+      { threadId: 'direct-thread', detail: 'toolsAndAuthOnly', limit: 100 },
+      15000
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      'mcpServerStatus/list',
+      { threadId: 'direct-thread', detail: 'toolsAndAuthOnly', limit: 100, cursor: 'next' },
+      15000
+    );
+    client.close();
   });
-  it('waits for a specific thread MCP server catalog when one is requested',async()=>{
-    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};(client as any).verifiedAgentThreads.add('orchestrator-thread');const request=vi.fn().mockResolvedValue({data:[{name:'opnex_skills',tools:{skills_list:{}}}]});(client as any).request=request;
-    await expect(client.mcpServerStatus('orchestrator-thread','opnex_skills')).resolves.toEqual([{name:'opnex_skills',tools:{skills_list:{}}}]);
-    expect(request).toHaveBeenCalledWith('mcpServerStatus/list',{threadId:'orchestrator-thread',detail:'toolsAndAuthOnly',limit:100,serverName:'opnex_skills'},15000);client.close();
+  it('waits for a specific thread MCP server catalog when one is requested', async () => {
+    const client = new AppServer();
+    (client as any).ready = true;
+    (client as any).child = { killed: false, stdin: { write: () => {} } };
+    (client as any).verifiedAgentThreads.add('orchestrator-thread');
+    const request = vi
+      .fn()
+      .mockResolvedValue({ data: [{ name: 'opnex_skills', tools: { skills_list: {} } }] });
+    (client as any).request = request;
+    await expect(client.mcpServerStatus('orchestrator-thread', 'opnex_skills')).resolves.toEqual([
+      { name: 'opnex_skills', tools: { skills_list: {} } },
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      'mcpServerStatus/list',
+      {
+        threadId: 'orchestrator-thread',
+        detail: 'toolsAndAuthOnly',
+        limit: 100,
+        serverName: 'opnex_skills',
+      },
+      15000
+    );
+    client.close();
   });
-  it('reads Codex rate limits without requesting reset-credit detail calls',async()=>{
-    const client=new AppServer();(client as any).ready=true;const request=vi.fn().mockResolvedValue({rateLimits:{limitId:'codex'}});(client as any).request=request;
-    await expect(client.accountRateLimits()).resolves.toEqual({rateLimits:{limitId:'codex'}});
-    expect(request).toHaveBeenCalledWith('account/rateLimits/read',{excludeResetCreditDetails:true},10000);
+  it('reads Codex rate limits without requesting reset-credit detail calls', async () => {
+    const client = new AppServer();
+    (client as any).ready = true;
+    const request = vi.fn().mockResolvedValue({ rateLimits: { limitId: 'codex' } });
+    (client as any).request = request;
+    await expect(client.accountRateLimits()).resolves.toEqual({ rateLimits: { limitId: 'codex' } });
+    expect(request).toHaveBeenCalledWith(
+      'account/rateLimits/read',
+      { excludeResetCreditDetails: true },
+      10000
+    );
   });
 });

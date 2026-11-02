@@ -6,7 +6,9 @@ export type ReadOnlyWorkerResult = {
 };
 
 function workerResult(worker: ReadOnlyWorkerResult) {
-  return worker.receipt?.result?.trim() || worker.error?.trim() || 'No worker response was recorded.';
+  return (
+    worker.receipt?.result?.trim() || worker.error?.trim() || 'No worker response was recorded.'
+  );
 }
 
 function statusLabel(status: string) {
@@ -17,8 +19,14 @@ export function formatReadOnlyWorkerResults(workers: ReadOnlyWorkerResult[]) {
   if (workers.length === 1) {
     const worker = workers[0]!;
     const result = workerResult(worker);
-    return worker.status === 'complete' ? result : `Worker “${worker.name}” — ${statusLabel(worker.status)}.\n\n${result}`;
+    return worker.status === 'complete'
+      ? result
+      : `Worker “${worker.name}” — ${statusLabel(worker.status)}.\n\n${result}`;
   }
 
-  return workers.map(worker => `### ${worker.name} — ${statusLabel(worker.status)}\n\n${workerResult(worker)}`).join('\n\n');
+  return workers
+    .map(
+      (worker) => `### ${worker.name} — ${statusLabel(worker.status)}\n\n${workerResult(worker)}`
+    )
+    .join('\n\n');
 }

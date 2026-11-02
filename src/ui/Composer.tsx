@@ -1,5 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Check, ChevronDown, CornerUpRight, Paperclip, Plus, Sparkles, Square, X } from 'lucide-react';
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  CornerUpRight,
+  Paperclip,
+  Plus,
+  Sparkles,
+  Square,
+  X,
+} from 'lucide-react';
 import { EditorView } from '@codemirror/view';
 import { LiveMarkdownEditor } from './LiveMarkdownEditor';
 import { api } from './api';
@@ -9,59 +19,563 @@ import type { AccessMode, ExecutionProfile, Runtime, TaskAttachment } from '../t
 import type { SkillSummary } from './skills-types';
 import ModelPicker, { codexModelChoices, profileFromChoice } from './ModelPicker';
 
-type Choice={value:string;label:string};
-type Props={value:string;setValue:(s:string)=>void;submit:()=>void;disabled:boolean;hint:string;inputRef:any;executionProfile:ExecutionProfile;connectionState:'connected'|'offline';projectId?:string;accessMode:AccessMode;models:Runtime['codex']['models'];configDisabled:boolean;onExecutionProfileChange:(profile:ExecutionProfile)=>void;onAccessModeChange:(value:AccessMode)=>void;qaEnabled:boolean;onQaChange:(enabled:boolean)=>void;busy?:boolean;onStop?:()=>void;attachments:TaskAttachment[];onFiles:(files:FileList|null)=>void;onRemoveFile:(index:number)=>void;onOpenSkills:()=>void};
+type Choice = { value: string; label: string };
+type Props = {
+  value: string;
+  setValue: (s: string) => void;
+  submit: () => void;
+  disabled: boolean;
+  hint: string;
+  inputRef: any;
+  executionProfile: ExecutionProfile;
+  connectionState: 'connected' | 'offline';
+  projectId?: string;
+  accessMode: AccessMode;
+  models: Runtime['codex']['models'];
+  configDisabled: boolean;
+  onExecutionProfileChange: (profile: ExecutionProfile) => void;
+  onAccessModeChange: (value: AccessMode) => void;
+  qaEnabled: boolean;
+  onQaChange: (enabled: boolean) => void;
+  busy?: boolean;
+  onStop?: () => void;
+  attachments: TaskAttachment[];
+  onFiles: (files: FileList | null) => void;
+  onRemoveFile: (index: number) => void;
+  onOpenSkills: () => void;
+};
 
-function activeCommand(value:string){
-  const line=value.slice(value.lastIndexOf('\n')+1);
-  if(!line.startsWith('/'))return null;
-  if(/^\/skill\s+(?:library:[0-9a-f-]{36}(?:@[a-f0-9]{64})?|codex:[a-z0-9][a-z0-9._-]{0,79}:[a-f0-9]{12})$/i.test(line))return null;
-  const legacy=line.match(/^\/skill(?:\s+(.*))?$/i);
-  if(legacy)return {line,query:legacy[1]||'',mode:'library' as const};
-  const query=line.match(/^\/([^/\\]*)$/u);
-  return query?{line,query:query[1].trim(),mode:'library' as const}:null;
+function activeCommand(value: string) {
+  const line = value.slice(value.lastIndexOf('\n') + 1);
+  if (!line.startsWith('/')) return null;
+  if (
+    /^\/skill\s+(?:library:[0-9a-f-]{36}(?:@[a-f0-9]{64})?|codex:[a-z0-9][a-z0-9._-]{0,79}:[a-f0-9]{12})$/i.test(
+      line
+    )
+  )
+    return null;
+  const legacy = line.match(/^\/skill(?:\s+(.*))?$/i);
+  if (legacy) return { line, query: legacy[1] || '', mode: 'library' as const };
+  const query = line.match(/^\/([^/\\]*)$/u);
+  return query ? { line, query: query[1].trim(), mode: 'library' as const } : null;
 }
 
-export default function Composer({value,setValue,submit,disabled,hint,inputRef,executionProfile,connectionState,projectId,accessMode,models,configDisabled,onExecutionProfileChange,onAccessModeChange,qaEnabled,onQaChange,busy,onStop,attachments,onFiles,onRemoveFile,onOpenSkills}:Props){
-  const hasDraft=!!value.trim()||attachments.length>0;
-  const command=useMemo(()=>activeCommand(value),[value]);
-  const [matches,setMatches]=useState<SkillSummary[]>([]);const [active,setActive]=useState(0);const [searching,setSearching]=useState(false);const [searchError,setSearchError]=useState('');const [dismissed,setDismissed]=useState(false);const [composing,setComposing]=useState(false);const menuId=useId().replaceAll(':','');
-  useEffect(()=>{setActive(0);setDismissed(false);if(!command||composing){setMatches([]);setSearchError('');return;}
-    const codexSource=command.query.toLocaleLowerCase().startsWith('codex:');const query=codexSource?command.query.slice(6):command.query;
-    let cancelled=false;setSearching(true);setSearchError('');const projectQuery=codexSource&&projectId?`&projectId=${encodeURIComponent(projectId)}`:'';const timer=window.setTimeout(()=>void api<{skills?:SkillSummary[]}>(`/api/skills?${codexSource?'source=codex&':''}q=${encodeURIComponent(query)}&limit=50${projectQuery}`).then(result=>{if(!cancelled)setMatches((result.skills||[]).slice(0,50));}).catch(error=>{if(!cancelled){setMatches([]);setSearchError(String(error));}}).finally(()=>{if(!cancelled)setSearching(false);}),120);
-    return()=>{cancelled=true;window.clearTimeout(timer);};
-  },[command?.line,command?.query,composing,projectId]);
-  const rows=dismissed?[]:matches.map(skill=>({id:skill.id,label:skill.name,description:skill.description||'Saved skill',source:skill.source,revision:skill.revision}));
-  const duplicateNames=new Set(rows.filter((row,index)=>rows.some((other,otherIndex)=>otherIndex!==index&&other.label.localeCompare(row.label,undefined,{sensitivity:'accent'})===0)).map(row=>row.label.toLocaleLowerCase()));
-  const pick=(index=active)=>{const row=rows[index];if(!row||!command)return;const editor=inputRef.current as HTMLElement|null;const prefix=value.slice(0,value.length-command.line.length);const reference=row.id.startsWith('codex:')?row.id:`library:${row.id}@${row.revision}`;setValue(prefix+`/skill ${reference}`);editor?.focus();};
-  useEffect(()=>{const editor=inputRef.current as HTMLElement|null;if(!editor)return;if(command&&!dismissed&&!composing){editor.setAttribute('aria-controls',`${menuId}-list`);editor.setAttribute('aria-expanded','true');if(rows[active])editor.setAttribute('aria-activedescendant',`${menuId}-option-${active}`);else editor.removeAttribute('aria-activedescendant');}else{editor.removeAttribute('aria-controls');editor.removeAttribute('aria-expanded');editor.removeAttribute('aria-activedescendant');}return()=>{editor.removeAttribute('aria-controls');editor.removeAttribute('aria-expanded');editor.removeAttribute('aria-activedescendant');};},[command?.line,dismissed,composing,active,rows.length,menuId]);
-  const handleEditorKey=(event:KeyboardEvent,view:EditorView)=>{
-    if(composing||event.isComposing||view.composing||event.keyCode===229)return false;
-    if(dismissed)return false;
-    const liveValue=view.state.doc.toString();const liveCommand=activeCommand(liveValue);if(!liveCommand)return false;
-    if(event.key==='Escape'){event.preventDefault();setDismissed(true);setActive(-1);return true;}
-    if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();if(rows.length&&active>=0)pick(active);return true;}
-    if(!rows.length)return false;
-    if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();setActive(index=>(index+(event.key==='ArrowDown'?1:-1)+rows.length)%rows.length);return true;}
-    if(event.key==='Tab'){event.preventDefault();if(active>=0)pick(active);return true;}
+export default function Composer({
+  value,
+  setValue,
+  submit,
+  disabled,
+  hint,
+  inputRef,
+  executionProfile,
+  connectionState,
+  projectId,
+  accessMode,
+  models,
+  configDisabled,
+  onExecutionProfileChange,
+  onAccessModeChange,
+  qaEnabled,
+  onQaChange,
+  busy,
+  onStop,
+  attachments,
+  onFiles,
+  onRemoveFile,
+  onOpenSkills,
+}: Props) {
+  const hasDraft = !!value.trim() || attachments.length > 0;
+  const command = useMemo(() => activeCommand(value), [value]);
+  const [matches, setMatches] = useState<SkillSummary[]>([]);
+  const [active, setActive] = useState(0);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [dismissed, setDismissed] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const menuId = useId().replaceAll(':', '');
+  useEffect(() => {
+    setActive(0);
+    setDismissed(false);
+    if (!command || composing) {
+      setMatches([]);
+      setSearchError('');
+      return;
+    }
+    const codexSource = command.query.toLocaleLowerCase().startsWith('codex:');
+    const query = codexSource ? command.query.slice(6) : command.query;
+    let cancelled = false;
+    setSearching(true);
+    setSearchError('');
+    const projectQuery =
+      codexSource && projectId ? `&projectId=${encodeURIComponent(projectId)}` : '';
+    const timer = window.setTimeout(
+      () =>
+        void api<{ skills?: SkillSummary[] }>(
+          `/api/skills?${codexSource ? 'source=codex&' : ''}q=${encodeURIComponent(query)}&limit=50${projectQuery}`
+        )
+          .then((result) => {
+            if (!cancelled) setMatches((result.skills || []).slice(0, 50));
+          })
+          .catch((error) => {
+            if (!cancelled) {
+              setMatches([]);
+              setSearchError(String(error));
+            }
+          })
+          .finally(() => {
+            if (!cancelled) setSearching(false);
+          }),
+      120
+    );
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [command?.line, command?.query, composing, projectId]);
+  const rows = dismissed
+    ? []
+    : matches.map((skill) => ({
+        id: skill.id,
+        label: skill.name,
+        description: skill.description || 'Saved skill',
+        source: skill.source,
+        revision: skill.revision,
+      }));
+  const duplicateNames = new Set(
+    rows
+      .filter((row, index) =>
+        rows.some(
+          (other, otherIndex) =>
+            otherIndex !== index &&
+            other.label.localeCompare(row.label, undefined, { sensitivity: 'accent' }) === 0
+        )
+      )
+      .map((row) => row.label.toLocaleLowerCase())
+  );
+  const pick = (index = active) => {
+    const row = rows[index];
+    if (!row || !command) return;
+    const editor = inputRef.current as HTMLElement | null;
+    const prefix = value.slice(0, value.length - command.line.length);
+    const reference = row.id.startsWith('codex:') ? row.id : `library:${row.id}@${row.revision}`;
+    setValue(prefix + `/skill ${reference}`);
+    editor?.focus();
+  };
+  useEffect(() => {
+    const editor = inputRef.current as HTMLElement | null;
+    if (!editor) return;
+    if (command && !dismissed && !composing) {
+      editor.setAttribute('aria-controls', `${menuId}-list`);
+      editor.setAttribute('aria-expanded', 'true');
+      if (rows[active]) editor.setAttribute('aria-activedescendant', `${menuId}-option-${active}`);
+      else editor.removeAttribute('aria-activedescendant');
+    } else {
+      editor.removeAttribute('aria-controls');
+      editor.removeAttribute('aria-expanded');
+      editor.removeAttribute('aria-activedescendant');
+    }
+    return () => {
+      editor.removeAttribute('aria-controls');
+      editor.removeAttribute('aria-expanded');
+      editor.removeAttribute('aria-activedescendant');
+    };
+  }, [command?.line, dismissed, composing, active, rows.length, menuId]);
+  const handleEditorKey = (event: KeyboardEvent, view: EditorView) => {
+    if (composing || event.isComposing || view.composing || event.keyCode === 229) return false;
+    if (dismissed) return false;
+    const liveValue = view.state.doc.toString();
+    const liveCommand = activeCommand(liveValue);
+    if (!liveCommand) return false;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setDismissed(true);
+      setActive(-1);
+      return true;
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      if (rows.length && active >= 0) pick(active);
+      return true;
+    }
+    if (!rows.length) return false;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActive(
+        (index) => (index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length
+      );
+      return true;
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      if (active >= 0) pick(active);
+      return true;
+    }
     return false;
   };
-  return <div className="composer"><div className="composer-draft-head"><span>Message</span><span className="composer-markdown-hint">Markdown · live preview</span></div><div className="composer-editor-wrap"><LiveMarkdownEditor value={value} onChange={setValue} submit={submit} disabled={disabled} hint={hint} inputRef={inputRef} onKeyDown={handleEditorKey} onCompositionChange={setComposing}/>{command&&!dismissed&&!composing&&<div className="skill-command-menu" role="dialog" aria-label="Available skills">
-    {searching?<div className="skill-command-list skill-command-message" id={`${menuId}-list`} role="status">Searching saved skills…</div>:searchError?<div className="skill-command-list skill-command-message" id={`${menuId}-list`} role="alert">{searchError}</div>:rows.length?<div className="skill-command-list" id={`${menuId}-list`} role="listbox" aria-label="Available skills">{rows.map((row,index)=><button id={`${menuId}-option-${index}`} key={row.id} className={active===index?'active':''} role="option" aria-selected={active===index} onMouseDown={event=>event.preventDefault()} onMouseMove={()=>setActive(index)} onClick={()=>pick(index)}><Sparkles size={14} aria-hidden="true"/><span><strong>{row.label}{duplicateNames.has(row.label.toLocaleLowerCase())?` · ${row.source||'saved skill'} · ${row.id.slice(0,8)}`:''}</strong><small>{row.description}</small></span></button>)}</div>:<div className="skill-command-list skill-command-message" id={`${menuId}-list`} role="status">{command.query?'No matching saved skills.':'No saved skills yet.'}</div>}
-    {!searching&&!rows.length&&<div className="skill-command-empty-action"><span>{searchError?'Check the local skills library and try again.':command.query?'Try another name or description.':'Create or import skills in your local library.'}</span><button type="button" onMouseDown={event=>event.preventDefault()} onClick={onOpenSkills}>Open Skills tab</button></div>}
-  </div>}</div>{attachments.length>0&&<div className="pending-attachments" aria-label="Pending attachments">{attachments.map((file,index)=><span className="attachment-chip" key={`${file.name}-${index}`}>{file.type.startsWith('image/')?<img alt="" src={`data:${file.type};base64,${file.data}`}/>:<Paperclip size={13}/>}<span>{file.name}</span><button type="button" aria-label={`Remove ${file.name}`} onClick={()=>onRemoveFile(index)}><X size={13}/></button></span>)}</div>}<div className="composer-bottom"><div className="composer-selectors"><label className="attachment-picker" title="Attach files"><input aria-label="Choose files to attach" type="file" multiple accept="image/png,image/jpeg,image/webp,text/plain,text/markdown,text/csv,application/json,.md,.txt,.csv,.json" onChange={event=>{onFiles(event.currentTarget.files);event.currentTarget.value='';}}/><Plus size={17} aria-hidden="true"/></label><ChoicePopover label="Access mode" caption="" value={accessMode} disabled={configDisabled} options={[...ACCESS_MODE_OPTIONS]} onChange={v=>onAccessModeChange(v as AccessMode)}/><span className={`composer-connection ${connectionState}`} role="status" aria-live="polite"><i aria-hidden="true"/>{connectionState==='connected'?'Connected':'Offline'}</span><label className="qa-loop-toggle" title="Run an independent Terra high audit after a worker team integrates"><input type="checkbox" checked={qaEnabled} disabled={configDisabled} onChange={event=>onQaChange(event.currentTarget.checked)}/><span>QA loop</span></label></div><div className="composer-actions"><ExecutionModelPopover profile={executionProfile} models={models} disabled={configDisabled} onChange={onExecutionProfileChange}/>{busy&&onStop?(hasDraft?<button className="send-btn steer-btn" onClick={submit} disabled={disabled} aria-label="Steer" title="Send this message into the running turn"><CornerUpRight size={14} aria-hidden="true"/><span>Steer</span></button>:<button className="send-btn stop-btn" onClick={onStop} aria-label="Stop" title="Stop this session"><Square size={11} fill="currentColor" aria-hidden="true"/></button>):<button className="send-btn" onClick={submit} disabled={disabled} aria-label={busy?'Send update':'Send task'}><ArrowUp size={17} strokeWidth={2.6} aria-hidden="true"/></button>}</div></div></div>;
+  return (
+    <div className='composer'>
+      <div className='composer-draft-head'>
+        <span>Message</span>
+        <span className='composer-markdown-hint'>Markdown · live preview</span>
+      </div>
+      <div className='composer-editor-wrap'>
+        <LiveMarkdownEditor
+          value={value}
+          onChange={setValue}
+          submit={submit}
+          disabled={disabled}
+          hint={hint}
+          inputRef={inputRef}
+          onKeyDown={handleEditorKey}
+          onCompositionChange={setComposing}
+        />
+        {command && !dismissed && !composing && (
+          <div className='skill-command-menu' role='dialog' aria-label='Available skills'>
+            {searching ? (
+              <div
+                className='skill-command-list skill-command-message'
+                id={`${menuId}-list`}
+                role='status'
+              >
+                Searching saved skills…
+              </div>
+            ) : searchError ? (
+              <div
+                className='skill-command-list skill-command-message'
+                id={`${menuId}-list`}
+                role='alert'
+              >
+                {searchError}
+              </div>
+            ) : rows.length ? (
+              <div
+                className='skill-command-list'
+                id={`${menuId}-list`}
+                role='listbox'
+                aria-label='Available skills'
+              >
+                {rows.map((row, index) => (
+                  <button
+                    id={`${menuId}-option-${index}`}
+                    key={row.id}
+                    className={active === index ? 'active' : ''}
+                    role='option'
+                    aria-selected={active === index}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseMove={() => setActive(index)}
+                    onClick={() => pick(index)}
+                  >
+                    <Sparkles size={14} aria-hidden='true' />
+                    <span>
+                      <strong>
+                        {row.label}
+                        {duplicateNames.has(row.label.toLocaleLowerCase())
+                          ? ` · ${row.source || 'saved skill'} · ${row.id.slice(0, 8)}`
+                          : ''}
+                      </strong>
+                      <small>{row.description}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div
+                className='skill-command-list skill-command-message'
+                id={`${menuId}-list`}
+                role='status'
+              >
+                {command.query ? 'No matching saved skills.' : 'No saved skills yet.'}
+              </div>
+            )}
+            {!searching && !rows.length && (
+              <div className='skill-command-empty-action'>
+                <span>
+                  {searchError
+                    ? 'Check the local skills library and try again.'
+                    : command.query
+                      ? 'Try another name or description.'
+                      : 'Create or import skills in your local library.'}
+                </span>
+                <button
+                  type='button'
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={onOpenSkills}
+                >
+                  Open Skills tab
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      {attachments.length > 0 && (
+        <div className='pending-attachments' aria-label='Pending attachments'>
+          {attachments.map((file, index) => (
+            <span className='attachment-chip' key={`${file.name}-${index}`}>
+              {file.type.startsWith('image/') ? (
+                <img alt='' src={`data:${file.type};base64,${file.data}`} />
+              ) : (
+                <Paperclip size={13} />
+              )}
+              <span>{file.name}</span>
+              <button
+                type='button'
+                aria-label={`Remove ${file.name}`}
+                onClick={() => onRemoveFile(index)}
+              >
+                <X size={13} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className='composer-bottom'>
+        <div className='composer-selectors'>
+          <label className='attachment-picker' title='Attach files'>
+            <input
+              aria-label='Choose files to attach'
+              type='file'
+              multiple
+              accept='image/png,image/jpeg,image/webp,text/plain,text/markdown,text/csv,application/json,.md,.txt,.csv,.json'
+              onChange={(event) => {
+                onFiles(event.currentTarget.files);
+                event.currentTarget.value = '';
+              }}
+            />
+            <Plus size={17} aria-hidden='true' />
+          </label>
+          <ChoicePopover
+            label='Access mode'
+            caption=''
+            value={accessMode}
+            disabled={configDisabled}
+            options={[...ACCESS_MODE_OPTIONS]}
+            onChange={(v) => onAccessModeChange(v as AccessMode)}
+          />
+          <span
+            className={`composer-connection ${connectionState}`}
+            role='status'
+            aria-live='polite'
+          >
+            <i aria-hidden='true' />
+            {connectionState === 'connected' ? 'Connected' : 'Offline'}
+          </span>
+          <label
+            className='qa-loop-toggle'
+            title='Run an independent Terra high audit after a worker team integrates'
+          >
+            <input
+              type='checkbox'
+              checked={qaEnabled}
+              disabled={configDisabled}
+              onChange={(event) => onQaChange(event.currentTarget.checked)}
+            />
+            <span>QA loop</span>
+          </label>
+        </div>
+        <div className='composer-actions'>
+          <ExecutionModelPopover
+            profile={executionProfile}
+            models={models}
+            disabled={configDisabled}
+            onChange={onExecutionProfileChange}
+          />
+          {busy && onStop ? (
+            hasDraft ? (
+              <button
+                className='send-btn steer-btn'
+                onClick={submit}
+                disabled={disabled}
+                aria-label='Steer'
+                title='Send this message into the running turn'
+              >
+                <CornerUpRight size={14} aria-hidden='true' />
+                <span>Steer</span>
+              </button>
+            ) : (
+              <button
+                className='send-btn stop-btn'
+                onClick={onStop}
+                aria-label='Stop'
+                title='Stop this session'
+              >
+                <Square size={11} fill='currentColor' aria-hidden='true' />
+              </button>
+            )
+          ) : (
+            <button
+              className='send-btn'
+              onClick={submit}
+              disabled={disabled}
+              aria-label={busy ? 'Send update' : 'Send task'}
+            >
+              <ArrowUp size={17} strokeWidth={2.6} aria-hidden='true' />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function ExecutionModelPopover({profile,models,disabled,onChange}:{profile:ExecutionProfile;models:Runtime['codex']['models'];disabled:boolean;onChange:(profile:ExecutionProfile)=>void}){
-  const choices=codexModelChoices(models);
-  return <ModelPicker label="Orchestrator model" providerKey="codex" model={profile.model} effort={profile.effort} serviceTier={profile.serviceTier} choices={choices} disabled={disabled} onChange={(choice,effort)=>onChange(profileFromChoice({...choice,providerKey:'codex'},effort))}/>;
+function ExecutionModelPopover({
+  profile,
+  models,
+  disabled,
+  onChange,
+}: {
+  profile: ExecutionProfile;
+  models: Runtime['codex']['models'];
+  disabled: boolean;
+  onChange: (profile: ExecutionProfile) => void;
+}) {
+  const choices = codexModelChoices(models);
+  return (
+    <ModelPicker
+      label='Orchestrator model'
+      providerKey='codex'
+      model={profile.model}
+      effort={profile.effort}
+      serviceTier={profile.serviceTier}
+      choices={choices}
+      disabled={disabled}
+      onChange={(choice, effort) =>
+        onChange(profileFromChoice({ ...choice, providerKey: 'codex' }, effort))
+      }
+    />
+  );
 }
 
-export function ChoicePopover({label,caption,value,options,disabled,onChange}:{label:string;caption:string;value:string;options:Choice[];disabled:boolean;onChange:(value:string)=>void}){
-  const [open,setOpen]=useState(false);const [mounted,setMounted]=useState(false);const root=useRef<HTMLDivElement>(null);const trigger=useRef<HTMLButtonElement>(null);const optionRefs=useRef<(HTMLButtonElement|null)[]>([]);const closeTimer=useRef<number|undefined>(undefined);
-  const close=()=>{setOpen(false);if(closeTimer.current)window.clearTimeout(closeTimer.current);closeTimer.current=window.setTimeout(()=>setMounted(false),105);};
-  useEffect(()=>{if(open)setMounted(true);return()=>{if(closeTimer.current)window.clearTimeout(closeTimer.current);};},[open]);
-  useEffect(()=>{if(!open)return;const onPointer=(e:PointerEvent)=>{if(root.current&&!root.current.contains(e.target as Node))close();};const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close();trigger.current?.focus();}};document.addEventListener('pointerdown',onPointer);document.addEventListener('keydown',onKey);return()=>{document.removeEventListener('pointerdown',onPointer);document.removeEventListener('keydown',onKey);};},[open]);
-  const index=Math.max(0,options.findIndex(x=>x.value===value));const move=(e:React.KeyboardEvent<HTMLElement>)=>{if(!options.length||(e.key!=='ArrowDown'&&e.key!=='ArrowUp'))return;e.preventDefault();const next=(index+(e.key==='ArrowDown'?1:-1)+options.length)%options.length;optionRefs.current[next]?.focus();};const selected=options.find(x=>x.value===value)?.label||value;
-  return <div className="choice-popover" ref={root} title={label}><span className="choice-caption">{caption}</span><button ref={trigger} type="button" className="choice-trigger" aria-label={label} title={label} aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onKeyDown={move} onClick={()=>{if(open)close();else{if(closeTimer.current)window.clearTimeout(closeTimer.current);setMounted(true);requestAnimationFrame(()=>setOpen(true));}}}>{selected}<ChevronDown size={13}/></button>{mounted&&<div className="choice-menu" data-open={open} role="listbox" aria-label={label} inert={!open} onKeyDown={move}>{options.map((option,i)=><button ref={el=>{optionRefs.current[i]=el;}} className="choice-option" type="button" role="option" aria-selected={option.value===value} key={option.value} onClick={()=>{onChange(option.value);close();trigger.current?.focus();}}>{option.label}{option.value===value&&<Check size={14}/>}</button>)}</div>}</div>;
+export function ChoicePopover({
+  label,
+  caption,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  caption: string;
+  value: string;
+  options: Choice[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const closeTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    if (!mounted) return;
+
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = undefined;
+      setMounted(false);
+    }, 105);
+    return () => {
+      if (closeTimer.current !== undefined) {
+        window.clearTimeout(closeTimer.current);
+        closeTimer.current = undefined;
+      }
+    };
+  }, [open, mounted]);
+  const close = () => setOpen(false);
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: PointerEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        trigger.current?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const index = Math.max(
+    0,
+    options.findIndex((x) => x.value === value)
+  );
+  const move = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (!options.length || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
+    e.preventDefault();
+    const activeIndex = optionRefs.current.indexOf(document.activeElement as HTMLButtonElement);
+    const currentIndex = activeIndex < 0 ? index : activeIndex;
+    const next =
+      (currentIndex + (e.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+    optionRefs.current[next]?.focus();
+  };
+  const selected = options.find((x) => x.value === value)?.label || value;
+  return (
+    <div className='choice-popover' ref={root} title={label}>
+      <span className='choice-caption'>{caption}</span>
+      <button
+        ref={trigger}
+        type='button'
+        className='choice-trigger'
+        aria-label={label}
+        title={label}
+        aria-haspopup='listbox'
+        aria-expanded={open}
+        disabled={disabled}
+        onKeyDown={move}
+        onClick={() => {
+          if (open) close();
+          else {
+            if (closeTimer.current) window.clearTimeout(closeTimer.current);
+            setMounted(true);
+            requestAnimationFrame(() => setOpen(true));
+          }
+        }}
+      >
+        {selected}
+        <ChevronDown size={13} />
+      </button>
+      {mounted && (
+        <div
+          className='choice-menu'
+          data-open={open}
+          role='listbox'
+          aria-label={label}
+          inert={!open}
+          onKeyDown={move}
+        >
+          {options.map((option, i) => (
+            <button
+              ref={(el) => {
+                optionRefs.current[i] = el;
+              }}
+              className='choice-option'
+              type='button'
+              role='option'
+              aria-selected={option.value === value}
+              key={option.value}
+              onClick={() => {
+                onChange(option.value);
+                close();
+                trigger.current?.focus();
+              }}
+            >
+              {option.label}
+              {option.value === value && <Check size={14} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

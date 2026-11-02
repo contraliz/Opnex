@@ -4,7 +4,12 @@ import { fileURLToPath } from 'node:url';
 import * as PE from 'pe-library';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const outputDir = path.resolve(process.argv[2] ?? process.env.OPNEX_PACKAGED_DIR ?? process.env.PSEUDOHARNESS_PACKAGED_DIR ?? path.join(repoRoot, 'desktop-release'));
+const outputDir = path.resolve(
+  process.argv[2] ??
+    process.env.OPNEX_PACKAGED_DIR ??
+    process.env.PSEUDOHARNESS_PACKAGED_DIR ??
+    path.join(repoRoot, 'desktop-release')
+);
 const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
 const setupPath = path.join(outputDir, `Opnex Setup ${packageJson.version}.exe`);
 const appPath = path.join(outputDir, 'win-unpacked', 'Opnex.exe');
@@ -29,4 +34,6 @@ if (!/<requestedExecutionLevel\b[^>]*\blevel=["']asInvoker["']/.test(appManifest
   throw new Error('The installed Opnex app must run as the signed-in user.');
 }
 
-console.log('Windows setup requests administrator permission; Opnex itself runs as the signed-in user.');
+console.log(
+  'Windows setup requests administrator permission; Opnex itself runs as the signed-in user.'
+);

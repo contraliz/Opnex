@@ -74,22 +74,36 @@ function bounded(value: string | undefined, max: number): string | undefined {
 }
 
 function identityKey(identity: ToolCallIdentity): string {
-  const parts = [identity.provider, identity.agentId, identity.threadId, identity.turnId, identity.callId];
-  if (parts.some(part => typeof part !== 'string' || part.length === 0 || part.length > MAX_ID_PART)) {
-    throw new RangeError(`Tool call identity parts must be non-empty strings up to ${MAX_ID_PART} characters.`);
+  const parts = [
+    identity.provider,
+    identity.agentId,
+    identity.threadId,
+    identity.turnId,
+    identity.callId,
+  ];
+  if (
+    parts.some((part) => typeof part !== 'string' || part.length === 0 || part.length > MAX_ID_PART)
+  ) {
+    throw new RangeError(
+      `Tool call identity parts must be non-empty strings up to ${MAX_ID_PART} characters.`
+    );
   }
   // JSON tuple encoding keeps every caller-supplied identity field distinct without delimiter collisions.
   return JSON.stringify(parts);
 }
 
-function statusAfter(previous: ToolCallStatus | undefined, lifecycle: ToolCallStatus): ToolCallStatus {
-  if (!previous || previous === 'started' && terminalStatuses.has(lifecycle)) return lifecycle;
+function statusAfter(
+  previous: ToolCallStatus | undefined,
+  lifecycle: ToolCallStatus
+): ToolCallStatus {
+  if (!previous || (previous === 'started' && terminalStatuses.has(lifecycle))) return lifecycle;
   return previous;
 }
 
 function increment(value: number, amount = 1): number {
   const next = value + amount;
-  if (!Number.isSafeInteger(next)) throw new RangeError('Tool call totals exceeded the safe integer limit.');
+  if (!Number.isSafeInteger(next))
+    throw new RangeError('Tool call totals exceeded the safe integer limit.');
   return next;
 }
 
@@ -97,9 +111,16 @@ export function recordToolCall(log: ToolCallLog, event: ToolCallEvent): ToolCall
   const key = identityKey(event.identity);
   const timestamp = bounded(event.timestamp, MAX_TIMESTAMP);
   if (!timestamp) throw new TypeError('Tool call timestamp must be a non-empty string.');
-  if (event.source !== 'application' && event.source !== 'model') throw new TypeError('Unknown tool call source.');
-  if (!['started', 'completed', 'failed', 'interrupted'].includes(event.lifecycle)) throw new TypeError('Unknown tool call lifecycle.');
-  if (typeof event.name !== 'string' || !event.name || typeof event.type !== 'string' || !event.type) {
+  if (event.source !== 'application' && event.source !== 'model')
+    throw new TypeError('Unknown tool call source.');
+  if (!['started', 'completed', 'failed', 'interrupted'].includes(event.lifecycle))
+    throw new TypeError('Unknown tool call lifecycle.');
+  if (
+    typeof event.name !== 'string' ||
+    !event.name ||
+    typeof event.type !== 'string' ||
+    !event.type
+  ) {
     throw new TypeError('Tool call name and type must be non-empty strings.');
   }
 
@@ -113,8 +134,10 @@ export function recordToolCall(log: ToolCallLog, event: ToolCallEvent): ToolCall
     counts[status] = increment(counts[status]);
   }
 
-  const oldRecord = log.calls.find(row => row.key === key);
-  const sources = [...new Set([...(oldRecord?.sources || []), event.source])].sort() as ToolCallSource[];
+  const oldRecord = log.calls.find((row) => row.key === key);
+  const sources = [
+    ...new Set([...(oldRecord?.sources || []), event.source]),
+  ].sort() as ToolCallSource[];
   const summary = bounded(event.summary, MAX_SUMMARY);
   const total = isNew ? increment(log.total) : log.total;
   const record: ToolCallRecord = {
@@ -132,14 +155,22 @@ export function recordToolCall(log: ToolCallLog, event: ToolCallEvent): ToolCall
     sources,
     firstSeenAt: oldRecord?.firstSeenAt || timestamp,
     lastSeenAt: timestamp,
-    ...(oldRecord?.startedAt || event.lifecycle === 'started' ? { startedAt: oldRecord?.startedAt || timestamp } : {}),
-    ...(oldRecord?.finishedAt || terminalStatuses.has(event.lifecycle) ? { finishedAt: oldRecord?.finishedAt || timestamp } : {}),
-    ...(bounded(event.agentRole, MAX_ROLE) || oldRecord?.agentRole ? { agentRole: bounded(event.agentRole, MAX_ROLE) || oldRecord?.agentRole } : {}),
+    ...(oldRecord?.startedAt || event.lifecycle === 'started'
+      ? { startedAt: oldRecord?.startedAt || timestamp }
+      : {}),
+    ...(oldRecord?.finishedAt || terminalStatuses.has(event.lifecycle)
+      ? { finishedAt: oldRecord?.finishedAt || timestamp }
+      : {}),
+    ...(bounded(event.agentRole, MAX_ROLE) || oldRecord?.agentRole
+      ? { agentRole: bounded(event.agentRole, MAX_ROLE) || oldRecord?.agentRole }
+      : {}),
     ...(summary || oldRecord?.summary ? { summary: summary || oldRecord?.summary } : {}),
   };
   const calls = oldRecord
-    ? log.calls.map(row => row.key === key ? record : row)
-    : isNew ? [...log.calls, record].slice(-MAX_DETAILS) : log.calls;
+    ? log.calls.map((row) => (row.key === key ? record : row))
+    : isNew
+      ? [...log.calls, record].slice(-MAX_DETAILS)
+      : log.calls;
 
   return {
     ...log,
@@ -154,7 +185,7 @@ export function recordToolCall(log: ToolCallLog, event: ToolCallEvent): ToolCall
 export function interruptRunningToolCalls(log: ToolCallLog, at: string): ToolCallLog {
   const timestamp = bounded(at, MAX_TIMESTAMP);
   if (!timestamp) throw new TypeError('Interruption timestamp must be a non-empty string.');
-  const runningKeys = new Set(Object.keys(log.seen).filter(key => log.seen[key] === 'started'));
+  const runningKeys = new Set(Object.keys(log.seen).filter((key) => log.seen[key] === 'started'));
   if (!runningKeys.size) return log;
 
   const seen = { ...log.seen };
@@ -164,8 +195,10 @@ export function interruptRunningToolCalls(log: ToolCallLog, at: string): ToolCal
     started: log.statusCounts.started - runningKeys.size,
     interrupted: increment(log.statusCounts.interrupted, runningKeys.size),
   };
-  const calls = log.calls.map(row => runningKeys.has(row.key)
-    ? { ...row, status: 'interrupted' as const, lastSeenAt: timestamp, finishedAt: timestamp }
-    : row);
+  const calls = log.calls.map((row) =>
+    runningKeys.has(row.key)
+      ? { ...row, status: 'interrupted' as const, lastSeenAt: timestamp, finishedAt: timestamp }
+      : row
+  );
   return { ...log, seen, statusCounts, calls };
 }

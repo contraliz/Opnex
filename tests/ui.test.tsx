@@ -5,514 +5,5390 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/ui/App.js';
 
-const demoProject={id:'11111111-1111-4111-8111-111111111111',name:'Demo project',projectRoot:'D:/workspace/demo',needsLocation:false,pinned:false,createdAt:'2026-10-01T00:00:00.000Z',updatedAt:'2026-10-01T00:00:00.000Z'};
-const fixture={state:{version:5,settings:{deepseekProvider:'opencode-go',deepseekModel:'deepseek-v4.1-flash',deepseekReasoningEffort:'max',orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',approvalPolicy:'on-request',executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'}},tasks:[],activeTaskId:null,projects:[demoProject],selectedProjectId:demoProject.id,expandedProjectIds:[demoProject.id,'unclassified']},runtime:{codex:{state:'connected',error:'',models:[{id:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',efforts:['low']},{id:'gpt-6.1-terra',displayName:'GPT-6.1 Terra',efforts:['low','high']},{id:'gpt-6-astra',displayName:'GPT-6 Astra',efforts:['medium','high']},{id:'gpt-6-luna',displayName:'GPT-6-Luna',efforts:['high','max']}],workerAvailable:true}}};
-const noProjectsFixture={...fixture,state:{...fixture.state,projects:[],selectedProjectId:null,expandedProjectIds:['unclassified']}};
-const isSnapshotRoute=(path:string)=>path==='/api/state'||path==='/api/v1/snapshot';
-function nativeWorkspaceBridge(){const pages=new Map<string,any>();const listeners=new Set<(event:any)=>void>();const bridge:any={workspaceGet:vi.fn(async(id:string)=>pages.get(id)||null),workspaceOpen:vi.fn(async(workspaceId:string,url:string)=>{const page={id:workspaceId,workspaceId,url,title:new URL(url).hostname,pane:'hidden',loading:false,canGoBack:false,canGoForward:false};pages.set(workspaceId,page);return page;}),workspaceRelease:vi.fn(async(id:string)=>{pages.delete(id);}),workspaceSetBounds:vi.fn(async()=>{}),workspaceNavigate:vi.fn(async(id:string,navigation:any)=>{const previous=pages.get(id)||{id,workspaceId:id,title:'Browser',pane:'hidden',loading:false};const next={...previous,...(typeof navigation==='object'?{url:navigation.url,title:new URL(navigation.url).hostname}:{canGoBack:navigation==='back'?false:previous.canGoBack,canGoForward:navigation==='forward'?false:previous.canGoForward})};pages.set(id,next);return next;}),workspaceSetCommenting:vi.fn(async()=>{}),workspaceAnnotationOverlay:vi.fn(async()=>{}),onEvent:vi.fn((callback:(event:any)=>void)=>{listeners.add(callback);return()=>listeners.delete(callback);}),emit:(event:any)=>{for(const listener of listeners)listener(event);}};return bridge;}
-let eventSource:any;
-vi.mock('../src/ui/api.js',()=>({KERNEL_PROTOCOL_VERSION:1,bootstrap:vi.fn(async()=>({...fixture,csrf:'test'})),api:vi.fn(async(path:string)=>isSnapshotRoute(path)?fixture:{}),apiPut:vi.fn(async()=>({}))}));
+const demoProject = {
+  id: '11111111-1111-4111-8111-111111111111',
+  name: 'Demo project',
+  projectRoot: 'D:/workspace/demo',
+  needsLocation: false,
+  pinned: false,
+  createdAt: '2026-10-01T00:00:00.000Z',
+  updatedAt: '2026-10-01T00:00:00.000Z',
+};
+const fixture = {
+  state: {
+    version: 5,
+    settings: {
+      deepseekProvider: 'opencode-go',
+      deepseekModel: 'deepseek-v4.1-flash',
+      deepseekReasoningEffort: 'max',
+      orchestratorModel: 'gpt-6.1-sol',
+      orchestratorEffort: 'low',
+      approvalPolicy: 'on-request',
+      executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'max' },
+    },
+    tasks: [],
+    activeTaskId: null,
+    projects: [demoProject],
+    selectedProjectId: demoProject.id,
+    expandedProjectIds: [demoProject.id, 'unclassified'],
+  },
+  runtime: {
+    codex: {
+      state: 'connected',
+      error: '',
+      models: [
+        { id: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol', efforts: ['low'] },
+        { id: 'gpt-6.1-terra', displayName: 'GPT-6.1 Terra', efforts: ['low', 'high'] },
+        { id: 'gpt-6-astra', displayName: 'GPT-6 Astra', efforts: ['medium', 'high'] },
+        { id: 'gpt-6-luna', displayName: 'GPT-6-Luna', efforts: ['high', 'max'] },
+      ],
+      workerAvailable: true,
+    },
+  },
+};
+const noProjectsFixture = {
+  ...fixture,
+  state: {
+    ...fixture.state,
+    projects: [],
+    selectedProjectId: null,
+    expandedProjectIds: ['unclassified'],
+  },
+};
+const isSnapshotRoute = (path: string) => path === '/api/state' || path === '/api/v1/snapshot';
+function nativeWorkspaceBridge() {
+  const pages = new Map<string, any>();
+  const listeners = new Set<(event: any) => void>();
+  const bridge: any = {
+    workspaceGet: vi.fn(async (id: string) => pages.get(id) || null),
+    workspaceOpen: vi.fn(async (workspaceId: string, url: string) => {
+      const page = {
+        id: workspaceId,
+        workspaceId,
+        url,
+        title: new URL(url).hostname,
+        pane: 'hidden',
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+      };
+      pages.set(workspaceId, page);
+      return page;
+    }),
+    workspaceRelease: vi.fn(async (id: string) => {
+      pages.delete(id);
+    }),
+    workspaceSetBounds: vi.fn(async () => {}),
+    workspaceNavigate: vi.fn(async (id: string, navigation: any) => {
+      const previous = pages.get(id) || {
+        id,
+        workspaceId: id,
+        title: 'Browser',
+        pane: 'hidden',
+        loading: false,
+      };
+      const next = {
+        ...previous,
+        ...(typeof navigation === 'object'
+          ? { url: navigation.url, title: new URL(navigation.url).hostname }
+          : {
+              canGoBack: navigation === 'back' ? false : previous.canGoBack,
+              canGoForward: navigation === 'forward' ? false : previous.canGoForward,
+            }),
+      };
+      pages.set(id, next);
+      return next;
+    }),
+    workspaceSetCommenting: vi.fn(async () => {}),
+    workspaceAnnotationOverlay: vi.fn(async () => {}),
+    onEvent: vi.fn((callback: (event: any) => void) => {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    }),
+    emit: (event: any) => {
+      for (const listener of listeners) listener(event);
+    },
+  };
+  return bridge;
+}
+let eventSource: any;
+vi.mock('../src/ui/api.js', () => ({
+  KERNEL_PROTOCOL_VERSION: 1,
+  bootstrap: vi.fn(async () => ({ ...fixture, csrf: 'test' })),
+  api: vi.fn(async (path: string) => (isSnapshotRoute(path) ? fixture : {})),
+  apiPut: vi.fn(async () => ({})),
+}));
 
-describe('local task shell',()=>{
-  beforeEach(async()=>{vi.clearAllMocks();delete (window as any).opnexDesktop;delete (window as any).pseudoharnessDesktop;eventSource=undefined;const range=Range.prototype as any;range.getClientRects??=()=>[];range.getBoundingClientRect??=()=>new DOMRect(0,0,0,0);(globalThis as any).EventSource=class{onmessage:any;onerror:any;constructor(){eventSource=this;}close(){}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?fixture as any:{} as any);});
-  afterEach(()=>{cleanup();delete (window as any).opnexDesktop;delete (window as any).pseudoharnessDesktop;});
-  it('keeps the app navigation free of a duplicate brand mark',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
-    expect(screen.getByRole('navigation',{name:'App navigation'})).toBeTruthy();
-    expect(screen.queryByRole('img',{name:'Opnex'})).toBeNull();
+describe('local task shell', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    delete (window as any).opnexDesktop;
+    delete (window as any).pseudoharnessDesktop;
+    eventSource = undefined;
+    const range = Range.prototype as any;
+    range.getClientRects ??= () => [];
+    range.getBoundingClientRect ??= () => new DOMRect(0, 0, 0, 0);
+    (globalThis as any).EventSource = class {
+      onmessage: any;
+      onerror: any;
+      constructor() {
+        eventSource = this;
+      }
+      close() {}
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...fixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (fixture as any) : ({} as any)
+    );
   });
-  it('keeps recruitment details collapsed by default and preserves the disclosure state as the team completes',async()=>{
-    const now=new Date().toISOString(),assignment={outcome:'Answer the question',deliverable:'A concise answer',read_scope:['README.md'],write_scope:[]};
-    const worker={workerId:'answer-worker',name:'Answer worker',step:'Identify the answer',status:'running',effort:'max',assignment},secondWorker={workerId:'worker-two',name:'Second worker',step:'Check the result',status:'running',effort:'high',assignment};
-    const team={teamId:'team-123',status:'running',mode:'read_only',canonicalProjectRoot:'D:/workspace/demo',workers:[worker,secondWorker],integration:{status:'not_required'}};
-    const pass={id:'team-pass',index:1,createdAt:now,userInput:'Ask a worker',userInputs:['Ask a worker'],userMessageIds:['u1'],phase:'worker_running',resolution:'delegated',recruitmentTeam:team,correctionCount:0,processedTurns:[]};
-    const task={id:'team-task',title:'Read-only team',phase:'worker_running',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,passes:[pass],messages:[{id:'u1',role:'user',text:'Ask a worker',createdAt:now,passId:pass.id}]};
-    const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);const passPanel=await screen.findByLabelText('Pass 1');const summary=within(passPanel).getByRole('button',{name:/Workers · 2 workers.*running/i});const disclosure=summary.closest('.disclosure') as HTMLElement;
-    expect(summary.getAttribute('aria-expanded')).toBe('false');expect(disclosure.querySelector('.disclosure-panel')?.getAttribute('aria-hidden')).toBe('true');
-    const user=userEvent.setup();await user.click(summary);expect(summary.getAttribute('aria-expanded')).toBe('true');expect(within(disclosure).getByRole('heading',{name:'Answer worker'})).toBeTruthy();
-    const completeTask={...task,phase:'accepted',passes:[{...pass,phase:'accepted',recruitmentTeam:{...team,status:'complete',workers:[{...worker,status:'complete'},{...secondWorker,status:'complete'}]}}]};act(()=>eventSource.onmessage({data:JSON.stringify({state:{...activeFixture.state,tasks:[completeTask]}})}));
-    const completedSummary=within(passPanel).getByRole('button',{name:/Workers · 2 workers.*complete/i});expect(completedSummary.getAttribute('aria-expanded')).toBe('true');expect(within(disclosure).getByRole('heading',{name:'Answer worker'})).toBeTruthy();expect(within(disclosure).getByRole('heading',{name:'Second worker'})).toBeTruthy();completedSummary.focus();await user.keyboard(' ');expect(completedSummary.getAttribute('aria-expanded')).toBe('false');expect(disclosure.querySelector('.disclosure-panel')?.getAttribute('aria-hidden')).toBe('true');
+  afterEach(() => {
+    cleanup();
+    delete (window as any).opnexDesktop;
+    delete (window as any).pseudoharnessDesktop;
   });
-  it('renders the saved read-only DSH answer for a legacy pass without exposing its JSON bundle',async()=>{
-    const now=new Date().toISOString(),workerId='worker-id',workerName='name_reporter',answer='The assigned worker name is name_reporter.';
-    const workerReceipt={status:'incomplete',result:answer,changes:[],acceptance:{met:[],unmet:[]},verification:[],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};
-    const worker={workerId,name:workerName,status:'complete',effort:'max',assignment:{outcome:'Report your assigned worker name.',deliverable:'Return that name.',read_scope:[],write_scope:[],exclusions:[],constraints:[],context_refs:[],acceptance:["The response clearly states the worker's assigned name."],verification:[],ordinary_authority:[],escalation_conditions:[],receipt_requirements:[]},receipt:workerReceipt};
-    const bundle=[{workerId,name:workerName,status:'complete',headCommit:null,receipt:workerReceipt,producer:{producerRole:'worker',threadId:'dsh-session',turnId:'turn',recordedAt:now,artifactRefs:[],workerId,teamId:'team',passId:'pass'}}];
-    const legacyResult=`App-owned independent review accepted the native DSH execution results.\n\nThe worker completed the assigned read-only task.\n\nRead-only worker results (no Git worktree or integration step): ${JSON.stringify(bundle)}`;
-    const pass={id:'pass',index:1,createdAt:now,userInput:'Report the worker name.',userInputs:['Report the worker name.'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',reviewNote:'The assigned worker answer passed independent review.',receipt:{...workerReceipt,status:'complete',result:legacyResult,verification:[{check:'App-owned independent final review',result:'passed',evidence:'The assigned worker answer passed independent review.'}]},recruitmentTeam:{teamId:'team',status:'complete',mode:'read_only',canonicalProjectRoot:'D:/workspace/demo',workers:[worker],workerReceiptBundle:bundle,integration:{status:'not_required'}},correctionCount:0,processedTurns:[]};
-    const task={id:'read-only-result',title:'Worker identity',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,passes:[pass],messages:[{id:'u1',role:'user',text:'Report the worker name.',createdAt:now,passId:pass.id}]};
-    const displayFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...displayFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?displayFixture as any:{} as any);
-    render(<App/>);const output=await screen.findByRole('region',{name:'Final output'});
-    const finalBody=output.querySelector('.final-artifact-body')?.textContent?.trim();
-    expect(finalBody).toBe(answer);expect(finalBody).not.toContain('App-owned independent review');expect(finalBody).not.toContain('workerId');expect(finalBody).not.toContain('headCommit');expect(within(output).getByText('Worker response')).toBeTruthy();expect(document.querySelector('.review-outcome')).toBeNull();fireEvent.click(screen.getByRole('button',{name:/^Receipt/}));expect(screen.getByText('App-owned independent final review')).toBeTruthy();expect(screen.getByText('The assigned worker answer passed independent review.')).toBeTruthy();
+  it('keeps the app navigation free of a duplicate brand mark', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    expect(screen.getByRole('navigation', { name: 'App navigation' })).toBeTruthy();
+    expect(screen.queryByRole('img', { name: 'Opnex' })).toBeNull();
   });
-  it('shows historical AgentMem audit details from before the service was removed from the app',async()=>{
-    const now=new Date().toISOString();const pass={id:'audit-pass',index:1,createdAt:now,userInput:'Look up DEC-4',userInputs:['Look up DEC-4'],userMessageIds:['audit-user'],phase:'accepted',resolution:'direct',correctionCount:0,processedTurns:[],agentmemAudit:{recorded:true,coverage:'full_pass',selectedProjectId:'demo-project',workspaceRoot:'D:/workspace/demo',identityStatus:'verified',verifiedProjectId:'demo-project',verifiedRoot:'D:/workspace/demo',verifiedRepositoryId:'repo-demo',modelMcpStatus:'observed',contexts:[{id:'ctx',role:'direct',purpose:'query_context_before_answer',queryHash:'hashed',status:'supplied',startedAt:now,updatedAt:now,threadId:'direct-thread',turnId:'direct-turn',resultSummary:'decisions=1 · refs=DEC-4'}],calls:[{id:'model-call',source:'model',role:'direct',method:'retrieve_evidence',status:'completed',startedAt:now,updatedAt:now,projectId:'demo-project',threadId:'direct-thread',turnId:'direct-turn',service:'knowledge',operation:'read'},{id:'app-call',source:'application',role:'direct',method:'attach_project',purpose:'query_context_before_answer',status:'completed',startedAt:now,updatedAt:now,projectId:'demo-project',contextId:'ctx',service:'knowledge',operation:'read'}]}};const task={id:'audit-task',title:'Project lookup',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,messages:[{id:'audit-user',role:'user',text:'Look up DEC-4',createdAt:now,passId:pass.id},{id:'audit-answer',role:'direct',text:'The decision says yes.',createdAt:now,passId:pass.id}],passes:[pass]} as any;const auditFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...auditFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?auditFixture as any:{} as any);
-    render(<App/>);await screen.findByText('The decision says yes.');const disclosure=screen.getByRole('button',{name:'Historical AgentMem audit · 1 model calls · 1 app calls'});expect(disclosure.getAttribute('aria-expanded')).toBe('false');fireEvent.click(disclosure);expect(disclosure.getAttribute('aria-expanded')).toBe('true');expect(screen.getByText(/Verified: demo-project ↔ D:\/workspace\/demo/)).toBeTruthy();expect(screen.getByText(/Selected repository index:/)).toBeTruthy();expect(screen.getByText('repo-demo')).toBeTruthy();expect(screen.getByText(/Model-issued AgentMem MCP calls were observed/)).toBeTruthy();expect(screen.getByText(/App · attach_project · completed/)).toBeTruthy();expect(screen.getByText(/Model · retrieve_evidence · completed/)).toBeTruthy();expect(screen.getByText(/supplied to model/)).toBeTruthy();
+  it('focuses the session filter from its toolbar button', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const search = screen.getByRole('searchbox', { name: 'Search sessions' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search sessions' }));
+
+    expect(document.activeElement).toBe(search);
   });
-  it('shows the routing decision under the prompt, the orchestrator status, and expandable tool-call details',async()=>{
-    const now=new Date().toISOString();
-    const turn={role:'orchestrator',threadId:'orch-1',turnId:'orch-turn-1',requestedModel:'gpt-6.1-sol',requestedEffort:'low',startedAt:now,status:'completed'};
-    const call={key:'call-1',identity:{provider:'codex',agentId:'agent',threadId:'orch-1',turnId:'orch-turn-1',callId:'call-abc-123'},name:'read_file',type:'tool',status:'completed',sources:['model'],firstSeenAt:now,lastSeenAt:now,startedAt:now,finishedAt:new Date(Date.parse(now)+1250).toISOString(),agentRole:'orchestrator',summary:'Read src/ui/App.tsx'};
-    const pass={id:'pass-1',index:1,createdAt:now,userInput:'Delegate a worker',userInputs:['Delegate a worker'],userMessageIds:['u1'],phase:'worker_running',resolution:'delegated',routeDecision:{route:'hard_task',rule_id:'hard_explicit_worker_delegation',justification:'The request explicitly asks to delegate one worker.',model:'gpt-6.1-sol',effort:'low',decidedAt:now},reasoningTurns:[turn],toolCalls:{schemaVersion:1,total:1,statusCounts:{started:0,completed:1,failed:0,interrupted:0},seen:{},calls:[call],omittedCount:0},workerThreadId:'worker-1',correctionCount:0,processedTurns:[]};
-    const task={id:'log-task',title:'Conversation log',phase:'worker_running',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,passes:[pass],messages:[{id:'u1',role:'user',text:'Delegate a worker',createdAt:now,passId:pass.id}]} as any;
-    const logFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...logFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?logFixture as any:{} as any);
-    render(<App/>);const panel=await screen.findByLabelText('Pass 1');
-    expect(within(panel).getByText('The request explicitly asks to delegate one worker.')).toBeTruthy();
+  it('focuses and contains the keyboard shortcuts dialog, then restores its opener', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const trigger = screen.getByRole('button', { name: 'Keyboard shortcuts' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const close = await screen.findByRole('button', { name: 'Close shortcuts' });
+    expect(document.activeElement).toBe(close);
+    expect(fireEvent.keyDown(close, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(close);
+
+    fireEvent.keyDown(close, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull()
+    );
+    expect(document.activeElement).toBe(trigger);
+  });
+  it('keeps recruitment details collapsed by default and preserves the disclosure state as the team completes', async () => {
+    const now = new Date().toISOString(),
+      assignment = {
+        outcome: 'Answer the question',
+        deliverable: 'A concise answer',
+        read_scope: ['README.md'],
+        write_scope: [],
+      };
+    const worker = {
+        workerId: 'answer-worker',
+        name: 'Answer worker',
+        step: 'Identify the answer',
+        status: 'running',
+        effort: 'max',
+        assignment,
+      },
+      secondWorker = {
+        workerId: 'worker-two',
+        name: 'Second worker',
+        step: 'Check the result',
+        status: 'running',
+        effort: 'high',
+        assignment,
+      };
+    const team = {
+      teamId: 'team-123',
+      status: 'running',
+      mode: 'read_only',
+      canonicalProjectRoot: 'D:/workspace/demo',
+      workers: [worker, secondWorker],
+      integration: { status: 'not_required' },
+    };
+    const pass = {
+      id: 'team-pass',
+      index: 1,
+      createdAt: now,
+      userInput: 'Ask a worker',
+      userInputs: ['Ask a worker'],
+      userMessageIds: ['u1'],
+      phase: 'worker_running',
+      resolution: 'delegated',
+      recruitmentTeam: team,
+      correctionCount: 0,
+      processedTurns: [],
+    };
+    const task = {
+      id: 'team-task',
+      title: 'Read-only team',
+      phase: 'worker_running',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      passes: [pass],
+      messages: [{ id: 'u1', role: 'user', text: 'Ask a worker', createdAt: now, passId: pass.id }],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const passPanel = await screen.findByLabelText('Pass 1');
+    const summary = within(passPanel).getByRole('button', {
+      name: /Workers · 2 workers.*running/i,
+    });
+    const disclosure = summary.closest('.disclosure') as HTMLElement;
+    expect(summary.getAttribute('aria-expanded')).toBe('false');
+    expect(disclosure.querySelector('.disclosure-panel')?.getAttribute('aria-hidden')).toBe('true');
+    const user = userEvent.setup();
+    await user.click(summary);
+    expect(summary.getAttribute('aria-expanded')).toBe('true');
+    expect(within(disclosure).getByRole('heading', { name: 'Answer worker' })).toBeTruthy();
+    const completeTask = {
+      ...task,
+      phase: 'accepted',
+      passes: [
+        {
+          ...pass,
+          phase: 'accepted',
+          recruitmentTeam: {
+            ...team,
+            status: 'complete',
+            workers: [
+              { ...worker, status: 'complete' },
+              { ...secondWorker, status: 'complete' },
+            ],
+          },
+        },
+      ],
+    };
+    act(() =>
+      eventSource.onmessage({
+        data: JSON.stringify({ state: { ...activeFixture.state, tasks: [completeTask] } }),
+      })
+    );
+    const completedSummary = within(passPanel).getByRole('button', {
+      name: /Workers · 2 workers.*complete/i,
+    });
+    expect(completedSummary.getAttribute('aria-expanded')).toBe('true');
+    expect(within(disclosure).getByRole('heading', { name: 'Answer worker' })).toBeTruthy();
+    expect(within(disclosure).getByRole('heading', { name: 'Second worker' })).toBeTruthy();
+    completedSummary.focus();
+    await user.keyboard(' ');
+    expect(completedSummary.getAttribute('aria-expanded')).toBe('false');
+    expect(disclosure.querySelector('.disclosure-panel')?.getAttribute('aria-hidden')).toBe('true');
+  });
+  it('renders the saved read-only DSH answer for a legacy pass without exposing its JSON bundle', async () => {
+    const now = new Date().toISOString(),
+      workerId = 'worker-id',
+      workerName = 'name_reporter',
+      answer = 'The assigned worker name is name_reporter.';
+    const workerReceipt = {
+      status: 'incomplete',
+      result: answer,
+      changes: [],
+      acceptance: { met: [], unmet: [] },
+      verification: [],
+      risks: [],
+      knowledge: { consulted: [], updated: [] },
+      decision_required: null,
+    };
+    const worker = {
+      workerId,
+      name: workerName,
+      status: 'complete',
+      effort: 'max',
+      assignment: {
+        outcome: 'Report your assigned worker name.',
+        deliverable: 'Return that name.',
+        read_scope: [],
+        write_scope: [],
+        exclusions: [],
+        constraints: [],
+        context_refs: [],
+        acceptance: ["The response clearly states the worker's assigned name."],
+        verification: [],
+        ordinary_authority: [],
+        escalation_conditions: [],
+        receipt_requirements: [],
+      },
+      receipt: workerReceipt,
+    };
+    const bundle = [
+      {
+        workerId,
+        name: workerName,
+        status: 'complete',
+        headCommit: null,
+        receipt: workerReceipt,
+        producer: {
+          producerRole: 'worker',
+          threadId: 'dsh-session',
+          turnId: 'turn',
+          recordedAt: now,
+          artifactRefs: [],
+          workerId,
+          teamId: 'team',
+          passId: 'pass',
+        },
+      },
+    ];
+    const legacyResult = `App-owned independent review accepted the native DSH execution results.\n\nThe worker completed the assigned read-only task.\n\nRead-only worker results (no Git worktree or integration step): ${JSON.stringify(bundle)}`;
+    const pass = {
+      id: 'pass',
+      index: 1,
+      createdAt: now,
+      userInput: 'Report the worker name.',
+      userInputs: ['Report the worker name.'],
+      userMessageIds: ['u1'],
+      phase: 'accepted',
+      resolution: 'delegated',
+      reviewNote: 'The assigned worker answer passed independent review.',
+      receipt: {
+        ...workerReceipt,
+        status: 'complete',
+        result: legacyResult,
+        verification: [
+          {
+            check: 'App-owned independent final review',
+            result: 'passed',
+            evidence: 'The assigned worker answer passed independent review.',
+          },
+        ],
+      },
+      recruitmentTeam: {
+        teamId: 'team',
+        status: 'complete',
+        mode: 'read_only',
+        canonicalProjectRoot: 'D:/workspace/demo',
+        workers: [worker],
+        workerReceiptBundle: bundle,
+        integration: { status: 'not_required' },
+      },
+      correctionCount: 0,
+      processedTurns: [],
+    };
+    const task = {
+      id: 'read-only-result',
+      title: 'Worker identity',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      passes: [pass],
+      messages: [
+        {
+          id: 'u1',
+          role: 'user',
+          text: 'Report the worker name.',
+          createdAt: now,
+          passId: pass.id,
+        },
+      ],
+    };
+    const displayFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...displayFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (displayFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const output = await screen.findByRole('region', { name: 'Final output' });
+    const finalBody = output.querySelector('.final-artifact-body')?.textContent?.trim();
+    expect(finalBody).toBe(answer);
+    expect(finalBody).not.toContain('App-owned independent review');
+    expect(finalBody).not.toContain('workerId');
+    expect(finalBody).not.toContain('headCommit');
+    expect(within(output).getByText('Worker response')).toBeTruthy();
+    expect(document.querySelector('.review-outcome')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Receipt/ }));
+    expect(screen.getByText('App-owned independent final review')).toBeTruthy();
+    expect(screen.getByText('The assigned worker answer passed independent review.')).toBeTruthy();
+  });
+  it('shows historical AgentMem audit details from before the service was removed from the app', async () => {
+    const now = new Date().toISOString();
+    const pass = {
+      id: 'audit-pass',
+      index: 1,
+      createdAt: now,
+      userInput: 'Look up DEC-4',
+      userInputs: ['Look up DEC-4'],
+      userMessageIds: ['audit-user'],
+      phase: 'accepted',
+      resolution: 'direct',
+      correctionCount: 0,
+      processedTurns: [],
+      agentmemAudit: {
+        recorded: true,
+        coverage: 'full_pass',
+        selectedProjectId: 'demo-project',
+        workspaceRoot: 'D:/workspace/demo',
+        identityStatus: 'verified',
+        verifiedProjectId: 'demo-project',
+        verifiedRoot: 'D:/workspace/demo',
+        verifiedRepositoryId: 'repo-demo',
+        modelMcpStatus: 'observed',
+        contexts: [
+          {
+            id: 'ctx',
+            role: 'direct',
+            purpose: 'query_context_before_answer',
+            queryHash: 'hashed',
+            status: 'supplied',
+            startedAt: now,
+            updatedAt: now,
+            threadId: 'direct-thread',
+            turnId: 'direct-turn',
+            resultSummary: 'decisions=1 · refs=DEC-4',
+          },
+        ],
+        calls: [
+          {
+            id: 'model-call',
+            source: 'model',
+            role: 'direct',
+            method: 'retrieve_evidence',
+            status: 'completed',
+            startedAt: now,
+            updatedAt: now,
+            projectId: 'demo-project',
+            threadId: 'direct-thread',
+            turnId: 'direct-turn',
+            service: 'knowledge',
+            operation: 'read',
+          },
+          {
+            id: 'app-call',
+            source: 'application',
+            role: 'direct',
+            method: 'attach_project',
+            purpose: 'query_context_before_answer',
+            status: 'completed',
+            startedAt: now,
+            updatedAt: now,
+            projectId: 'demo-project',
+            contextId: 'ctx',
+            service: 'knowledge',
+            operation: 'read',
+          },
+        ],
+      },
+    };
+    const task = {
+      id: 'audit-task',
+      title: 'Project lookup',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      messages: [
+        { id: 'audit-user', role: 'user', text: 'Look up DEC-4', createdAt: now, passId: pass.id },
+        {
+          id: 'audit-answer',
+          role: 'direct',
+          text: 'The decision says yes.',
+          createdAt: now,
+          passId: pass.id,
+        },
+      ],
+      passes: [pass],
+    } as any;
+    const auditFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...auditFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (auditFixture as any) : ({} as any)
+    );
+    render(<App />);
+    await screen.findByText('The decision says yes.');
+    const disclosure = screen.getByRole('button', {
+      name: 'Historical AgentMem audit · 1 model calls · 1 app calls',
+    });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText(/Verified: demo-project ↔ D:\/workspace\/demo/)).toBeTruthy();
+    expect(screen.getByText(/Selected repository index:/)).toBeTruthy();
+    expect(screen.getByText('repo-demo')).toBeTruthy();
+    expect(screen.getByText(/Model-issued AgentMem MCP calls were observed/)).toBeTruthy();
+    expect(screen.getByText(/App · attach_project · completed/)).toBeTruthy();
+    expect(screen.getByText(/Model · retrieve_evidence · completed/)).toBeTruthy();
+    expect(screen.getByText(/supplied to model/)).toBeTruthy();
+  });
+  it('shows the routing decision under the prompt, the orchestrator status, and expandable tool-call details', async () => {
+    const now = new Date().toISOString();
+    const turn = {
+      role: 'orchestrator',
+      threadId: 'orch-1',
+      turnId: 'orch-turn-1',
+      requestedModel: 'gpt-6.1-sol',
+      requestedEffort: 'low',
+      startedAt: now,
+      status: 'completed',
+    };
+    const call = {
+      key: 'call-1',
+      identity: {
+        provider: 'codex',
+        agentId: 'agent',
+        threadId: 'orch-1',
+        turnId: 'orch-turn-1',
+        callId: 'call-abc-123',
+      },
+      name: 'read_file',
+      type: 'tool',
+      status: 'completed',
+      sources: ['model'],
+      firstSeenAt: now,
+      lastSeenAt: now,
+      startedAt: now,
+      finishedAt: new Date(Date.parse(now) + 1250).toISOString(),
+      agentRole: 'orchestrator',
+      summary: 'Read src/ui/App.tsx',
+    };
+    const pass = {
+      id: 'pass-1',
+      index: 1,
+      createdAt: now,
+      userInput: 'Delegate a worker',
+      userInputs: ['Delegate a worker'],
+      userMessageIds: ['u1'],
+      phase: 'worker_running',
+      resolution: 'delegated',
+      routeDecision: {
+        route: 'hard_task',
+        rule_id: 'hard_explicit_worker_delegation',
+        justification: 'The request explicitly asks to delegate one worker.',
+        model: 'gpt-6.1-sol',
+        effort: 'low',
+        decidedAt: now,
+      },
+      reasoningTurns: [turn],
+      toolCalls: {
+        schemaVersion: 1,
+        total: 1,
+        statusCounts: { started: 0, completed: 1, failed: 0, interrupted: 0 },
+        seen: {},
+        calls: [call],
+        omittedCount: 0,
+      },
+      workerThreadId: 'worker-1',
+      correctionCount: 0,
+      processedTurns: [],
+    };
+    const task = {
+      id: 'log-task',
+      title: 'Conversation log',
+      phase: 'worker_running',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      passes: [pass],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Delegate a worker', createdAt: now, passId: pass.id },
+      ],
+    } as any;
+    const logFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...logFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (logFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const panel = await screen.findByLabelText('Pass 1');
+    expect(
+      within(panel).getByText('The request explicitly asks to delegate one worker.')
+    ).toBeTruthy();
     expect(within(panel).getByText('Waiting for workers')).toBeTruthy();
-    fireEvent.click(within(panel).getByRole('button',{name:'Tool calls · 1'}));
-    const row=within(panel).getByText('read_file').closest('summary')!;const entry=row.closest('details')!;expect(row.textContent).toContain('Orchestrator');expect(row.textContent).toContain('1.3s');
-    expect(entry.open).toBe(false);fireEvent.click(row);expect(entry.open).toBe(true);expect(within(panel).getByText('call-abc-123')).toBeTruthy();
-  });  it('labels historical passes without universal tool-call coverage honestly',async()=>{
-    const now=new Date().toISOString();const pass={id:'old-pass',index:1,createdAt:now,userInput:'Old question',userInputs:['Old question'],userMessageIds:[],phase:'accepted',correctionCount:0,processedTurns:[]};const task={id:'old-task',title:'Old session',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,messages:[],passes:[pass]} as any;const oldFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...oldFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?oldFixture as any:{} as any);
-    render(<App/>);const disclosure=await screen.findByRole('button',{name:'Tool calls · coverage unavailable'});fireEvent.click(disclosure);expect(screen.getByText(/predates universal tool-call tracking/)).toBeTruthy();expect(screen.getByText(/Complete invocation coverage is unavailable/)).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Tool calls · 1' }));
+    const row = within(panel).getByText('read_file').closest('summary')!;
+    const entry = row.closest('details')!;
+    expect(row.textContent).toContain('Orchestrator');
+    expect(row.textContent).toContain('1.3s');
+    expect(entry.open).toBe(false);
+    fireEvent.click(row);
+    expect(entry.open).toBe(true);
+    expect(within(panel).getByText('call-abc-123')).toBeTruthy();
   });
-  it('renders a steering prompt inside the active pass instead of showing a second pass',async()=>{
-    const now=new Date().toISOString();const pass={id:'active-pass',index:1,createdAt:now,userInput:'Implement this change.',userInputs:['Implement this change.','Please check this edge case.'],userMessageIds:['initial','steering'],phase:'worker_running',workerThreadId:'worker-thread',activeRole:'worker',activeTurnId:'worker-turn',correctionCount:0,processedTurns:[]};const task={id:'active-steer',title:'Steering',phase:'worker_running',activeRole:'worker',activeTurnId:'worker-turn',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,messages:[{id:'initial',role:'user',text:'Implement this change.',createdAt:now,passId:pass.id},{id:'steering',role:'user',text:'Please check this edge case.',createdAt:now,passId:pass.id,submissionKind:'steering',deliveryStatus:'steered'}],passes:[pass]};const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);const panel=await screen.findByLabelText('Pass 1');expect(within(panel).getByText('Implement this change.')).toBeTruthy();expect(within(panel).getByText('Please check this edge case.')).toBeTruthy();expect(within(panel).getByText('Steered active turn')).toBeTruthy();expect(screen.queryByLabelText('Pass 2')).toBeNull();
-  });
-  it('shows the verified repository identity and the producing agent turn beside its receipt',async()=>{
-    const now=new Date().toISOString();const receipt={status:'complete',result:'Changed the output.',changes:['src/output.ts'],acceptance:{met:['Done'],unmet:[]},verification:[{check:'Typecheck',result:'passed'}],risks:[],knowledge:{consulted:[],updated:['No AgentMem knowledge update was needed because no durable project decision changed.','Repository index refreshed after source changes.']},decision_required:null};const pass={id:'receipt-pass',index:1,createdAt:now,userInput:'Change output',userInputs:['Change output'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',receipt,receiptProvenance:{producerRole:'worker',threadId:'worker-thread',turnId:'worker-turn',recordedAt:now,artifactRefs:['src/output.ts']},agentmemAudit:{recorded:true,coverage:'full_pass',selectedProjectId:'demo-project',workspaceRoot:'D:/workspace/demo',identityStatus:'verified',verifiedProjectId:'demo-project',verifiedRoot:'D:/workspace/demo',verifiedRepositoryId:'repo-demo',modelMcpStatus:'available',contexts:[],calls:[]},correctionCount:0,processedTurns:[],turnSourceChanges:[{role:'worker',threadId:'worker-thread',turnId:'worker-turn',status:'verified',workspaceRoot:'D:/workspace/demo',baselineCapturedAt:now,completedAt:now,changedPaths:['src/output.ts'],repositoryRevisionChanged:false}]};const task={id:'receipt-task',title:'Receipt proof',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,messages:[{id:'u1',role:'user',text:'Change output',createdAt:now,passId:pass.id}],passes:[pass]};const currentFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...currentFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?currentFixture as any:{} as any);
-    render(<App/>);const panel=await screen.findByLabelText('Pass 1');fireEvent.click(within(panel).getByRole('button',{name:/^Receipt/}));expect(within(panel).getByText('Produced by worker · turn worker-turn · 1 artifact references')).toBeTruthy();expect(within(panel).getByText(/Workspace changes verified by artifact turn/)).toBeTruthy();expect(within(panel).getAllByText(/src\/output.ts/).length).toBeGreaterThan(0);fireEvent.click(within(panel).getByRole('button',{name:/Historical AgentMem audit/}));expect(within(panel).getByText('repo-demo')).toBeTruthy();
-  });
-  it('keeps the workspace directory editor separate from global settings and has no service controls',async()=>{
-    const apiMod=await import('../src/ui/api.js');render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
-    fireEvent.click(screen.getByRole('button',{name:/^Settings$/}));const settings=await screen.findByRole('dialog',{name:'Settings'});expect(within(settings).getByRole('button',{name:'Worker model'})).toBeTruthy();expect(within(settings).queryByRole('textbox',{name:/Working directory/})).toBeNull();expect(within(settings).queryByText(/AgentMem|knowledge base|optional project integrations/i)).toBeNull();fireEvent.click(within(settings).getByRole('button',{name:'Cancel'}));
-    fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));const workspace=await screen.findByRole('dialog',{name:'Configure demo'});const workingDirectory=within(workspace).getByRole('textbox',{name:'Working directory'});expect(workingDirectory.getAttribute('title')).toBe('D:/workspace/demo');expect(within(workspace).getByText('demo')).toBeTruthy();expect(within(workspace).queryByText(/AgentMem|knowledge base|service connection/i)).toBeNull();expect(vi.mocked(apiMod.api).mock.calls.every(([url])=>!String(url).includes('/agentmem'))).toBe(true);
-  });
-  it('creates a workspace named from its folder and starts a session without an external knowledge service',async()=>{
-    const apiMod=await import('../src/ui/api.js');let liveState:any=structuredClone(noProjectsFixture.state),submitted:any;vi.mocked(apiMod.bootstrap).mockResolvedValue({...noProjectsFixture,csrf:'test'} as any);
-    vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{
-      if(isSnapshotRoute(path))return {state:liveState,runtime:fixture.runtime} as any;
-      if(path.startsWith('/api/directories?resolve=1'))return {path:'D:/projects/new',parent:'D:/projects',entries:[],truncated:false} as any;
-      if(path.startsWith('/api/directories'))return {path:'D:/projects/new',parent:'D:/projects',entries:[],truncated:false} as any;
-      if(path==='/api/projects'){const project={...demoProject,id:body.id,name:body.projectRoot.split(/[\\/]+/).filter(Boolean).at(-1),projectRoot:body.projectRoot};liveState={...liveState,projects:[project],selectedProjectId:project.id,expandedProjectIds:[project.id,'unclassified']};return {project,duplicate:false} as any;}
-      if(path==='/api/projects/select'){liveState={...liveState,selectedProjectId:body.projectId};return {} as any;}
-      if(path==='/api/tasks'){submitted=body;return {id:'new-session',title:body.message,phase:'routing',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),projectId:body.projectId,userRoot:'D:/projects/new',messages:[],passes:[]} as any;}
-      return {} as any;
+  it('labels historical passes without universal tool-call coverage honestly', async () => {
+    const now = new Date().toISOString();
+    const pass = {
+      id: 'old-pass',
+      index: 1,
+      createdAt: now,
+      userInput: 'Old question',
+      userInputs: ['Old question'],
+      userMessageIds: [],
+      phase: 'accepted',
+      correctionCount: 0,
+      processedTurns: [],
+    };
+    const task = {
+      id: 'old-task',
+      title: 'Old session',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      messages: [],
+      passes: [pass],
+    } as any;
+    const oldFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...oldFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (oldFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const disclosure = await screen.findByRole('button', {
+      name: 'Tool calls · coverage unavailable',
     });
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Create workspace'}));const createDialog=await screen.findByRole('dialog',{name:'Create workspace'});expect(within(createDialog).getByText('Choose a working directory')).toBeTruthy();fireEvent.click(within(createDialog).getByRole('button',{name:'Browse workspace folders'}));await screen.findByText('D:/projects/new');fireEvent.click(screen.getByRole('button',{name:'Use this folder'}));await waitFor(()=>expect((within(createDialog).getByRole('textbox',{name:'Working directory'}) as HTMLInputElement).value).toBe('D:/projects/new'));expect(within(createDialog).getByText('new')).toBeTruthy();fireEvent.click(within(createDialog).getByRole('button',{name:'Save workspace'}));await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Create workspace'})).toBeNull());
-    const editor=screen.getByRole('textbox',{name:'Task message'});const view=EditorView.findFromDOM(editor as HTMLElement)!;act(()=>view.dispatch({changes:{from:0,to:0,insert:'Start a workspace session'}}));fireEvent.click(screen.getByRole('button',{name:'Send task'}));await waitFor(()=>expect(submitted).toMatchObject({message:'Start a workspace session',projectId:liveState.projects[0].id}));expect(submitted.projectId).toBeTruthy();expect(vi.mocked(apiMod.api).mock.calls.every(([url])=>!String(url).includes('/agentmem'))).toBe(true);
-  });  it('shows the multimodal picker, lets a selected image be removed, and sends attachment-only payloads',async()=>{
-    const apiMod=await import('../src/ui/api.js');let submitted:any;vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(path==='/api/tasks')submitted=body;return isSnapshotRoute(path)?fixture as any:{} as any;});
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});const input=screen.getByLabelText('Choose files to attach');expect(input).toBeTruthy();
-    const image=new File([Uint8Array.from([137,80,78,71,13,10,26,10])],'example.png',{type:'image/png'});fireEvent.change(input,{target:{files:[image]}});await waitFor(()=>expect(document.querySelector('.pending-attachments')).toBeTruthy());fireEvent.click(screen.getByRole('button',{name:'Remove example.png'}));expect(document.querySelector('.pending-attachments')).toBeNull();
-    fireEvent.change(input,{target:{files:[image]}});await waitFor(()=>expect(document.querySelector('.pending-attachments')).toBeTruthy());fireEvent.click(screen.getByRole('button',{name:'Send task'}));await waitFor(()=>expect(submitted).toMatchObject({message:'',attachments:[{name:'example.png',type:'image/png',size:8,data:'iVBORw0KGgo='}]}));
+    fireEvent.click(disclosure);
+    expect(screen.getByText(/predates universal tool-call tracking/)).toBeTruthy();
+    expect(screen.getByText(/Complete invocation coverage is unavailable/)).toBeTruthy();
   });
-  it('keeps each new-session tab draft when switching and closing tabs',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});const first=EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)!;act(()=>first.dispatch({changes:{from:0,to:first.state.doc.length,insert:'first draft'}}));fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));const second=EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)!;expect(second.state.doc.toString()).toBe('');act(()=>second.dispatch({changes:{from:0,to:0,insert:'second draft'}}));const tabs=screen.getAllByRole('tab',{name:'New session'});expect(tabs).toHaveLength(2);fireEvent.click(tabs[0]);expect(EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)?.state.doc.toString()).toBe('first draft');fireEvent.click(screen.getAllByRole('button',{name:'Close New session tab'})[1]);await waitFor(()=>expect(screen.getAllByRole('tab',{name:'New session'})).toHaveLength(1));expect(EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)?.state.doc.toString()).toBe('first draft');
+  it('renders a steering prompt inside the active pass instead of showing a second pass', async () => {
+    const now = new Date().toISOString();
+    const pass = {
+      id: 'active-pass',
+      index: 1,
+      createdAt: now,
+      userInput: 'Implement this change.',
+      userInputs: ['Implement this change.', 'Please check this edge case.'],
+      userMessageIds: ['initial', 'steering'],
+      phase: 'worker_running',
+      workerThreadId: 'worker-thread',
+      activeRole: 'worker',
+      activeTurnId: 'worker-turn',
+      correctionCount: 0,
+      processedTurns: [],
+    };
+    const task = {
+      id: 'active-steer',
+      title: 'Steering',
+      phase: 'worker_running',
+      activeRole: 'worker',
+      activeTurnId: 'worker-turn',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      messages: [
+        {
+          id: 'initial',
+          role: 'user',
+          text: 'Implement this change.',
+          createdAt: now,
+          passId: pass.id,
+        },
+        {
+          id: 'steering',
+          role: 'user',
+          text: 'Please check this edge case.',
+          createdAt: now,
+          passId: pass.id,
+          submissionKind: 'steering',
+          deliveryStatus: 'steered',
+        },
+      ],
+      passes: [pass],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const panel = await screen.findByLabelText('Pass 1');
+    expect(within(panel).getByText('Implement this change.')).toBeTruthy();
+    expect(within(panel).getByText('Please check this edge case.')).toBeTruthy();
+    expect(within(panel).getByText('Steered active turn')).toBeTruthy();
+    expect(screen.queryByLabelText('Pass 2')).toBeNull();
   });
-  it('keeps status, usage, Stop, and drafts attached to their owning session tab',async()=>{
-    const now=new Date().toISOString();const token=(totalTokens:number)=>({totalTokens,inputTokens:totalTokens-10,cachedInputTokens:0,cacheWriteInputTokens:0,outputTokens:10,reasoningOutputTokens:2,modelContextWindow:128000,source:'thread'});const makeTask=(id:string,title:string,rule:string,orchTotal:number,workerTotal:number)=>{const pass={id:`pass-${id}`,index:1,createdAt:now,userInput:title,userInputs:[title],userMessageIds:[`user-${id}`],phase:'worker_running',resolution:'delegated',correctionCount:0,orchestratorThreadId:`orch-${id}`,workerThreadId:`worker-${id}`,routeDecision:{route:'hard_task',rule_id:rule,justification:`Decision for ${title}.`,model:'gpt-6.1-sol',effort:'low',decidedAt:now},reasoningTurns:[{role:'orchestrator',threadId:`orch-${id}`,turnId:`orch-turn-${id}`,requestedModel:'gpt-6.1-sol',requestedEffort:'low',startedAt:now,status:'completed'},{role:'worker',threadId:`worker-${id}`,turnId:`worker-turn-${id}`,requestedModel:'gpt-6-luna',requestedEffort:'high',startedAt:now,status:'streaming'}],usage:{orchestrator:{threadId:`orch-${id}`,tokenStatus:'available',tokens:token(orchTotal),creditStatus:'unavailable'},worker:{threadId:`worker-${id}`,tokenStatus:'available',tokens:token(workerTotal),creditStatus:'unavailable'}},processedTurns:[]};return{id,title,phase:'worker_running',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,orchestratorThreadId:`orch-${id}`,workerThreadId:`worker-${id}`,passes:[pass],messages:[{id:`user-${id}`,role:'user',text:title,createdAt:now,passId:pass.id}]} as any;};const alpha=makeTask('task-alpha','Alpha session','route-alpha',100,50);const beta=makeTask('task-beta','Beta session','route-beta',200,75);const initial={...fixture,state:{...fixture.state,tasks:[alpha,beta],activeTaskId:alpha.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...initial,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?{state:{...fixture.state,tasks:[alpha,beta],activeTaskId:alpha.id},runtime:fixture.runtime} as any:{} as any);
-    render(<App/>);await screen.findByRole('tab',{name:'Alpha session'});fireEvent.click(document.querySelectorAll('.session-row .task-nav')[1]);await screen.findByRole('tab',{name:'Beta session'});fireEvent.click(screen.getByRole('button',{name:'Heads-up'}));let panel=await screen.findByRole('complementary',{name:'Heads-up panel'});await within(panel).findByText('Hard task');expect(within(panel).getByText('275 tokens')).toBeTruthy();fireEvent.click(within(panel).getByRole('button',{name:/Current sessions/}));expect(within(panel).getByText('orch-task-beta')).toBeTruthy();expect(within(panel).getByText('worker-task-beta')).toBeTruthy();fireEvent.click(within(panel).getByRole('button',{name:'Details'}));expect(within(panel).getAllByText('gpt-6.1-sol · low').length).toBeGreaterThan(0);expect(within(panel).getAllByText('gpt-6-luna · high').length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('tab',{name:'Alpha session'}));await waitFor(()=>expect(panel.getAttribute('aria-hidden')).toBe('true'));fireEvent.click(screen.getByRole('button',{name:'Heads-up'}));panel=(await screen.findAllByRole('complementary',{name:'Heads-up panel'})).find(item=>item.getAttribute('aria-hidden')==='false')!;await within(panel).findByText('Hard task');expect(within(panel).getByText('150 tokens')).toBeTruthy();expect(within(panel).queryByText('275 tokens')).toBeNull();
-    fireEvent.click(screen.getByRole('tab',{name:'Beta session'}));await waitFor(()=>expect(panel.getAttribute('aria-hidden')).toBe('true'));await waitFor(()=>expect(screen.getByRole('button',{name:'Stop'})).toBeTruthy());fireEvent.click(screen.getByRole('button',{name:'Stop'}));await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([path])=>path==='/api/tasks/task-beta/cancel')).toBe(true));expect(vi.mocked(apiMod.api).mock.calls.some(([path])=>path==='/api/tasks/task-alpha/cancel')).toBe(false);
-    const editor=EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)!;act(()=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:'draft stays in beta'}}));fireEvent.click(document.querySelector('.activity-rail [aria-label="Browser"]')!);expect(document.querySelector('.browser-peer-tab')).toBeTruthy();expect(document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')).toBeTruthy();expect(document.querySelector('[data-workspace-tab="task-beta"] .conversation')?.textContent).toContain('Beta session');fireEvent.click(screen.getByRole('tab',{name:'Beta session'}));expect(EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)?.state.doc.toString()).toBe('draft stays in beta');fireEvent.click(document.querySelector('.activity-rail [aria-label="Git"]')!);expect(document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')).toBeTruthy();expect(document.querySelector('.document-tabs [role="tab"][aria-label="Git"]')).toBeTruthy();expect(screen.getByRole('tab',{name:'Beta session'})).toBeTruthy();
+  it('shows the verified repository identity and the producing agent turn beside its receipt', async () => {
+    const now = new Date().toISOString();
+    const receipt = {
+      status: 'complete',
+      result: 'Changed the output.',
+      changes: ['src/output.ts'],
+      acceptance: { met: ['Done'], unmet: [] },
+      verification: [{ check: 'Typecheck', result: 'passed' }],
+      risks: [],
+      knowledge: {
+        consulted: [],
+        updated: [
+          'No AgentMem knowledge update was needed because no durable project decision changed.',
+          'Repository index refreshed after source changes.',
+        ],
+      },
+      decision_required: null,
+    };
+    const pass = {
+      id: 'receipt-pass',
+      index: 1,
+      createdAt: now,
+      userInput: 'Change output',
+      userInputs: ['Change output'],
+      userMessageIds: ['u1'],
+      phase: 'accepted',
+      resolution: 'delegated',
+      receipt,
+      receiptProvenance: {
+        producerRole: 'worker',
+        threadId: 'worker-thread',
+        turnId: 'worker-turn',
+        recordedAt: now,
+        artifactRefs: ['src/output.ts'],
+      },
+      agentmemAudit: {
+        recorded: true,
+        coverage: 'full_pass',
+        selectedProjectId: 'demo-project',
+        workspaceRoot: 'D:/workspace/demo',
+        identityStatus: 'verified',
+        verifiedProjectId: 'demo-project',
+        verifiedRoot: 'D:/workspace/demo',
+        verifiedRepositoryId: 'repo-demo',
+        modelMcpStatus: 'available',
+        contexts: [],
+        calls: [],
+      },
+      correctionCount: 0,
+      processedTurns: [],
+      turnSourceChanges: [
+        {
+          role: 'worker',
+          threadId: 'worker-thread',
+          turnId: 'worker-turn',
+          status: 'verified',
+          workspaceRoot: 'D:/workspace/demo',
+          baselineCapturedAt: now,
+          completedAt: now,
+          changedPaths: ['src/output.ts'],
+          repositoryRevisionChanged: false,
+        },
+      ],
+    };
+    const task = {
+      id: 'receipt-task',
+      title: 'Receipt proof',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      messages: [
+        { id: 'u1', role: 'user', text: 'Change output', createdAt: now, passId: pass.id },
+      ],
+      passes: [pass],
+    };
+    const currentFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...currentFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (currentFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const panel = await screen.findByLabelText('Pass 1');
+    fireEvent.click(within(panel).getByRole('button', { name: /^Receipt/ }));
+    expect(
+      within(panel).getByText('Produced by worker · turn worker-turn · 1 artifact references')
+    ).toBeTruthy();
+    expect(within(panel).getByText(/Workspace changes verified by artifact turn/)).toBeTruthy();
+    expect(within(panel).getAllByText(/src\/output.ts/).length).toBeGreaterThan(0);
+    fireEvent.click(within(panel).getByRole('button', { name: /Historical AgentMem audit/ }));
+    expect(within(panel).getByText('repo-demo')).toBeTruthy();
   });
-  it('gives split panes sibling tab bars and centered new-session composers',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));const source=Array.from(document.querySelectorAll('.document-tabs .document-tab')).at(-1)!;const tabId=(source as HTMLElement).dataset.sessionTab!;const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?tabId:'')};fireEvent.dragStart(source,{dataTransfer:transfer});const workspace=document.querySelector('.workspace-content')!;vi.spyOn(workspace,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(document.querySelector('.task-view')!,{dataTransfer:transfer,clientX:990});await waitFor(()=>expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(2));const groups=Array.from(document.querySelectorAll('.pane-grid-group')) as HTMLElement[];const rootBar=within(groups[0]).getByRole('tablist',{name:'Pane 1 workspaces'}) as HTMLElement;const sideBar=within(groups[1]).getByRole('tablist',{name:'Side pane workspaces'}) as HTMLElement;const bodies=groups.map(group=>group.querySelector('.pane-body') as HTMLElement);expect(rootBar.parentElement).toBe(groups[0]);expect(sideBar.parentElement).toBe(groups[1]);expect(rootBar.style.gridRow).toBe('1');expect(sideBar.style.gridRow).toBe('1');expect(bodies.map(body=>body.style.gridRow)).toEqual(['2','2']);expect(bodies.every(body=>body.querySelector('.new-tab-center .composer'))).toBe(true);expect(screen.getAllByRole('textbox',{name:'Task message'})).toHaveLength(2);
+  it('keeps the workspace directory editor separate from global settings and has no service controls', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: /^Settings$/ }));
+    const settings = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(settings).getByRole('button', { name: 'Worker model' })).toBeTruthy();
+    expect(within(settings).queryByRole('textbox', { name: /Working directory/ })).toBeNull();
+    expect(
+      within(settings).queryByText(/AgentMem|knowledge base|optional project integrations/i)
+    ).toBeNull();
+    fireEvent.click(within(settings).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    const workspace = await screen.findByRole('dialog', { name: 'Configure demo' });
+    const workingDirectory = within(workspace).getByRole('textbox', { name: 'Working directory' });
+    expect(workingDirectory.getAttribute('title')).toBe('D:/workspace/demo');
+    expect(within(workspace).getByText('demo')).toBeTruthy();
+    expect(within(workspace).queryByText(/AgentMem|knowledge base|service connection/i)).toBeNull();
+    expect(
+      vi.mocked(apiMod.api).mock.calls.every(([url]) => !String(url).includes('/agentmem'))
+    ).toBe(true);
   });
-  it('keeps compact Stop and Heads-up controls inside each session pane without adding another bar',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));const source=Array.from(document.querySelectorAll('.document-tabs .document-tab')).at(-1)!;const movedId=(source as HTMLElement).dataset.sessionTab!;const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?movedId:'')};fireEvent.dragStart(source,{dataTransfer:transfer});const workspace=document.querySelector('.workspace-content')!;vi.spyOn(workspace,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(document.querySelector('.task-view')!,{dataTransfer:transfer,clientX:990});await waitFor(()=>expect(document.querySelectorAll('.pane-body')).toHaveLength(2));
-    const bars=Array.from(document.querySelectorAll('.document-tabs')) as HTMLElement[];expect(bars).toHaveLength(2);for(const bar of bars){expect(within(bar).queryByRole('button',{name:'Heads-up'})).toBeNull();expect(within(bar).queryByRole('button',{name:'Stop'})).toBeNull();}
-    const bodies=Array.from(document.querySelectorAll('.pane-body[data-tab-kind="session"]')) as HTMLElement[];expect(bodies).toHaveLength(2);for(const body of bodies){const actions=body.querySelector('.session-pane-actions') as HTMLElement;expect(actions?.getAttribute('role')).toBe('group');expect(actions?.getAttribute('data-session-actions-for')).toBe((body as HTMLElement).dataset.workspaceTab);expect(within(actions).getByRole('button',{name:'Heads-up'})).toBeTruthy();expect(body.contains(actions)).toBe(true);expect(body.querySelector('.session-pane-toolbar')).toBeNull();}
-  });
-  it('keeps busy Stop inside and bound to its owning split session',async()=>{
-    const now=new Date().toISOString();const makeTask=(id:string,title:string)=>{const pass={id:`pass-${id}`,index:1,createdAt:now,userInput:title,userInputs:[title],userMessageIds:[`user-${id}`],phase:'worker_running',resolution:'delegated',correctionCount:0,orchestratorThreadId:`orch-${id}`,workerThreadId:`worker-${id}`,routeDecision:{route:'hard_task',rule_id:'test',justification:'A scoped fixture route.',model:'gpt-6.1-sol',effort:'low',decidedAt:now},reasoningTurns:[],processedTurns:[]};return{id,title,phase:'worker_running',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,orchestratorThreadId:`orch-${id}`,workerThreadId:`worker-${id}`,passes:[pass],messages:[{id:`user-${id}`,role:'user',text:title,createdAt:now,passId:pass.id}]} as any;};const alpha=makeTask('task-alpha','Alpha session');const beta=makeTask('task-beta','Beta session');const seeded={...fixture,state:{...fixture.state,tasks:[alpha,beta],activeTaskId:alpha.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...seeded,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?{state:seeded.state,runtime:fixture.runtime} as any:{} as any);
-    render(<App/>);await screen.findByRole('tab',{name:'Alpha session'});fireEvent.click(document.querySelectorAll('.session-row .task-nav')[1]);await screen.findByRole('tab',{name:'Beta session'});const source=document.querySelector('[data-session-tab="task-beta"]') as HTMLElement;const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?'task-beta':'')};fireEvent.dragStart(source,{dataTransfer:transfer});const workspace=document.querySelector('.workspace-content')!;vi.spyOn(workspace,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(document.querySelector('.task-view')!,{dataTransfer:transfer,clientX:990});await waitFor(()=>expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(2));
-    const tabbars=Array.from(document.querySelectorAll('.pane-grid-group .document-tabs')) as HTMLElement[];expect(tabbars).toHaveLength(2);for(const tabbar of tabbars){expect(within(tabbar).queryByRole('button',{name:'Stop'})).toBeNull();expect(within(tabbar).queryByRole('button',{name:'Heads-up'})).toBeNull();}
-    const betaBody=document.querySelector('[data-workspace-tab="task-beta"].pane-body') as HTMLElement;const alphaBody=document.querySelector('[data-workspace-tab="task-alpha"].pane-body') as HTMLElement;expect(within(betaBody).getByRole('button',{name:'Stop'})).toBeTruthy();expect(within(alphaBody).getByRole('button',{name:'Stop'})).toBeTruthy();expect(betaBody.querySelector('.session-pane-actions')?.getAttribute('data-session-actions-for')).toBe('task-beta');fireEvent.click(within(betaBody).getByRole('button',{name:'Stop'}));await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([path])=>path==='/api/tasks/task-beta/cancel')).toBe(true));expect(vi.mocked(apiMod.api).mock.calls.some(([path])=>path==='/api/tasks/task-alpha/cancel')).toBe(false);
-  });
-  it('turns the send button into Stop while running and Steer once the user types',async()=>{
-    const now=new Date().toISOString();const task={id:'task-steer',title:'Steer session',phase:'routing',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,messages:[{id:'u1',role:'user',text:'Start.',createdAt:now}],passes:[]} as any;const seeded={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...seeded,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?{state:seeded.state,runtime:fixture.runtime} as any:{} as any);
-    render(<App/>);await screen.findByRole('button',{name:'Stop'});expect(screen.queryByRole('button',{name:'Send task'})).toBeNull();
-    const editor=EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)!;act(()=>editor.dispatch({changes:{from:0,to:0,insert:'Please narrow the scope.'}}));
-    fireEvent.click(await screen.findByRole('button',{name:'Steer'}));await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([path,body])=>path==='/api/tasks/task-steer/messages'&&(body as any).message==='Please narrow the scope.')).toBe(true));
-  });
-  it('pins and archives sessions from right-click and the row menu without showing timestamps',async()=>{
-    const now=new Date().toISOString();const makeTask=(id:string,title:string)=>({id,title,phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,messages:[{id:`u-${id}`,role:'user',text:title,createdAt:now}],passes:[]}) as any;const alpha=makeTask('task-alpha','Alpha session');const beta=makeTask('task-beta','Beta session');const seeded={...fixture,state:{...fixture.state,tasks:[alpha,beta],activeTaskId:alpha.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...seeded,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?{state:seeded.state,runtime:fixture.runtime} as any:{} as any);
-    render(<App/>);await screen.findByRole('tab',{name:'Alpha session'});expect(document.querySelector('.task-time')).toBeNull();
-    fireEvent.contextMenu(document.querySelector('.session-row[data-session-type="conversation"]')!);fireEvent.click(await screen.findByRole('menuitem',{name:'Pin session'}));
-    await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([path,body])=>path==='/api/tasks/task-alpha/pin'&&(body as any).pinned===true)).toBe(true));
-    fireEvent.click(screen.getByRole('button',{name:'Actions for Beta session'}));fireEvent.click(await screen.findByRole('menuitem',{name:'Archive session'}));
-    await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([path,body])=>path==='/api/tasks/task-beta/archive'&&(body as any).archived===true)).toBe(true));
-  });
-  it('creates a session from a split draft in that same pane and transitions it into the conversation',async()=>{
-    const apiMod=await import('../src/ui/api.js');const now=new Date().toISOString();const created={id:'task-from-side-draft',title:'Side fixture task',phase:'intake',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',messages:[{id:'message-side-fixture',role:'user',text:'fixture prompt',createdAt:now}],passes:[]} as any;const updated={...fixture,state:{...fixture.state,tasks:[created],activeTaskId:created.id}};let payload:any;vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(path==='/api/tasks'){payload=body;return created;}if(isSnapshotRoute(path))return updated as any;return {} as any;});
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));const source=Array.from(document.querySelectorAll('.document-tabs .document-tab')).at(-1)!;const tabId=(source as HTMLElement).dataset.sessionTab!;const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?tabId:'')};fireEvent.dragStart(source,{dataTransfer:transfer});const workspace=document.querySelector('.workspace-content')!;vi.spyOn(workspace,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(document.querySelector('.task-view')!,{dataTransfer:transfer,clientX:990});const side=document.querySelector('.side-session-view') as HTMLElement;const editor=EditorView.findFromDOM(within(side).getByRole('textbox',{name:'Task message'}) as HTMLElement)!;act(()=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:'fixture prompt'}}));const file=new File(['side attachment'],'side.txt',{type:'text/plain'});fireEvent.change(within(side).getByLabelText('Choose files to attach'),{target:{files:[file]}});await waitFor(()=>expect(within(side).getByText('side.txt')).toBeTruthy());fireEvent.click(within(side).getByRole('button',{name:'Send task'}));const sideBar=screen.getByRole('tablist',{name:'Side pane workspaces'});await waitFor(()=>expect(within(sideBar).getByRole('tab',{name:'Side fixture task'})).toBeTruthy());const createdTab=within(sideBar).getByRole('tab',{name:'Side fixture task'});expect(createdTab.getAttribute('aria-selected')).toBe('true');expect(createdTab.closest('.pane-grid-group')?.querySelector('[role="tablist"]')?.getAttribute('aria-label')).toBe('Side pane workspaces');expect(document.querySelector('.side-session-view')?.classList.contains('new-tab-view')).toBe(false);expect(document.querySelector('.side-session-view')?.classList.contains('session-entering')).toBe(true);expect(document.querySelector('.side-session-view .conversation')?.textContent).toContain('fixture prompt');expect(payload).toMatchObject({message:'fixture prompt',attachments:[{name:'side.txt',type:'text/plain'}]});
-  });
-  it('restores the split draft when session creation fails',async()=>{
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{if(path==='/api/tasks')throw new Error('fixture create failure');return isSnapshotRoute(path)?fixture as any:{} as any;});render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));const source=Array.from(document.querySelectorAll('.document-tabs .document-tab')).at(-1)!;const tabId=(source as HTMLElement).dataset.sessionTab!;const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?tabId:'')};fireEvent.dragStart(source,{dataTransfer:transfer});const workspace=document.querySelector('.workspace-content')!;vi.spyOn(workspace,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(document.querySelector('.task-view')!,{dataTransfer:transfer,clientX:990});const side=document.querySelector('.side-session-view') as HTMLElement;const editor=EditorView.findFromDOM(within(side).getByRole('textbox',{name:'Task message'}) as HTMLElement)!;act(()=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:'retry this prompt'}}));fireEvent.click(within(side).getByRole('button',{name:'Send task'}));await waitFor(()=>expect(screen.getByRole('alert').textContent).toContain('fixture create failure'));expect(EditorView.findFromDOM(within(side).getByRole('textbox',{name:'Task message'}) as HTMLElement)?.state.doc.toString()).toBe('retry this prompt');expect(side.classList.contains('new-tab-view')).toBe(true);expect(screen.getByRole('tablist',{name:'Side pane workspaces'}).textContent).toContain('New session');
-  });
-  it('scrolls each split conversation independently and follows side updates only near the bottom',async()=>{
-    const now=new Date().toISOString();const makeTask=(id:string,title:string)=>({id,title,phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',messages:[{id:`${id}-message-1`,role:'user',text:`${title} initial message`,createdAt:now}],passes:[]}) as any;const taskA=makeTask('scroll-task-a','Scroll A'),taskB=makeTask('scroll-task-b','Scroll B');const data={...fixture,state:{...fixture.state,tasks:[taskA,taskB],activeTaskId:taskA.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...data,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?data as any:{} as any);
-    render(<App/>);await screen.findByRole('tab',{name:'Scroll A'});fireEvent.click(document.querySelectorAll('.session-row .task-nav')[1]);await screen.findByRole('tab',{name:'Scroll B'});const source=document.querySelector('[data-session-tab="scroll-task-a"]')!;const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?'scroll-task-a':'')};fireEvent.dragStart(source,{dataTransfer:transfer});const workspace=document.querySelector('.workspace-content')!;vi.spyOn(workspace,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(document.querySelector('.task-view')!,{dataTransfer:transfer,clientX:990});const rootConversation=document.querySelector('.task-view .conversation') as HTMLElement;const sideConversation=document.querySelector('.side-session-view .conversation') as HTMLElement;let rootTop=800,sideTop=100,sideHeight=1600;Object.defineProperties(rootConversation,{scrollHeight:{configurable:true,get:()=>2000},clientHeight:{configurable:true,get:()=>500},scrollTop:{configurable:true,get:()=>rootTop,set:value=>{rootTop=value;}}});Object.defineProperties(sideConversation,{scrollHeight:{configurable:true,get:()=>sideHeight},clientHeight:{configurable:true,get:()=>500},scrollTop:{configurable:true,get:()=>sideTop,set:value=>{sideTop=value;}}});fireEvent.scroll(rootConversation);fireEvent.scroll(sideConversation);const publish=(task:typeof taskA)=>act(()=>eventSource.onmessage({data:JSON.stringify({state:{...data.state,tasks:[task,taskB],activeTaskId:taskB.id},runtime:fixture.runtime})}));const firstUpdate={...taskA,messages:[...taskA.messages,{id:'scroll-task-a-message-2',role:'user',text:'new side content while reading history',createdAt:new Date(Date.now()+1000).toISOString()}]};sideHeight=1700;publish(firstUpdate);await waitFor(()=>expect(screen.getByText('new side content while reading history')).toBeTruthy());expect(sideTop).toBe(100);expect(rootTop).toBe(800);sideTop=1300;sideHeight=1800;fireEvent.scroll(sideConversation);const secondUpdate={...firstUpdate,messages:[...firstUpdate.messages,{id:'scroll-task-a-message-3',role:'user',text:'new side content while at bottom',createdAt:new Date(Date.now()+2000).toISOString()}]};publish(secondUpdate);await waitFor(()=>expect(screen.getByText('new side content while at bottom')).toBeTruthy());expect(sideTop).toBe(1800);expect(rootTop).toBe(800);
-  });
-  it('keeps the user-selected tab active when a pending create resolves in another tab',async()=>{
-    const apiMod=await import('../src/ui/api.js');const now=new Date().toISOString();const created={id:'task-from-root-draft',title:'Created while switched',phase:'intake',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',messages:[{id:'created-message',role:'user',text:'pending fixture prompt',createdAt:now}],passes:[]} as any;const updated={...fixture,state:{...fixture.state,tasks:[created],activeTaskId:created.id}};let createStarted=false;let resolveCreate:(value:any)=>void=()=>{};vi.mocked(apiMod.api).mockImplementation((async(path:string)=>{if(path==='/api/tasks'){createStarted=true;return new Promise(resolve=>{resolveCreate=resolve;}) as any;}if(isSnapshotRoute(path))return updated as any;return {} as any;}) as any);
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));const tabs=screen.getAllByRole('tab',{name:'New session'});fireEvent.click(tabs[0]);const editor=EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)!;act(()=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:'pending fixture prompt'}}));fireEvent.click(screen.getByRole('button',{name:'Send task'}));await waitFor(()=>expect(createStarted).toBe(true));fireEvent.click(screen.getAllByRole('tab',{name:'New session'})[1]);const stillSelected=screen.getAllByRole('tab',{name:'New session'})[1];expect(stillSelected.getAttribute('aria-selected')).toBe('true');await act(async()=>{resolveCreate(created);await Promise.resolve();});await waitFor(()=>expect(screen.getByRole('tab',{name:'Created while switched'})).toBeTruthy());expect(screen.getByRole('tab',{name:'New session'}).getAttribute('aria-selected')).toBe('true');expect(screen.getByRole('tab',{name:'Created while switched'}).closest('.document-tab')?.classList.contains('session-arrived')).toBe(true);
-  });
-  it('opens the side pane on the dragged tab half',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?'new:0':'')};fireEvent.dragStart(document.querySelector('.document-tab')!,{dataTransfer:transfer});const content=document.querySelector('.workspace-content')!;vi.spyOn(content,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);const drop=new Event('drop',{bubbles:true,cancelable:true});Object.defineProperties(drop,{clientX:{value:10},dataTransfer:{value:transfer}});fireEvent(content,drop);await waitFor(()=>expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(2));expect(screen.getByRole('tablist',{name:'Side pane workspaces'})).toBeTruthy();
-  });
-  it('keeps a new-session draft visible when its tab is dragged into the side pane',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});const editor=EditorView.findFromDOM(screen.getByRole('textbox',{name:'Task message'}) as HTMLElement)!;act(()=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:'draft stays with this tab'}}));const source=document.querySelector('.document-tab')!;const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?'new:0':'')};fireEvent.dragStart(source,{dataTransfer:transfer});const content=document.querySelector('.workspace-content')!;vi.spyOn(content,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(content,{dataTransfer:transfer,clientX:990});await waitFor(()=>expect(document.querySelector('.side-session-view')?.textContent).toContain('draft stays with this tab'));expect(document.querySelector('.workspace-content')?.classList.contains('has-side-session')).toBe(true);
-  });
-  it('keeps a side pane until its last tab closes and then removes the empty pane',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});const transfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?'new:0':'')};fireEvent.dragStart(document.querySelector('.document-tab')!,{dataTransfer:transfer});const splitTarget=document.querySelector('.workspace-content')!;vi.spyOn(splitTarget,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(splitTarget,{dataTransfer:transfer,clientX:990});await waitFor(()=>expect(document.querySelector('.side-session-view')).toBeTruthy());const editors=screen.getAllByRole('textbox',{name:'Task message'}).map(el=>EditorView.findFromDOM(el as HTMLElement)!);expect(editors).toHaveLength(2);act(()=>editors[1].dispatch({changes:{from:0,to:editors[1].state.doc.length,insert:'side-only draft'}}));expect(editors[0].state.doc.toString()).toBe('');const fileInputs=screen.getAllByLabelText('Choose files to attach');fireEvent.change(fileInputs[1],{target:{files:[new File(['isolated test'],'side.txt',{type:'text/plain'})]}});await waitFor(()=>expect(document.querySelector('.side-session-view .pending-attachments')?.textContent).toContain('side.txt'));fireEvent.click(screen.getByRole('button',{name:'New session in side pane'}));const sideList=screen.getByRole('tablist',{name:'Side pane workspaces'});expect(within(sideList).getAllByRole('tab',{name:'New session'})).toHaveLength(2);const movedTab=within(sideList).getAllByRole('tab',{name:'New session'}).at(-1)!.closest('.document-tab')!;const movingData={setData:vi.fn(),getData:vi.fn(),types:['application/x-opnex-session-tab']};fireEvent.dragStart(movedTab,{dataTransfer:movingData});const movingId=movingData.setData.mock.calls[0]?.[1];movingData.getData.mockImplementation((type:string)=>type==='application/x-opnex-session-tab'?movingId:'');const mainTarget=document.querySelector('.document-tabs .document-tab')!;fireEvent.dragOver(mainTarget,{dataTransfer:movingData,types:['application/x-opnex-session-tab']});fireEvent.drop(mainTarget,{dataTransfer:movingData});await waitFor(()=>expect(within(sideList).getAllByRole('tab',{name:'New session'})).toHaveLength(1));expect(EditorView.findFromDOM(within(document.querySelector('.side-session-view')!).getByRole('textbox',{name:'Task message'}) as HTMLElement)?.state.doc.toString()).toBe('side-only draft');fireEvent.click(within(sideList).getByRole('button',{name:'Close New session tab'}));await waitFor(()=>expect(document.querySelector('.side-session-view')).toBeNull());
-  });
-  it('creates three adjacent groups from both content halves and prunes the last group',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));fireEvent.click(screen.getByRole('button',{name:'Open new session tab'}));
-    const workspace=document.querySelector('.workspace-content')!;vi.spyOn(workspace,'getBoundingClientRect').mockReturnValue({left:0,right:1600,top:0,bottom:900,width:1600,height:900,x:0,y:0,toJSON:()=>({})} as DOMRect);
-    const drag=(source:HTMLElement,target:HTMLElement,x:number)=>{let id='';const transfer={setData:vi.fn((_type:string,value:string)=>{id=value;}),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?id:''),types:['application/x-opnex-session-tab']};fireEvent.dragStart(source,{dataTransfer:transfer});fireEvent.drop(target,{dataTransfer:transfer,clientX:x});};
-    const rootTabs=()=>Array.from(document.querySelectorAll('.document-tabs .document-tab')) as HTMLElement[];
-    const rootPane=document.querySelector('.task-view') as HTMLElement;vi.spyOn(rootPane,'getBoundingClientRect').mockReturnValue({left:0,right:800,top:0,bottom:900,width:800,height:900,x:0,y:0,toJSON:()=>({})} as DOMRect);
-    drag(rootTabs()[0],rootPane,10);await waitFor(()=>expect(document.querySelectorAll('.session-pane')).toHaveLength(1));
-    const splitTarget=document.querySelector('.session-pane') as HTMLElement;vi.spyOn(splitTarget,'getBoundingClientRect').mockReturnValue({left:800,right:1600,top:0,bottom:900,width:800,height:900,x:800,y:0,toJSON:()=>({})} as DOMRect);
-    drag(rootTabs()[0],splitTarget,1500);await waitFor(()=>expect(document.querySelectorAll('.session-pane')).toHaveLength(2));
-    expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(3);
-    const editors=screen.getAllByRole('textbox',{name:'Task message'}).map(element=>EditorView.findFromDOM(element as HTMLElement)!);act(()=>editors.forEach((editor,index)=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:`pane draft ${index}`}})));
-    const lastGroup=document.querySelectorAll('.pane-grid-group')[2];fireEvent.click(within(lastGroup as HTMLElement).getByRole('button',{name:'Close New session tab'}));await waitFor(()=>expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(2));
-    expect(screen.getAllByRole('textbox',{name:'Task message'}).map(element=>EditorView.findFromDOM(element as HTMLElement)?.state.doc.toString())).toEqual(expect.arrayContaining(['pane draft 0','pane draft 1']));
-  });
-  it('reorders real session tabs and opens a dragged task in the side pane',async()=>{
-    const now=new Date().toISOString();const makeTask=(id:string,title:string)=>({id,title,phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',messages:[{id:`m-${id}`,role:'user',text:title,createdAt:now}],passes:[]});const tasks=[makeTask('task-a','Alpha session'),makeTask('task-b','Beta session')];const data={...fixture,state:{...fixture.state,tasks,activeTaskId:'task-a'}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...data,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?data as any:{} as any);
-    render(<App/>);await screen.findByRole('tab',{name:'Alpha session'});fireEvent.click(document.querySelectorAll('.session-row .task-nav')[1]);await screen.findByRole('tab',{name:'Beta session'});
-    const second=screen.getByRole('tab',{name:'Beta session'}).closest('.document-tab') as HTMLElement;const dataTransfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-session-tab'?'task-b':''),types:['application/x-opnex-session-tab']};fireEvent.dragStart(second,{dataTransfer});const content=document.querySelector('.workspace-content')!;vi.spyOn(content,'getBoundingClientRect').mockReturnValue({left:0,right:1000,top:0,bottom:700,width:1000,height:700,x:0,y:0,toJSON:()=>({})} as DOMRect);fireEvent.drop(content,{dataTransfer,clientX:990});await waitFor(()=>expect(document.querySelector('.side-session-view')?.textContent).toContain('Beta session'));expect(screen.getByRole('tab',{name:'Alpha session'}).getAttribute('aria-selected')).toBe('true');
-    fireEvent.dragStart(screen.getByRole('tab',{name:'Beta session'}).closest('.document-tab')!,{dataTransfer});const mainTarget=screen.getByRole('tab',{name:'Alpha session'}).closest('.document-tab')!;fireEvent.dragOver(mainTarget,{dataTransfer});fireEvent.drop(mainTarget,{dataTransfer});await waitFor(()=>expect(document.querySelector('.side-session-view')).toBeNull());expect(screen.getByRole('tab',{name:'Beta session'}).getAttribute('aria-selected')).toBe('true');
-    const first=screen.getByRole('tab',{name:'Alpha session'}).closest('.document-tab')!;const target=screen.getByRole('tab',{name:'Beta session'}).closest('.document-tab')!;const reorderTransfer={setData:vi.fn(),getData:vi.fn(()=> 'task-a')};fireEvent.dragStart(first,{dataTransfer:reorderTransfer});fireEvent.drop(target,{dataTransfer:reorderTransfer});expect(Array.from(document.querySelectorAll('.document-tab')).map(node=>node.textContent).slice(0,2)).toEqual(['Alpha session','Beta session']);
-  });
-  it('opens an agent-requested browser as a peer workspace and preserves the session tab',async()=>{
-    const now=new Date().toISOString();const task={id:'task-docked',title:'Docked task',phase:'worker_running',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:'pass-docked',workspaceCommand:{id:'cmd-1',mode:'browser',placement:'side',url:'https://github.com/openai/codex',createdAt:now},messages:[{id:'msg-docked',role:'user',text:'Keep working here',createdAt:now}],passes:[]} as any;const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
-    const bridge=nativeWorkspaceBridge();(window as any).opnexDesktop={browser:bridge};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);expect(await screen.findByText('Keep working here')).toBeTruthy();await waitFor(()=>expect(document.querySelector('.browser-peer-tab')).toBeTruthy());await waitFor(()=>expect(bridge.workspaceOpen).toHaveBeenCalledWith(expect.stringMatching(/^browser:/),'https://github.com/openai/codex'));expect(document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')).toBeTruthy();expect(screen.getByRole('tab',{name:'Docked task'})).toBeTruthy();expect(document.querySelector('.conversation')?.textContent).toContain('Keep working here');expect(document.querySelector('.workspace-content.mode-tasks.has-docked-workspace')).toBeNull();
-  });
-  it('navigates, hides, and restores its native Browser peer view',async()=>{
-    const bridge=nativeWorkspaceBridge();(window as any).opnexDesktop={browser:bridge};
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(document.querySelector('.activity-rail [aria-label="Browser"]')!);
-    const browserTab=await waitFor(()=>{const value=document.querySelector('.browser-peer-tab') as HTMLElement|null;if(!value)throw new Error('Browser tab not opened');return value;});const workspaceId=browserTab.dataset.workspaceTab!;await waitFor(()=>expect(bridge.workspaceOpen).toHaveBeenCalledWith(workspaceId,'https://www.google.com/'));
-    const address=await screen.findByRole('combobox',{name:'Website address'});fireEvent.change(address,{target:{value:'https://example.com/fixture'}});fireEvent.click(screen.getByRole('button',{name:'Go'}));await waitFor(()=>expect(bridge.workspaceNavigate).toHaveBeenCalledWith(workspaceId,{url:'https://example.com/fixture'}));
-    fireEvent.click(document.querySelector('.document-tabs [role="tab"][aria-label="New session"]')!);await waitFor(()=>expect(bridge.workspaceSetBounds).toHaveBeenCalledWith(workspaceId,null,false));
-    fireEvent.click(document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')!);await waitFor(()=>expect(bridge.workspaceSetBounds).toHaveBeenCalledWith(workspaceId,null,true));expect((screen.getByRole('combobox',{name:'Website address'}) as HTMLInputElement).value).toBe('https://example.com/fixture');expect(document.querySelector('.workspace-content .browser-peer-tab .native-browser-page')).toBeTruthy();
-  });
-  it('opens a dragged Browser shortcut as a separate workspace tab without replacing the session',async()=>{
-    const now=new Date().toISOString();const task={id:'task-drag-docked',title:'Drag a workspace',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:'pass-drag',messages:[{id:'msg-drag',role:'user',text:'Keep this chat visible',createdAt:now}],passes:[]} as any;const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
-    const bridge=nativeWorkspaceBridge();(window as any).opnexDesktop={browser:bridge};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);expect(await screen.findByText('Keep this chat visible')).toBeTruthy();const dataTransfer={setData:vi.fn(),getData:vi.fn((type:string)=>type==='application/x-opnex-workspace'?'browser':'')};fireEvent.dragStart(screen.getByRole('tab',{name:'Browser'}),{dataTransfer});fireEvent.drop(document.querySelector('.workspace-content')!,{dataTransfer,clientX:1000});await waitFor(()=>expect(document.querySelector('.browser-peer-tab')).toBeTruthy());expect(document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')).toBeTruthy();expect(screen.getByRole('tab',{name:'Drag a workspace'})).toBeTruthy();expect(document.querySelector('.conversation')?.textContent).toContain('Keep this chat visible');expect(document.querySelector('.workspace-content.mode-tasks.has-docked-workspace')).toBeNull();
-  });
-  it('opens the local Git workspace in a peer tab without opening github.com',async()=>{
-    const now=new Date().toISOString();const task={id:'task-github-docked',title:'GitHub side view',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:'pass-gh',workspaceCommand:{id:'cmd-gh',mode:'github',placement:'side',url:'https://github.com/example/repo',createdAt:now},messages:[{id:'msg-gh',role:'user',text:'Review the branch',createdAt:now}],passes:[]} as any;const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
-    const bridge=nativeWorkspaceBridge();(window as any).opnexDesktop={browser:bridge};
-    const workspace={available:true,authorizedRoot:'D:/workspace/demo',repositoryRoot:'D:/workspace/demo',currentBranch:'feature',branches:[{name:'feature',hash:'abc12345',current:true,remote:false}],branchPage:{offset:0,pageSize:100,totalCount:1,hasMore:false,nextOffset:null},worktrees:[],commits:[],history:{offset:0,pageSize:100,hasMore:false,nextOffset:null},github:{available:true,authenticated:false,detail:'Sign in with GitHub CLI to view repository data.'}};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:path.startsWith('/api/git-workspace?projectId=')?workspace as any:path.startsWith('/api/github?projectId=')?workspace.github as any:{} as any);
-    render(<App/>);expect(await screen.findByText('Review the branch')).toBeTruthy();expect((await screen.findAllByText('feature')).length).toBeGreaterThan(0);expect(document.querySelector('.document-tabs [role="tab"][aria-label="Git"]')).toBeTruthy();expect(screen.getByRole('tab',{name:'GitHub side view'})).toBeTruthy();expect(screen.getByRole('button',{name:/Sign in with GitHub/})).toBeTruthy();expect(bridge.workspaceOpen).not.toHaveBeenCalled();expect(document.querySelector('.conversation')?.textContent).toContain('Review the branch');expect(document.querySelector('.workspace-content.mode-tasks.has-docked-workspace')).toBeNull();
-  });
-  it('sends a user-confirmed page annotation through the ordinary follow-up message path',async()=>{
-    const now=new Date().toISOString();const task={id:'annotation-task',title:'Page review',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:'annotation-pass',messages:[{id:'annotation-user',role:'user',text:'Review this page',createdAt:now}],passes:[]} as any;const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};let receiveBrowserEvent:(event:any)=>void=()=>{};const bridge=nativeWorkspaceBridge();bridge.onEvent.mockImplementation((callback:(event:any)=>void)=>{receiveBrowserEvent=callback;return()=>{};});(window as any).opnexDesktop={browser:bridge};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(document.querySelector('.activity-rail [aria-label="Browser"]')!);const browserHost=await waitFor(()=>{const value=document.querySelector('.browser-peer-tab') as HTMLElement|null;if(!value)throw new Error('Browser tab not opened');return value;});const workspaceId=browserHost.dataset.workspaceTab!;await waitFor(()=>expect(bridge.workspaceOpen).toHaveBeenCalledWith(workspaceId,'https://www.google.com/'));fireEvent.click(await screen.findByRole('button',{name:'Commenting'}));await waitFor(()=>expect(bridge.workspaceSetCommenting).toHaveBeenCalledWith(workspaceId,true));receiveBrowserEvent({type:'annotation',workspaceId,tabs:[],tab:{id:workspaceId,workspaceId,url:'https://example.com/docs',title:'Documentation'},annotation:{url:'https://example.com/docs',title:'Documentation',target:'h2 Highlights',selectedText:'A selected paragraph'}});
-    fireEvent.change(await screen.findByRole('textbox',{name:'Add a comment'}),{target:{value:'Check this section.'}});fireEvent.click(screen.getByRole('button',{name:'Add to message'}));const editor=EditorView.findFromDOM(await screen.findByRole('textbox',{name:'Task message'}) as HTMLElement)!;await waitFor(()=>expect(editor.state.doc.toString()).toContain('User comment: Check this section.'));expect(editor.state.doc.toString()).toContain('A selected paragraph');
-    fireEvent.click(screen.getByRole('button',{name:'Send task'}));await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([route,body])=>route==='/api/tasks/annotation-task/messages'&&String((body as any)?.message).includes('User comment: Check this section.'))).toBe(true));
-  });
-  it('opens each current pass role through the legacy desktop bridge',async()=>{
-    const now=new Date().toISOString();
-    const pass={id:'pass-session-links',index:1,createdAt:now,userInput:'Inspect the work',userInputs:['Inspect the work'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',correctionCount:0,routerThreadId:'isolated-router-thread',directThreadId:'direct-thread-current',simpleThreadId:'simple-thread-current',orchestratorThreadId:'orchestrator-thread-1',workerThreadId:'worker-thread-current',processedTurns:[]};
-    const task={id:'task-session-links',title:'Session links',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,orchestratorThreadId:'stale-orchestrator-thread',workerThreadId:'stale-worker-thread',passes:[pass],messages:[{id:'u1',role:'user',text:'Inspect the work',createdAt:now,passId:pass.id}]};
-    const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
-    const openCodexThread=vi.fn().mockResolvedValue(true);(window as any).pseudoharnessDesktop={openCodexThread};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);
-    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);render(<App/>);await screen.findByRole('tab',{name:/Session links/});fireEvent.click(screen.getByRole('button',{name:'Heads-up'}));fireEvent.click(await screen.findByRole('button',{name:/Current sessions/}));
-    const routerLink=within(screen.getByRole('complementary',{name:'Heads-up panel'})).getByRole('link',{name:'Open Router session in Codex'});expect(routerLink.getAttribute('href')).toBe('codex://threads/isolated-router-thread');fireEvent.click(routerLink);expect(openCodexThread).toHaveBeenCalledWith('isolated-router-thread');
-    const orchestratorLink=screen.getByRole('link',{name:'Open Orchestrator session in Codex'});expect(orchestratorLink.getAttribute('href')).toBe('codex://threads/orchestrator-thread-1');fireEvent.click(orchestratorLink);expect(openCodexThread).toHaveBeenCalledWith('orchestrator-thread-1');
-    const directLink=screen.getByRole('link',{name:'Open Direct answer session in Codex'});expect(directLink.getAttribute('href')).toBe('codex://threads/direct-thread-current');fireEvent.click(directLink);expect(openCodexThread).toHaveBeenCalledWith('direct-thread-current');
-    const simpleLink=screen.getByRole('link',{name:'Open Simple implementation session in Codex'});expect(simpleLink.getAttribute('href')).toBe('codex://threads/simple-thread-current');fireEvent.click(simpleLink);expect(openCodexThread).toHaveBeenCalledWith('simple-thread-current');
-    const workerLink=screen.getByRole('link',{name:'Open Worker session in Codex'});expect(workerLink.getAttribute('href')).toBe('codex://threads/worker-thread-current');fireEvent.click(workerLink);expect(openCodexThread).toHaveBeenCalledWith('worker-thread-current');expect(openCodexThread).toHaveBeenCalledTimes(5);
-    expect(screen.getByText('isolated-router-thread')).toBeTruthy();expect(screen.getByText('direct-thread-current')).toBeTruthy();expect(screen.getByText('simple-thread-current')).toBeTruthy();expect(screen.getByText('orchestrator-thread-1')).toBeTruthy();expect(screen.getByText('worker-thread-current')).toBeTruthy();
-  });
-  it('browses folders, applies the selected canonical path and saves the project-owned working directory without global settings',async()=>{
-    const apiMod=await import('../src/ui/api.js');
-    vi.mocked(apiMod.api).mockImplementation(async(path:string,body?:any)=>{
-      if(isSnapshotRoute(path))return fixture as any;
-      if(path.startsWith('/api/directories'))return path.includes('chosen')?{path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[{name:'nested',path:'D:/workspace/demo/chosen/nested'}],truncated:false} as any:{path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;
-      if(path==='/api/projects')return {project:{...demoProject,projectRoot:body?.projectRoot||demoProject.projectRoot},duplicate:false} as any;
-      return {} as any;
-    });
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));
-    const root=screen.getByRole('textbox',{name:/Working directory/}) as HTMLInputElement;expect(root.readOnly).toBe(true);
-    fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));
-    await screen.findByText('chosen');expect(root.value).toBe('D:/workspace/demo');const row=document.querySelector('.directory-entry-row')!;const arrow=row.querySelector('.directory-entry-expand')!;const folder=row.querySelector('.directory-entry-select')!;expect(arrow.compareDocumentPosition(folder)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();fireEvent.click(folder);expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();expect(screen.getByRole('button',{name:'Collapse chosen'}).getAttribute('aria-expanded')).toBe('true');fireEvent.click(arrow);expect(screen.getByRole('button',{name:'Expand chosen'}).getAttribute('aria-expanded')).toBe('false');expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();
-    fireEvent.click(await screen.findByRole('button',{name:'Use this folder'}));
-    await waitFor(()=>expect(root.value).toBe('D:/workspace/demo/chosen'));
-    expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>String(url).startsWith('/api/directories?path='))).toBe(true);
-    fireEvent.click(screen.getByRole('button',{name:'Save workspace'}));
-    await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url,body])=>url==='/api/projects'&&(body as any).projectRoot==='D:/workspace/demo/chosen')).toBe(true));
-  });
-  it('keeps the project root unchanged when browsing is cancelled and reports browse errors',async()=>{
-    const apiMod=await import('../src/ui/api.js');
-    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{
-      if(isSnapshotRoute(path))return fixture as any;
-      if(path.startsWith('/api/directories'))throw Error('You do not have permission to browse that folder.');
-      return {} as any;
-    });
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));
-    const root=screen.getByRole('textbox',{name:/Working directory/}) as HTMLInputElement;expect(root.readOnly).toBe(true);
-    fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));const path=await screen.findByRole('textbox',{name:'Folder path'});fireEvent.change(path,{target:{value:'D:/manual/path'}});
-    expect((await screen.findByRole('alert')).textContent).toContain('You do not have permission');
-    expect((screen.getByRole('button',{name:'Use this folder'}) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));await waitFor(()=>expect(root.value).toBe('D:/workspace/demo'));
-  });
-  it('requires a final directory validation and reports failure without accepting a stale listing',async()=>{
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{
-      if(isSnapshotRoute(url))return fixture as any;
-      if(url.startsWith('/api/directories?resolve=1'))throw Error('That folder does not exist or is not a directory.');
-      if(url.startsWith('/api/directories?path=')&&decodeURIComponent(url.split('?path=')[1]).endsWith('/chosen'))return {path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[],truncated:false} as any;
-      if(url.startsWith('/api/directories'))return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;
-      return {} as any;
-    });
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));const root=screen.getByRole('textbox',{name:/Working directory/}) as HTMLInputElement;fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));await screen.findByText('chosen');fireEvent.click(document.querySelector('.directory-entry-select')!);fireEvent.click(screen.getByRole('button',{name:'Use this folder'}));expect((await screen.findByRole('alert')).textContent).toContain('does not exist');expect(screen.getByRole('img',{name:'No subfolders in chosen'})).toBeTruthy();expect(root.value).toBe('D:/workspace/demo');expect(screen.getByRole('dialog',{name:'Choose a folder'})).toBeTruthy();
-  });
-  it('shows the folder chooser as a dialog and closes it with Escape without changing the root',async()=>{
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.api).mockImplementation(async(path:string)=>path.startsWith('/api/directories')?{path:'D:/workspace/demo',parent:'D:/workspace',entries:[],truncated:false} as any:isSnapshotRoute(path)?fixture as any:{} as any);
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));const root=screen.getByRole('textbox',{name:/Working directory/}) as HTMLInputElement;
-    const browse=screen.getByRole('button',{name:/Browse workspace folders/});fireEvent.click(browse);const picker=await screen.findByRole('dialog',{name:'Choose a folder'});expect(picker).toBeTruthy();expect(browse.getAttribute('aria-expanded')).toBe('true');
-    fireEvent.keyDown(screen.getByRole('textbox',{name:'Folder path'}),{key:'Escape'});await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());expect(root.value).toBe('D:/workspace/demo');await waitFor(()=>expect(document.activeElement).toBe(browse));
-  });
-  it('selects folders immediately and keeps cancel responsive during final path validation',async()=>{
-    const apiMod=await import('../src/ui/api.js');let finishValidation:(value:any)=>void=()=>{};
-    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{
-      if(isSnapshotRoute(path))return fixture as any;
-      if(path.startsWith('/api/directories?resolve=1'))return await new Promise(resolve=>{finishValidation=resolve;}) as any;
-      if(path.startsWith('/api/directories?path=')&&decodeURIComponent(path.split('?path=')[1]).endsWith('/chosen'))return {path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[],truncated:false} as any;
-      if(path.startsWith('/api/directories'))return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;
-      return {} as any;
-    });
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));
-    await screen.findByText('chosen');fireEvent.click(document.querySelector('.directory-entry-select')!);
-    const list=document.querySelector('.directory-picker-list') as HTMLElement;expect(list.classList.contains('is-loading')).toBe(false);expect(list.getAttribute('aria-busy')).toBe('false');expect((document.querySelector('.directory-entry-select') as HTMLButtonElement).disabled).toBe(false);expect((screen.getByRole('button',{name:'Cancel folder selection'}) as HTMLButtonElement).disabled).toBe(false);expect(screen.getByRole('button',{name:'Use this folder'}).hasAttribute('disabled')).toBe(false);expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button',{name:'Use this folder'}));expect(await screen.findByRole('button',{name:'Checking folder…'})).toBeTruthy();expect((screen.getByRole('button',{name:'Cancel folder selection'}) as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());await act(async()=>finishValidation({path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[],truncated:false}));expect((screen.getByRole('textbox',{name:/Working directory/}) as HTMLInputElement).value).toBe('D:/workspace/demo');
-  });
-  it('shows a folder-specific read error and retries its lazy expansion',async()=>{
-    const apiMod=await import('../src/ui/api.js');let attempts=0;
-    vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{
-      if(isSnapshotRoute(url))return fixture as any;
-      if(url.startsWith('/api/directories')){const path=decodeURIComponent(url.split('?path=')[1]||'');if(path.endsWith('/chosen')){attempts++;if(attempts===1)throw Error('You do not have permission to browse that folder.');return {path,parent:'D:/workspace/demo',entries:[{name:'nested',path:path+'/nested'}],truncated:false} as any;}return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;}
-      return {} as any;
-    });
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));await screen.findByText('chosen');fireEvent.click(screen.getByRole('button',{name:'Expand chosen'}));expect((await screen.findByRole('alert')).textContent).toContain('permission to browse');fireEvent.click(screen.getByRole('button',{name:'Retry'}));expect(await screen.findByText('nested')).toBeTruthy();expect(attempts).toBe(2);
-  });
-  it('ignores a late tree response after the picker is cancelled',async()=>{
-    const apiMod=await import('../src/ui/api.js');let finishExpand:(value:any)=>void=()=>{};
-    vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{
-      if(isSnapshotRoute(url))return fixture as any;
-      if(url.startsWith('/api/directories')){const path=decodeURIComponent(url.split('?path=')[1]||'');if(path.endsWith('/chosen'))return await new Promise(resolve=>{finishExpand=resolve;}) as any;return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;}
-      return {} as any;
-    });
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));const root=screen.getByRole('textbox',{name:/Working directory/}) as HTMLInputElement;fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));await screen.findByText('chosen');fireEvent.click(screen.getByRole('button',{name:'Expand chosen'}));expect((screen.getByRole('button',{name:'Cancel folder selection'}) as HTMLButtonElement).disabled).toBe(false);fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());await act(async()=>finishExpand({path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[{name:'late',path:'D:/workspace/demo/chosen/late'}],truncated:false}));expect(root.value).toBe('D:/workspace/demo');
-  });
-  it('expands nested folders inline from the row, keeps the arrow independent, and pages large listings',async()=>{
-    const apiMod=await import('../src/ui/api.js');
-    vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{
-      if(isSnapshotRoute(url))return fixture as any;
-      if(url.startsWith('/api/directories')){
-        const path=decodeURIComponent(url.split('?path=')[1]||'');
-        if(path==='D:/workspace/demo')return {path,parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;
-        if(path.endsWith('/chosen'))return {path,parent:'D:/workspace/demo',entries:[{name:'nested',path:path+'/nested'}],truncated:false} as any;
-        if(path.endsWith('/nested'))return {path,parent:path.slice(0,path.lastIndexOf('/')),entries:[{name:'deep',path:path+'/deep'}],truncated:false} as any;
-        return {path,parent:null,entries:[],truncated:false} as any;
+  it('creates a workspace named from its folder and starts a session without an external knowledge service', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let liveState: any = structuredClone(noProjectsFixture.state),
+      submitted: any;
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...noProjectsFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string, body: any) => {
+      if (isSnapshotRoute(path)) return { state: liveState, runtime: fixture.runtime } as any;
+      if (path.startsWith('/api/directories?resolve=1'))
+        return {
+          path: 'D:/projects/new',
+          parent: 'D:/projects',
+          entries: [],
+          truncated: false,
+        } as any;
+      if (path.startsWith('/api/directories'))
+        return {
+          path: 'D:/projects/new',
+          parent: 'D:/projects',
+          entries: [],
+          truncated: false,
+        } as any;
+      if (path === '/api/projects') {
+        const project = {
+          ...demoProject,
+          id: body.id,
+          name: body.projectRoot
+            .split(/[\\/]+/)
+            .filter(Boolean)
+            .at(-1),
+          projectRoot: body.projectRoot,
+        };
+        liveState = {
+          ...liveState,
+          projects: [project],
+          selectedProjectId: project.id,
+          expandedProjectIds: [project.id, 'unclassified'],
+        };
+        return { project, duplicate: false } as any;
+      }
+      if (path === '/api/projects/select') {
+        liveState = { ...liveState, selectedProjectId: body.projectId };
+        return {} as any;
+      }
+      if (path === '/api/tasks') {
+        submitted = body;
+        return {
+          id: 'new-session',
+          title: body.message,
+          phase: 'routing',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          projectId: body.projectId,
+          userRoot: 'D:/projects/new',
+          messages: [],
+          passes: [],
+        } as any;
       }
       return {} as any;
     });
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));
-    await screen.findByText('chosen');const chosen=[...document.querySelectorAll<HTMLButtonElement>('.directory-entry-select')].find(button=>button.textContent?.includes('chosen'))!;fireEvent.click(chosen);await waitFor(()=>expect(chosen.getAttribute('aria-pressed')).toBe('true'));expect(screen.getByRole('button',{name:'Collapse chosen'}).getAttribute('aria-expanded')).toBe('true');expect(await screen.findByText('nested')).toBeTruthy();fireEvent.click(chosen);expect(screen.queryByText('nested')).toBeNull();expect(screen.getByRole('button',{name:'Expand chosen'}).getAttribute('aria-expanded')).toBe('false');expect(chosen.getAttribute('aria-pressed')).toBe('true');fireEvent.click(chosen);expect(await screen.findByText('nested')).toBeTruthy();expect(screen.getByRole('button',{name:'Collapse chosen'}).getAttribute('aria-expanded')).toBe('true');
-    const nestedSelect=[...document.querySelectorAll<HTMLButtonElement>('.directory-entry-select')].find(button=>button.textContent?.includes('nested'))!;fireEvent.click(nestedSelect);await waitFor(()=>expect(nestedSelect.getAttribute('aria-pressed')).toBe('true'));expect(screen.getByRole('button',{name:'Collapse nested'}).getAttribute('aria-expanded')).toBe('true');expect(await screen.findByText('deep')).toBeTruthy();fireEvent.click(nestedSelect);expect(screen.queryByText('deep')).toBeNull();expect(nestedSelect.getAttribute('aria-pressed')).toBe('true');fireEvent.click(screen.getByRole('button',{name:'Expand nested'}));expect(await screen.findByText('deep')).toBeTruthy();expect((screen.getByRole('button',{name:'Use this folder'}) as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Choose a folder'})).toBeNull());
-    const many=Array.from({length:500},(_,index)=>({name:`folder-${index}`,path:`D:/workspace/demo/folder-${index}`}));vi.mocked(apiMod.api).mockImplementation(async(url:string)=>url.startsWith('/api/directories')?{path:'D:/workspace/demo',parent:'D:/workspace',entries:many,truncated:false} as any:isSnapshotRoute(url)?fixture as any:{} as any);
-    fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));await waitFor(()=>expect(document.querySelectorAll('.directory-entry-select')).toHaveLength(100));fireEvent.click(screen.getByRole('button',{name:'Show 100 more folders'}));await waitFor(()=>expect(document.querySelectorAll('.directory-entry-select')).toHaveLength(200));fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
+    const createDialog = await screen.findByRole('dialog', { name: 'Create workspace' });
+    expect(within(createDialog).getByText('Choose a working directory')).toBeTruthy();
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Browse workspace folders' }));
+    await screen.findByText('D:/projects/new');
+    fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+    await waitFor(() =>
+      expect(
+        (
+          within(createDialog).getByRole('textbox', {
+            name: 'Working directory',
+          }) as HTMLInputElement
+        ).value
+      ).toBe('D:/projects/new')
+    );
+    expect(within(createDialog).getByText('new')).toBeTruthy();
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Save workspace' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Create workspace' })).toBeNull()
+    );
+    const editor = screen.getByRole('textbox', { name: 'Task message' });
+    const view = EditorView.findFromDOM(editor as HTMLElement)!;
+    act(() => view.dispatch({ changes: { from: 0, to: 0, insert: 'Start a workspace session' } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send task' }));
+    await waitFor(() =>
+      expect(submitted).toMatchObject({
+        message: 'Start a workspace session',
+        projectId: liveState.projects[0].id,
+      })
+    );
+    expect(submitted.projectId).toBeTruthy();
+    expect(
+      vi.mocked(apiMod.api).mock.calls.every(([url]) => !String(url).includes('/agentmem'))
+    ).toBe(true);
   });
-  it('keeps failed folder reads expandable and only marks a directory as a leaf after a successful empty listing',async()=>{
-    const apiMod=await import('../src/ui/api.js');let childReads=0;vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{if(isSnapshotRoute(url))return fixture as any;if(url==='/api/directories?path=D%3A%2Fworkspace%2Fdemo%2Fchosen'){childReads++;if(childReads===1)throw Error('Permission denied.');return {path:'D:/workspace/demo/chosen',parent:'D:/workspace/demo',entries:[],truncated:false} as any;}if(url.startsWith('/api/directories'))return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'chosen',path:'D:/workspace/demo/chosen'}],truncated:false} as any;return {} as any;});
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));await screen.findByText('chosen');const chosen=document.querySelector<HTMLButtonElement>('.directory-entry-select')!;fireEvent.click(chosen);expect(await screen.findByRole('alert')).toBeTruthy();expect(screen.getByRole('button',{name:'Collapse chosen'})).toBeTruthy();expect(screen.queryByRole('img',{name:'No subfolders in chosen'})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Retry'}));expect(await screen.findByRole('img',{name:'No subfolders in chosen'})).toBeTruthy();expect(screen.queryByRole('button',{name:'Expand chosen'})).toBeNull();expect(childReads).toBe(2);fireEvent.click(chosen);expect(chosen.getAttribute('aria-pressed')).toBe('true');expect(screen.getByRole('img',{name:'No subfolders in chosen'})).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));
-  });
-  it('creates a folder only inside the selected parent and leaves root settings unsaved until accepted',async()=>{
-    const apiMod=await import('../src/ui/api.js');let createAttempts=0;
-    vi.mocked(apiMod.api).mockImplementation(async(url:string,body?:any)=>{
-      if(isSnapshotRoute(url))return fixture as any;
-      if(url==='/api/directories'&&body){createAttempts++;if(createAttempts===1)throw Error('A folder or file with that name already exists. Choose another name.');return {parent:'D:/workspace/demo/Projects',entry:{name:body.name,path:`D:/workspace/demo/Projects/${body.name}`}} as any;}
-      if(url.startsWith('/api/directories?resolve=1'))return {path:'D:/workspace/demo/Projects/New workspace',parent:'D:/workspace/demo/Projects',entries:[],truncated:false} as any;
-       if(url.startsWith('/api/directories')){const path=decodeURIComponent(url.split('?path=')[1]||'');if(path==='D:/workspace/demo/Projects')return {path,parent:'D:/workspace/demo',entries:[],truncated:false} as any;return {path:'D:/workspace/demo',parent:'D:/workspace',entries:[{name:'Projects',path:'D:/workspace/demo/Projects'}],truncated:false} as any;}
-      return {} as any;
+  it('shows the multimodal picker, lets a selected image be removed, and sends attachment-only payloads', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let submitted: any;
+    vi.mocked(apiMod.api).mockImplementation(async (path: string, body: any) => {
+      if (path === '/api/tasks') submitted = body;
+      return isSnapshotRoute(path) ? (fixture as any) : ({} as any);
     });
-     render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));const root=screen.getByRole('textbox',{name:/Working directory/}) as HTMLInputElement;fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));await screen.findByText('Projects');const projects=[...document.querySelectorAll<HTMLButtonElement>('.directory-entry-select')].find(button=>button.textContent?.includes('Projects'))!;fireEvent.click(projects);expect(await screen.findByText('Selected: D:/workspace/demo/Projects')).toBeTruthy();expect(await screen.findByRole('img',{name:'No subfolders in Projects'})).toBeTruthy();expect(screen.queryByRole('button',{name:'Expand Projects'})).toBeNull();expect(projects.hasAttribute('aria-expanded')).toBe(false);fireEvent.click(projects);expect(projects.getAttribute('aria-pressed')).toBe('true');expect(screen.queryByRole('img',{name:'No subfolders in Projects'})).toBeTruthy();
-    const createButton=screen.getByRole('button',{name:/Create folder inside D:\/workspace\/demo\/Projects/});await waitFor(()=>expect(createButton.hasAttribute('disabled')).toBe(false));fireEvent.click(createButton);const name=await screen.findByRole('textbox',{name:/New folder inside/});fireEvent.change(name,{target:{value:'New workspace'}});fireEvent.click(within(document.querySelector('.directory-create-form')!).getByRole('button',{name:'Cancel'}));expect(vi.mocked(apiMod.api).mock.calls.filter(([url])=>url==='/api/directories')).toHaveLength(0);fireEvent.click(createButton);fireEvent.change(await screen.findByRole('textbox',{name:/New folder inside/}),{target:{value:'New workspace'}});fireEvent.click(screen.getByRole('button',{name:'Create'}));expect((await screen.findByRole('alert')).textContent).toContain('already exists');expect(root.value).toBe('D:/workspace/demo');expect(screen.getByRole('dialog',{name:'Choose a folder'})).toBeTruthy();
-    fireEvent.click(screen.getByRole('button',{name:'Create'}));expect(await screen.findByText('New workspace')).toBeTruthy();expect(await screen.findByText('Selected: D:/workspace/demo/Projects/New workspace')).toBeTruthy();expect(root.value).toBe('D:/workspace/demo');expect(screen.getByRole('button',{name:'Collapse Projects'}).getAttribute('aria-expanded')).toBe('true');expect(screen.getByRole('img',{name:'No subfolders in New workspace'})).toBeTruthy();expect(vi.mocked(apiMod.api).mock.calls.filter(([url])=>url==='/api/projects')).toHaveLength(0);const createCall=vi.mocked(apiMod.api).mock.calls.find(([url,body])=>url==='/api/directories'&&body!==undefined);expect(createCall?.[1]).toEqual({parent:'D:/workspace/demo/Projects',name:'New workspace'});
-    fireEvent.click(screen.getByRole('button',{name:'Use this folder'}));await waitFor(()=>expect(root.value).toBe('D:/workspace/demo/Projects/New workspace'));expect(vi.mocked(apiMod.api).mock.calls.filter(([url])=>url==='/api/projects')).toHaveLength(0);fireEvent.click(within(screen.getByRole('dialog',{name:'Configure New workspace'})).getByRole('button',{name:'Cancel'}));
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const input = screen.getByLabelText('Choose files to attach');
+    expect(input).toBeTruthy();
+    const image = new File([Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])], 'example.png', {
+      type: 'image/png',
+    });
+    fireEvent.change(input, { target: { files: [image] } });
+    await waitFor(() => expect(document.querySelector('.pending-attachments')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Remove example.png' }));
+    expect(document.querySelector('.pending-attachments')).toBeNull();
+    fireEvent.change(input, { target: { files: [image] } });
+    await waitFor(() => expect(document.querySelector('.pending-attachments')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Send task' }));
+    await waitFor(() =>
+      expect(submitted).toMatchObject({
+        message: '',
+        attachments: [{ name: 'example.png', type: 'image/png', size: 8, data: 'iVBORw0KGgo=' }],
+      })
+    );
   });
-  it('requires a browsed parent before enabling folder creation from the computer roots view',async()=>{
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.api).mockImplementation(async(url:string)=>{if(isSnapshotRoute(url))return fixture as any;if(url.startsWith('/api/directories?roots=1'))return {path:null,parent:null,entries:[],roots:['D:\\'],truncated:false} as any;if(url.startsWith('/api/directories')){const path=decodeURIComponent(url.split('?path=')[1]||'');return path==='D:\\'?{path,parent:null,entries:[{name:'workspace',path:'D:\\workspace'}],truncated:false} as any:{path:'D:\\workspace\\demo',parent:'D:\\workspace',entries:[],truncated:false} as any;}return {} as any;});
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});fireEvent.click(screen.getByRole('button',{name:'Configure workspace demo'}));fireEvent.click(screen.getByRole('button',{name:/Browse workspace folders/}));await screen.findByRole('button',{name:/Create folder inside/});fireEvent.click(screen.getByRole('button',{name:'Computer'}));const create=screen.getByRole('button',{name:'Choose a parent folder before creating a folder'});expect((create as HTMLButtonElement).disabled).toBe(true);await screen.findByText('D:\\');fireEvent.click(document.querySelector('.directory-entry-select')!);await waitFor(()=>expect(screen.getByRole('button',{name:/Create folder inside D:/}).hasAttribute('disabled')).toBe(false));fireEvent.click(screen.getByRole('button',{name:'Cancel folder selection'}));
+  it('keeps each new-session tab draft when switching and closing tabs', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const first = EditorView.findFromDOM(
+      screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    act(() =>
+      first.dispatch({ changes: { from: 0, to: first.state.doc.length, insert: 'first draft' } })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    const second = EditorView.findFromDOM(
+      screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    expect(second.state.doc.toString()).toBe('');
+    act(() => second.dispatch({ changes: { from: 0, to: 0, insert: 'second draft' } }));
+    const tabs = screen.getAllByRole('tab', { name: 'New session' });
+    expect(tabs).toHaveLength(2);
+    fireEvent.click(tabs[0]);
+    expect(
+      EditorView.findFromDOM(
+        screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+      )?.state.doc.toString()
+    ).toBe('first draft');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close New session tab' })[1]);
+    await waitFor(() =>
+      expect(screen.getAllByRole('tab', { name: 'New session' })).toHaveLength(1)
+    );
+    expect(
+      EditorView.findFromDOM(
+        screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+      )?.state.doc.toString()
+    ).toBe('first draft');
   });
-  it('collapses the explorer and opens a new real session tab with Ctrl+N',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});const sidebar=screen.getByRole('complementary',{name:'Session explorer',hidden:true});const toggle=screen.getByRole('button',{name:'Collapse sidebar'});expect(toggle.closest('.activity-rail')).toBeTruthy();expect(document.querySelector('kbd')).toBeNull();fireEvent.click(toggle);expect(screen.getByRole('button',{name:'Expand sidebar'}).getAttribute('aria-expanded')).toBe('false');expect(sidebar.getAttribute('aria-hidden')).toBe('true');expect(sidebar.hasAttribute('inert')).toBe(true);fireEvent.click(screen.getByRole('button',{name:'Expand sidebar'}));expect(screen.getByRole('button',{name:'Collapse sidebar'}).getAttribute('aria-expanded')).toBe('true');fireEvent.click(screen.getByRole('button',{name:'Settings'}));expect(await screen.findByRole('dialog')).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Cancel'}));fireEvent.keyDown(window,{key:'n',ctrlKey:true});expect((await screen.findAllByRole('tab',{name:/New session/})).length).toBeGreaterThan(1);
+  it('does not let a delayed tab close replace the session selected during its animation', async () => {
+    const now = new Date().toISOString();
+    const makeTask = (id: string, title: string) => {
+      const pass = {
+        id: `pass-${id}`,
+        index: 1,
+        createdAt: now,
+        userInput: title,
+        userInputs: [title],
+        userMessageIds: [`user-${id}`],
+        phase: 'accepted',
+        resolution: 'direct',
+        correctionCount: 0,
+        directThreadId: `direct-${id}`,
+        processedTurns: [],
+      };
+      return {
+        id,
+        title,
+        phase: 'accepted',
+        createdAt: now,
+        updatedAt: now,
+        userRoot: 'D:/workspace/demo',
+        projectId: demoProject.id,
+        currentPassId: pass.id,
+        passes: [pass],
+        messages: [
+          { id: `user-${id}`, role: 'user', text: title, createdAt: now, passId: pass.id },
+        ],
+      } as any;
+    };
+    const tasks = [
+      makeTask('task-alpha', 'Alpha session'),
+      makeTask('task-beta', 'Beta session'),
+      makeTask('task-gamma', 'Gamma session'),
+    ];
+    const initial = {
+      ...fixture,
+      state: { ...fixture.state, tasks, activeTaskId: 'task-alpha' },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...initial, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path)
+        ? ({ state: initial.state, runtime: fixture.runtime } as any)
+        : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Alpha session' });
+    for (const index of [1, 2]) {
+      fireEvent.click(document.querySelectorAll('.session-row .task-nav')[index]);
+      await screen.findByRole('tab', { name: tasks[index]!.title });
+    }
+
+    vi.mocked(apiMod.api).mockClear();
+    fireEvent.click(screen.getByRole('tab', { name: 'Beta session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Beta session tab' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Gamma session' }));
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Beta session' })).toBeNull());
+
+    const selectedSessions = vi
+      .mocked(apiMod.api)
+      .mock.calls.map(([path]) => path)
+      .filter((path) => typeof path === 'string' && path.endsWith('/select'));
+    expect(selectedSessions).toEqual([
+      '/api/tasks/task-beta/select',
+      '/api/tasks/task-gamma/select',
+    ]);
   });
-  it('shows a direct orchestrator answer without implying that Luna ran',async()=>{
-    const now=new Date().toISOString();const task={id:'direct-1',title:'What is two plus two?',phase:'accepted',resolution:'direct',routingNote:'A trivial factual answer needs no worker.',reviewNote:'Answered directly by the orchestrator under the delegation policy. No Luna worker was started.',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'What is two plus two?',userInputs:['What is two plus two?'],userMessageIds:['u1'],phase:'accepted',resolution:'direct',routingNote:'A trivial factual answer needs no worker.',reviewNote:'Answered directly by the orchestrator under the delegation policy. No Luna worker was started.',publicAnswer:'Four.',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'What is two plus two?',createdAt:now,passId:'pass-1'},{id:'a1',role:'orchestrator',text:'Four.',createdAt:now,passId:'pass-1'}]};
-    const directFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...directFixture,csrf:'test'} as any);
-    render(<App/>);expect(await screen.findByText('Direct answer')).toBeTruthy();expect(screen.getByText('Four.')).toBeTruthy();expect(screen.getByText(/No Luna worker was started/)).toBeTruthy();expect(screen.getByText(/Routing basis: A trivial factual answer/)).toBeTruthy();expect(document.querySelector('.final-artifact')?.textContent).toContain('Orchestrator');expect(screen.queryByText('GPT-6 Luna · low')).toBeNull();expect(screen.queryByText('Luna worker')).toBeNull();const composer=document.querySelector('.composer-dock');const workspace=document.querySelector('.workspace-area');expect(composer?.closest('.workspace-content')).toBeTruthy();expect(workspace?.contains(composer!)).toBe(true);expect(screen.queryByRole('complementary',{name:'Heads-up panel'})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Heads-up'}));const panel=await screen.findByRole('complementary',{name:'Heads-up panel'});expect(panel.getAttribute('aria-hidden')).toBe('false');expect(within(panel).getByText('Status')).toBeTruthy();fireEvent.click(within(panel).getByRole('button',{name:'Details'}));const details=within(panel).getByText('This session').closest('.heads-up-disclosure') as HTMLElement;expect(details.classList.contains('is-expanded')).toBe(true);within(panel).getByRole('button',{name:'Close heads-up panel'}).focus();fireEvent.keyDown(document,{key:'Escape'});await waitFor(()=>expect(panel.getAttribute('aria-hidden')).toBe('true'));
+  it('keeps status, usage, Stop, and drafts attached to their owning session tab', async () => {
+    const now = new Date().toISOString();
+    const token = (totalTokens: number) => ({
+      totalTokens,
+      inputTokens: totalTokens - 10,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      outputTokens: 10,
+      reasoningOutputTokens: 2,
+      modelContextWindow: 128000,
+      source: 'thread',
+    });
+    const makeTask = (
+      id: string,
+      title: string,
+      rule: string,
+      orchTotal: number,
+      workerTotal: number
+    ) => {
+      const pass = {
+        id: `pass-${id}`,
+        index: 1,
+        createdAt: now,
+        userInput: title,
+        userInputs: [title],
+        userMessageIds: [`user-${id}`],
+        phase: 'worker_running',
+        resolution: 'delegated',
+        correctionCount: 0,
+        orchestratorThreadId: `orch-${id}`,
+        workerThreadId: `worker-${id}`,
+        routeDecision: {
+          route: 'hard_task',
+          rule_id: rule,
+          justification: `Decision for ${title}.`,
+          model: 'gpt-6.1-sol',
+          effort: 'low',
+          decidedAt: now,
+        },
+        reasoningTurns: [
+          {
+            role: 'orchestrator',
+            threadId: `orch-${id}`,
+            turnId: `orch-turn-${id}`,
+            requestedModel: 'gpt-6.1-sol',
+            requestedEffort: 'low',
+            startedAt: now,
+            status: 'completed',
+          },
+          {
+            role: 'worker',
+            threadId: `worker-${id}`,
+            turnId: `worker-turn-${id}`,
+            requestedModel: 'gpt-6-luna',
+            requestedEffort: 'high',
+            startedAt: now,
+            status: 'streaming',
+          },
+        ],
+        usage: {
+          orchestrator: {
+            threadId: `orch-${id}`,
+            tokenStatus: 'available',
+            tokens: token(orchTotal),
+            creditStatus: 'unavailable',
+          },
+          worker: {
+            threadId: `worker-${id}`,
+            tokenStatus: 'available',
+            tokens: token(workerTotal),
+            creditStatus: 'unavailable',
+          },
+        },
+        processedTurns: [],
+      };
+      return {
+        id,
+        title,
+        phase: 'worker_running',
+        createdAt: now,
+        updatedAt: now,
+        userRoot: 'D:/workspace/demo',
+        currentPassId: pass.id,
+        orchestratorThreadId: `orch-${id}`,
+        workerThreadId: `worker-${id}`,
+        passes: [pass],
+        messages: [
+          { id: `user-${id}`, role: 'user', text: title, createdAt: now, passId: pass.id },
+        ],
+      } as any;
+    };
+    const alpha = makeTask('task-alpha', 'Alpha session', 'route-alpha', 100, 50);
+    const beta = makeTask('task-beta', 'Beta session', 'route-beta', 200, 75);
+    const initial = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [alpha, beta], activeTaskId: alpha.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...initial, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path)
+        ? ({
+            state: { ...fixture.state, tasks: [alpha, beta], activeTaskId: alpha.id },
+            runtime: fixture.runtime,
+          } as any)
+        : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Alpha session' });
+    fireEvent.click(document.querySelectorAll('.session-row .task-nav')[1]);
+    await screen.findByRole('tab', { name: 'Beta session' });
+    fireEvent.click(screen.getByRole('button', { name: 'Heads-up' }));
+    let panel = await screen.findByRole('complementary', { name: 'Heads-up panel' });
+    await within(panel).findByText('Hard task');
+    expect(within(panel).getByText('275 tokens')).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: /Current sessions/ }));
+    expect(within(panel).getByText('orch-task-beta')).toBeTruthy();
+    expect(within(panel).getByText('worker-task-beta')).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Details' }));
+    expect(within(panel).getAllByText('gpt-6.1-sol · low').length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText('gpt-6-luna · high').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('tab', { name: 'Alpha session' }));
+    await waitFor(() => expect(panel.getAttribute('aria-hidden')).toBe('true'));
+    fireEvent.click(screen.getByRole('button', { name: 'Heads-up' }));
+    panel = (await screen.findAllByRole('complementary', { name: 'Heads-up panel' })).find(
+      (item) => item.getAttribute('aria-hidden') === 'false'
+    )!;
+    await within(panel).findByText('Hard task');
+    expect(within(panel).getByText('150 tokens')).toBeTruthy();
+    expect(within(panel).queryByText('275 tokens')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Beta session' }));
+    await waitFor(() => expect(panel.getAttribute('aria-hidden')).toBe('true'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() =>
+      expect(
+        vi.mocked(apiMod.api).mock.calls.some(([path]) => path === '/api/tasks/task-beta/cancel')
+      ).toBe(true)
+    );
+    expect(
+      vi.mocked(apiMod.api).mock.calls.some(([path]) => path === '/api/tasks/task-alpha/cancel')
+    ).toBe(false);
+    const editor = EditorView.findFromDOM(
+      screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    act(() =>
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: 'draft stays in beta' },
+      })
+    );
+    fireEvent.click(document.querySelector('.activity-rail [aria-label="Browser"]')!);
+    expect(document.querySelector('.browser-peer-tab')).toBeTruthy();
+    expect(
+      document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')
+    ).toBeTruthy();
+    expect(
+      document.querySelector('[data-workspace-tab="task-beta"] .conversation')?.textContent
+    ).toContain('Beta session');
+    fireEvent.click(screen.getByRole('tab', { name: 'Beta session' }));
+    expect(
+      EditorView.findFromDOM(
+        screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+      )?.state.doc.toString()
+    ).toBe('draft stays in beta');
+    fireEvent.click(document.querySelector('.activity-rail [aria-label="Git"]')!);
+    expect(
+      document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')
+    ).toBeTruthy();
+    expect(document.querySelector('.document-tabs [role="tab"][aria-label="Git"]')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Beta session' })).toBeTruthy();
   });
-  it('keeps legacy execution labels unknown when a pass has no saved execution evidence',async()=>{
-    const now=new Date().toISOString();const pass={id:'legacy-execution',index:1,createdAt:now,userInput:'Resume the old session',userInputs:['Resume the old session'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',correctionCount:0,directThreadId:'old-direct',simpleThreadId:'old-simple',workerThreadId:'old-worker',deepSeekExecution:{kind:'deepseek-harness-sdk',provider:'opencode-go',model:'deepseek-v4.1-flash',nativeReasoningEffort:'max'},processedTurns:[]};const task={id:'legacy-execution-task',title:'Legacy execution',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,correctionCount:0,passes:[pass],messages:[{id:'u1',role:'user',text:'Resume the old session',createdAt:now,passId:pass.id},{id:'w1',role:'worker',text:'Saved worker reply',createdAt:new Date(Date.parse(now)+1000).toISOString(),passId:pass.id},{id:'d1',role:'direct',text:'Saved direct reply',createdAt:new Date(Date.parse(now)+2000).toISOString(),passId:pass.id},{id:'s1',role:'simple',text:'Saved simple result',createdAt:new Date(Date.parse(now)+3000).toISOString(),passId:pass.id}]};const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);
-    render(<App/>);const panel=await screen.findByLabelText('Pass 1');expect(within(panel).getByText('Direct answer',{selector:'strong'})).toBeTruthy();expect(within(panel).getByText('Simple implementation',{selector:'strong'})).toBeTruthy();expect(within(panel).getAllByText('Model details unavailable').length).toBeGreaterThan(0);fireEvent.click(within(panel).getByRole('button',{name:/^Workers/}));expect(await within(panel).findByText('Saved worker reply')).toBeTruthy();expect(await within(panel).findByText('Worker',{selector:'strong'})).toBeTruthy();const headings=Array.from(panel.querySelectorAll('.agent-message .message-meta strong')).map(element=>element.textContent);expect(headings).not.toContain('Luna worker');expect(headings).not.toContain('Luna simple implementation');
+  it('gives split panes sibling tab bars and centered new-session composers', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    const source = Array.from(document.querySelectorAll('.document-tabs .document-tab')).at(-1)!;
+    const tabId = (source as HTMLElement).dataset.sessionTab!;
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => (type === 'application/x-opnex-session-tab' ? tabId : '')),
+    };
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    const workspace = document.querySelector('.workspace-content')!;
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(document.querySelector('.task-view')!, { dataTransfer: transfer, clientX: 990 });
+    await waitFor(() => expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(2));
+    const groups = Array.from(document.querySelectorAll('.pane-grid-group')) as HTMLElement[];
+    const rootBar = within(groups[0]).getByRole('tablist', {
+      name: 'Pane 1 workspaces',
+    }) as HTMLElement;
+    const sideBar = within(groups[1]).getByRole('tablist', {
+      name: 'Side pane workspaces',
+    }) as HTMLElement;
+    const bodies = groups.map((group) => group.querySelector('.pane-body') as HTMLElement);
+    expect(rootBar.parentElement).toBe(groups[0]);
+    expect(sideBar.parentElement).toBe(groups[1]);
+    expect(rootBar.style.gridRow).toBe('1');
+    expect(sideBar.style.gridRow).toBe('1');
+    expect(bodies.map((body) => body.style.gridRow)).toEqual(['2', '2']);
+    expect(bodies.every((body) => body.querySelector('.new-tab-center .composer'))).toBe(true);
+    expect(screen.getAllByRole('textbox', { name: 'Task message' })).toHaveLength(2);
   });
-  it('labels a routed direct-answer stream with the high effort actually selected for Luna',async()=>{
-    const now=new Date().toISOString();const turn={role:'direct',threadId:'direct-thread',turnId:'direct-turn',requestedModel:'gpt-6-luna',requestedEffort:'high',startedAt:now,status:'streaming'};const task={id:'routed-direct-live',title:'Explain a concept',phase:'direct_running',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',directThreadId:'direct-thread',activeRole:'direct',activeTurnId:'direct-turn',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'Explain a concept',userInputs:['Explain a concept'],userMessageIds:['u1'],phase:'direct_running',resolution:'direct',directThreadId:'direct-thread',reasoningTurns:[turn],processedTurns:[]}],messages:[{id:'u1',role:'user',text:'Explain a concept',createdAt:now,passId:'pass-1'}]};const directFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...directFixture,csrf:'test'} as any);
-    render(<App/>);const response=await screen.findByLabelText('direct model response');expect(within(response).getByText('GPT-6 Luna · high')).toBeTruthy();
-  });
-  it('uses the recorded direct-turn effort in the final output card instead of the router effort',async()=>{
-    const now=new Date().toISOString();const turn={role:'direct',threadId:'direct-thread',turnId:'direct-turn',requestedModel:'gpt-6-luna',requestedEffort:'high',startedAt:now,status:'completed'};const pass={id:'pass-1',index:1,createdAt:now,userInput:'what is dec001',userInputs:['what is dec001'],userMessageIds:['u1'],phase:'accepted',resolution:'direct',directThreadId:'direct-thread',reasoningTurns:[turn],publicAnswer:'DEC-0001 pairs the selected knowledge base with its registered workspace.',processedTurns:[]};const task={id:'routed-direct-final',title:'what is dec001',phase:'accepted',resolution:'direct',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',directThreadId:'direct-thread',passes:[pass],messages:[{id:'u1',role:'user',text:'what is dec001',createdAt:now,passId:'pass-1'}]};const directFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...directFixture,csrf:'test'} as any);
-    render(<App/>);const output=await screen.findByRole('region',{name:'Final output'});expect(output.textContent).toContain('GPT-6 Luna · high');expect(output.textContent).not.toContain('low');
-  });
-  it('shows routing details and labels simple work as Luna self-verified without implying hard-task review',async()=>{
-    const now=new Date().toISOString();const routeDecision={route:'simple_implementation',effectiveRoute:'simple_implementation',rule_id:'simple_bounded_correction',justification:'This is a known bounded correction.',model:'gpt-6-luna',effort:'low',speed:'Fast',decidedAt:now};const receipt={status:'complete',result:'Updated the requested label.',changes:['src/ui/App.tsx'],acceptance:{met:['The visible label matches the request.'],unmet:[]},verification:[{check:'Reviewed the rendered label',result:'passed',evidence:'Confirmed in the UI.'},{check:'Unrelated full integration suite',result:'not_run',evidence:null}],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};const executionProfile={provider:'codex',model:'gpt-6-luna',effort:'max'};const task={id:'simple-1',title:'Update a label',phase:'accepted',resolution:'simple',routeDecision,simpleThreadId:'simple-thread',executionProfile,reviewNote:'GPT-6 Luna at max effort completed and verified this simple implementation. No Sol review occurred.',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'Update the label.',userInputs:['Update the label.'],userMessageIds:['u1'],phase:'accepted',resolution:'simple',simpleThreadId:'simple-thread',executionProfile,routeDecision,receipt,reviewNote:'GPT-6 Luna at max effort completed and verified this simple implementation. No Sol review occurred.',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'Update the label.',createdAt:now,passId:'pass-1'},{id:'s1',role:'simple',text:receipt.result,createdAt:now,passId:'pass-1'}]};const simpleFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...simpleFixture,csrf:'test'} as any);
-    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?simpleFixture as any:{} as any);render(<App/>);expect((await screen.findAllByText('Simple implementation complete')).length).toBeGreaterThan(0);expect(screen.getByText('GPT-6 Luna · max')).toBeTruthy();expect(screen.getByText('GPT-6 Luna · max · self-verified')).toBeTruthy();expect(screen.queryByText('Worker review')).toBeNull();expect(screen.queryByText('Luna · reviewed by orchestrator')).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Heads-up'}));const panel=await screen.findByRole('complementary',{name:'Heads-up panel'});expect(within(panel).getByText('Route')).toBeTruthy();expect(panel.querySelector('.heads-up-route-value strong')?.textContent).toBe('Simple implementation');expect(within(panel).queryByText('simple_bounded_correction')).toBeNull();expect(within(panel).queryByText(/Conservative fallback/)).toBeNull();
-  });
-  it('renders commentary and tool lifecycle for the active worker without exposing raw reasoning or duplicating the final answer',async()=>{
-    const now=new Date().toISOString();const summary={role:'worker',threadId:'worker-1',turnId:'turn-1',itemId:'reason-1',summaryIndex:0,text:'Readable provider summary.',passId:'pass-1',updatedAt:now};const turn={role:'worker',threadId:'worker-1',turnId:'turn-1',requestedModel:'gpt-6-luna',requestedEffort:'high',startedAt:now,status:'streaming'};const commentary={role:'worker',threadId:'worker-1',turnId:'turn-1',itemId:'commentary-1',kind:'commentary',itemType:'agentMessage',title:'',text:'I will inspect the event path.',status:'running',startedAt:now,updatedAt:now,passId:'pass-1'};const command={role:'worker',threadId:'worker-1',turnId:'turn-1',itemId:'cmd-1',kind:'tool',itemType:'commandExecution',title:'rg -n activity src',detail:'cwd: D:/workspace/demo',output:'matched line',status:'running',startedAt:new Date(Date.parse(now)+50).toISOString(),updatedAt:now,passId:'pass-1'};const task={id:'summary-1',title:'Explain this change',phase:'worker_running',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',workerThreadId:'worker-1',activeRole:'worker',activeTurnId:'turn-1',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'Explain this change',userInputs:['Explain this change'],userMessageIds:['u1'],phase:'worker_running',correctionCount:0,workerThreadId:'worker-1',activeRole:'worker',activeTurnId:'turn-1',processedTurns:[],reasoningTurns:[turn],reasoningSummaries:[summary],liveActivity:[commentary,command]}],messages:[{id:'u1',role:'user',text:'Explain this change',createdAt:now,passId:'pass-1'},{id:'worker-final',role:'worker',text:'Final receipt answer preserved.',createdAt:new Date(Date.parse(now)+1000).toISOString(),passId:'pass-1'}]};
-    const activityFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activityFixture,csrf:'test'} as any);
-    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activityFixture as any:{} as any);render(<App/>);const panel=await screen.findByLabelText('Pass 1');fireEvent.click(within(panel).getByRole('button',{name:/^Workers/}));const response=await screen.findByLabelText('worker model response');expect(within(response).getByText('I will inspect the event path.')).toBeTruthy();expect(within(response).getByText('Readable provider summary.')).toBeTruthy();expect(within(response).getByText('Running rg -n activity src')).toBeTruthy();fireEvent.click(within(response).getByText('Details'));expect(within(response).getByText(/matched line/)).toBeTruthy();expect(within(response).queryByText(/raw reasoning/i)).toBeNull();expect(screen.getByText('Final receipt answer preserved.')).toBeTruthy();
-    const completedTask={...task,passes:[{...task.passes[0],liveActivity:[{...commentary,status:'completed'},{...command,status:'completed'}]}]};act(()=>eventSource.onmessage({data:JSON.stringify({state:{...fixture.state,tasks:[completedTask],activeTaskId:completedTask.id}})}));await waitFor(()=>expect(within(response).getByText('Ran rg -n activity src')).toBeTruthy());expect(document.querySelectorAll('[data-activity-id="cmd-1"]')).toHaveLength(1);
-  });
-  it('renders assistant Markdown while leaving raw HTML and unsafe links inert',async()=>{
-    const now=new Date().toISOString();const task={id:'markdown-1',title:'Markdown answer',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'format it',userInputs:['format it'],userMessageIds:['u1'],phase:'accepted',resolution:'direct',publicAnswer:'# A result\n\n- first\n- **bold**\n\n| Name | Value |\n|---|---|\n| item | `42` |\n\n[bad link](javascript:alert(1))\n\n<script>alert(1)</script>',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'format it',createdAt:now,passId:'pass-1'},{id:'a1',role:'orchestrator',text:'# A result\n\n- first\n- **bold**\n\n| Name | Value |\n|---|---|\n| item | `42` |\n\n[bad link](javascript:alert(1))\n\n<script>alert(1)</script>',createdAt:now,passId:'pass-1'}]};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id},csrf:'test'} as any);
-    const {container}=render(<App/>);expect(await screen.findByRole('heading',{name:'A result'})).toBeTruthy();expect(screen.getByRole('table')).toBeTruthy();expect(screen.getByText('bold').tagName).toBe('STRONG');expect(screen.getByText('42').tagName).toBe('CODE');expect(!screen.getByText('bad link').closest('a')?.getAttribute('href')).toBe(true);expect(container.querySelector('script')).toBeNull();expect(container.textContent).toContain('<script>alert(1)</script>');
-  });
-  it('keeps archived service metadata without blocking local session history',async()=>{
-    const now=new Date().toISOString();const task={id:'saving-1',title:'Saved receipt',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',legacyAgentMem:{projectId:'demo-project',taskId:'work-1',lease:'legacy-lease',recordStatus:'saving'},correctionCount:0,currentPassId:'pass-1',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'Question',userInputs:['Question'],userMessageIds:['u1'],phase:'accepted',resolution:'direct',publicAnswer:'Answer',agentmemTaskId:'work-1',agentmemLease:'legacy-lease',agentmemRecordStatus:'saving',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'Question',createdAt:now,passId:'pass-1'},{id:'a1',role:'orchestrator',text:'Answer',createdAt:now,passId:'pass-1'}]};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id},csrf:'test'} as any);
-    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?{...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}} as any:{} as any);render(<App/>);expect(await screen.findByRole('tab',{name:'Saved receipt'})).toBeTruthy();expect(screen.queryByText(/Saving AgentMem receipt/)).toBeNull();expect(screen.queryByRole('button',{name:/Retry AgentMem completion/})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Actions for Saved receipt'}));expect((screen.getByRole('menuitem',{name:'Delete session'}) as HTMLButtonElement).disabled).toBe(false);expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>String(url).includes('/agentmem'))).toBe(false);
-  });  it('shows honest waiting and unavailable states inline for turns without reasoning text',async()=>{
-    const now=new Date().toISOString();const turn={role:'orchestrator',threadId:'orch-1',turnId:'turn-1',requestedModel:'gpt-6.1-sol',requestedEffort:'low',status:'streaming'};const pass={id:'pass-1',index:1,createdAt:now,userInput:'Explain a concept',userInputs:['Explain a concept'],userMessageIds:['u1'],phase:'planning',correctionCount:0,orchestratorThreadId:'orch-1',activeRole:'orchestrator',activeTurnId:'turn-1',reasoningTurns:[turn],processedTurns:[]};const task={id:'summary-wait',title:'Explain a concept',phase:'planning',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',orchestratorThreadId:'orch-1',activeRole:'orchestrator',activeTurnId:'turn-1',reasoningTurns:[turn],passes:[pass],messages:[{id:'u1',role:'user',text:'Explain a concept',createdAt:now,passId:'pass-1'}]};const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);
-    const first=render(<App/>);const liveResponse=await screen.findByLabelText('orchestrator model response');expect(within(liveResponse).getByText('Waiting for activity…')).toBeTruthy();first.unmount();
-    const summaryTurn={...turn,startedAt:now};const summary={role:'orchestrator',threadId:'orch-1',turnId:'turn-1',itemId:'reason-1',summaryIndex:0,text:'Live readable summary fallback.',passId:'pass-1'};const summaryTask={...task,messages:[...task.messages,{id:'prepared',role:'orchestrator',text:'Prepared a complete assignment.',createdAt:new Date(Date.parse(now)+1000).toISOString(),passId:'pass-1'}],reasoningTurns:[summaryTurn],reasoningSummaries:[summary],passes:[{...pass,reasoningTurns:[summaryTurn],reasoningSummaries:[summary]}]};vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[summaryTask],activeTaskId:summaryTask.id},csrf:'test'} as any);render(<App/>);const summaryResponse=await screen.findByLabelText('orchestrator model response');expect(within(summaryResponse).getByText('Live readable summary fallback.')).toBeTruthy();expect(screen.queryByText('Prepared a complete assignment.')).toBeNull();
-    cleanup();
-    const doneTurn={...turn,status:'completed'};const doneTask={...task,phase:'accepted',activeRole:undefined,activeTurnId:undefined,reasoningTurns:[doneTurn],passes:[{...pass,phase:'accepted',activeRole:undefined,activeTurnId:undefined,reasoningTurns:[doneTurn]}]};vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[doneTask],activeTaskId:doneTask.id},csrf:'test'} as any);render(<App/>);const doneResponse=await screen.findByLabelText('orchestrator model response');expect(within(doneResponse).getByText('No activity details were reported for this turn.')).toBeTruthy();
-  });
-  it('collapses Luna dialogue and reasoning, keeps the final artifact visible, and summarizes repository and knowledge changes in a closed receipt',async()=>{
-    const now=new Date().toISOString();const turn={role:'worker',threadId:'worker-1',turnId:'worker-turn',requestedModel:'gpt-6-luna',requestedEffort:'high',status:'completed',startedAt:now};const receipt={status:'complete',result:'# Final result\n\nA user-visible result.',changes:['src/output.ts'],acceptance:{met:['Output is ready'],unmet:[]},verification:[{check:'Build',result:'passed',evidence:'Production build passed.'}],risks:[],knowledge:{consulted:['knowledge/architecture.md'],updated:['knowledge/architecture.md']},decision_required:null};const pass={id:'pass-1',index:1,createdAt:now,userInput:'Complete the task',userInputs:['Complete the task'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',correctionCount:0,processedTurns:['worker-turn'],workerThreadId:'worker-1',reasoningTurns:[turn],reasoningSummaries:[{role:'worker',threadId:'worker-1',turnId:'worker-turn',itemId:'r1',summaryIndex:0,text:'# Investigating\n\nThis is a long streamed section.\n\n### More detail\n\nCompacted text remains bounded.',passId:'pass-1'}],receipt};const task={id:'collapsed-worker',title:'Collapsed worker',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',passes:[pass],messages:[{id:'u1',role:'user',text:'Complete the task',createdAt:now,passId:'pass-1'},{id:'w1',role:'worker',text:receipt.result,createdAt:now,passId:'pass-1'}]};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id},csrf:'test'} as any);
-    render(<App/>);const panel=await screen.findByLabelText('Pass 1');const activity=within(panel).getByRole('button',{name:/^Workers/});expect(activity.getAttribute('aria-expanded')).toBe('false');expect(activity.parentElement?.querySelector('.disclosure-panel')?.hasAttribute('inert')).toBe(true);expect(within(panel).getByRole('region',{name:'Final output'})).toBeTruthy();expect(within(panel).getByRole('button',{name:/^Receipt/}).getAttribute('aria-expanded')).toBe('false');expect(within(panel).getByRole('region',{name:'Final output'}).textContent).toContain('A user-visible result.');expect(within(panel).getAllByText('A user-visible result.')).toHaveLength(1);
-    fireEvent.click(activity);expect(await within(panel).findByText('This is a long streamed section.')).toBeTruthy();fireEvent.click(within(panel).getByRole('button',{name:/^Receipt/}));expect(within(panel).getByText('src/output.ts')).toBeTruthy();expect(within(panel).getAllByText('knowledge/architecture.md').length).toBeGreaterThan(0);expect(within(panel).getByText('Production build passed.')).toBeTruthy();
-  });
-  it('keeps worker progress updates inside the collapsed panel without scrolling the main conversation',async()=>{
-    const now=new Date().toISOString();const turn={role:'worker',threadId:'worker-1',turnId:'turn-1',requestedModel:'gpt-6-luna',requestedEffort:'high',startedAt:now,status:'streaming'};const summary={role:'worker',threadId:'worker-1',turnId:'turn-1',itemId:'reason-1',summaryIndex:0,text:'First compact reasoning update.',passId:'pass-1'};const pass={id:'pass-1',index:1,createdAt:now,userInput:'Work',userInputs:['Work'],userMessageIds:['u1'],phase:'worker_running',correctionCount:0,workerThreadId:'worker-1',activeRole:'worker',activeTurnId:'turn-1',reasoningTurns:[turn],reasoningSummaries:[summary],processedTurns:[]};const task={id:'worker-scroll',title:'Worker progress',phase:'worker_running',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:'pass-1',correctionCount:0,workerThreadId:'worker-1',activeRole:'worker',activeTurnId:'turn-1',passes:[pass],messages:[{id:'u1',role:'user',text:'Work',createdAt:now,passId:'pass-1'},{id:'w1',role:'worker',text:'Inspecting workspace',createdAt:now,passId:'pass-1'}]};const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);
-    render(<App/>);const panel=await screen.findByLabelText('Pass 1');const activity=within(panel).getByRole('button',{name:/^Workers/});expect(activity.getAttribute('aria-expanded')).toBe('false');const scroller=document.querySelector('.conversation') as HTMLElement;let scrollTop=100;Object.defineProperties(scroller,{scrollHeight:{configurable:true,get:()=>1000},clientHeight:{configurable:true,get:()=>500},scrollTop:{configurable:true,get:()=>scrollTop,set:value=>{scrollTop=value;}}});fireEvent.scroll(scroller);
-    const updated={...task,messages:[...task.messages,{id:'w2',role:'worker',text:'Searching workspace context',createdAt:new Date(Date.parse(now)+1000).toISOString(),passId:'pass-1'},{id:'status',role:'system',text:'Worker activity: Reading source files',createdAt:new Date(Date.parse(now)+2000).toISOString(),passId:'pass-1'}],passes:[{...pass,reasoningSummaries:[{...summary,text:'Second incremental reasoning update.'}]}]};act(()=>eventSource.onmessage({data:JSON.stringify({state:{...activeFixture.state,tasks:[updated],activeTaskId:updated.id},runtime:fixture.runtime})}));await waitFor(()=>expect(within(panel).getByText('Second incremental reasoning update.')).toBeTruthy());expect(activity.getAttribute('aria-expanded')).toBe('false');expect(scrollTop).toBe(100);const hiddenUpdate=within(panel).getByText('Searching workspace context');expect(hiddenUpdate.closest('.disclosure-panel')?.getAttribute('aria-hidden')).toBe('true');expect(hiddenUpdate.closest('.disclosure-panel')?.hasAttribute('inert')).toBe(true);expect(within(panel).getByText('Reading source files').closest('.disclosure-panel')?.getAttribute('aria-hidden')).toBe('true');
-  });
-  it('shows a compact active worker row and keeps assignment details collapsed until requested',async()=>{
-    const now=new Date().toISOString();const assignment={outcome:'Build local harness',deliverable:'Runnable app',read_scope:['project'],write_scope:['project/src'],exclusions:['deployment'],constraints:['local only'],context_refs:['docs'],acceptance:['app works'],verification:['tests'],ordinary_authority:['choose details'],escalation_conditions:['decision'],receipt_requirements:['receipt']};const task={id:'task-1',title:'Implement local harness',phase:'worker_running',createdAt:now,updatedAt:now,userRoot:'D:/programming/opnex',correctionCount:0,currentPassId:'pass-1',messages:[{id:'m1',role:'user',text:'Build the harness',createdAt:now,passId:'pass-1'}],passes:[{id:'pass-1',index:1,createdAt:now,userInput:'Build the harness',userInputs:['Build the harness'],userMessageIds:['m1'],phase:'worker_running',correctionCount:0,workerThreadId:'worker-1',processedTurns:[],assignment}],assignment};
-    const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:'task-1'}};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);
-    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);render(<App/>);const panel=await screen.findByLabelText('Pass 1');const workers=within(panel).getByRole('button',{name:/^Workers/});expect(workers.getAttribute('aria-expanded')).toBe('false');const workerPanel=workers.parentElement?.querySelector('.disclosure-panel');expect(workerPanel?.getAttribute('aria-hidden')).toBe('true');expect(workerPanel?.hasAttribute('inert')).toBe(true);fireEvent.click(workers);expect(await within(panel).findByText('Authorized write scope')).toBeTruthy();
-  });
-  it('keeps each pass assignment and receipt beside its own messages and does not carry artifacts into a direct pass',async()=>{
-    const now=new Date().toISOString();const firstAssignment={outcome:'First-pass outcome',deliverable:'First deliverable',read_scope:[],write_scope:[],exclusions:[],constraints:[],context_refs:[],acceptance:['First acceptance'],verification:['First verification'],ordinary_authority:['ordinary'],escalation_conditions:['blocked'],receipt_requirements:['receipt']};const firstReceipt={status:'complete',result:'First worker result',changes:[],acceptance:{met:['First acceptance'],unmet:[]},verification:[],risks:[],knowledge:{consulted:[],updated:[]},decision_required:null};
-    const task={id:'multi',title:'Multiple prompts',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-2',passes:[{id:'pass-1',index:1,createdAt:now,userInput:'First delegated prompt',userInputs:['First delegated prompt'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',assignment:firstAssignment,receipt:firstReceipt,reviewNote:'First pass accepted',correctionCount:0,processedTurns:[]},{id:'pass-2',index:2,createdAt:now,userInput:'Second simple prompt',userInputs:['Second simple prompt'],userMessageIds:['u2'],phase:'accepted',resolution:'direct',publicAnswer:'Second direct answer',reviewNote:'Answered directly',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'First delegated prompt',createdAt:now,passId:'pass-1'},{id:'w1',role:'worker',text:'First worker result',createdAt:now,passId:'pass-1'},{id:'u2',role:'user',text:'Second simple prompt',createdAt:now,passId:'pass-2'},{id:'a2',role:'orchestrator',text:'Second direct answer',createdAt:now,passId:'pass-2'}]};
-    const multiFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...multiFixture,csrf:'test'} as any);
-    render(<App/>);const passOne=await screen.findByLabelText('Pass 1');const passTwo=screen.getByLabelText('Pass 2');expect(within(passOne).getByText('First delegated prompt')).toBeTruthy();expect(within(passOne).getAllByText('First worker result').length).toBeGreaterThanOrEqual(1);fireEvent.click(within(passOne).getByRole('button',{name:/^Workers/}));expect(within(passOne).getByText('First-pass outcome')).toBeTruthy();fireEvent.click(within(passOne).getByRole('button',{name:/^Receipt/}));expect(within(passOne).getAllByText('First acceptance').length).toBeGreaterThanOrEqual(1);expect(within(passTwo).getByText('Second simple prompt')).toBeTruthy();expect(within(passTwo).getByText('Second direct answer')).toBeTruthy();expect(within(passTwo).queryByText('First-pass outcome')).toBeNull();expect(within(passTwo).queryByText('Worker receipt')).toBeNull();
-  });
-  it('shows collapsed token totals and per-model role rows when expanded',async()=>{
-    const now=new Date().toISOString();const token=(totalTokens:number,inputTokens:number,outputTokens:number,cachedInputTokens:number,reasoningOutputTokens:number)=>({totalTokens,inputTokens,outputTokens,cachedInputTokens,cacheWriteInputTokens:0,reasoningOutputTokens,modelContextWindow:128000,source:'thread'});
-    const task={id:'usage-task',title:'Usage accounting',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:1,currentPassId:'pass-1',orchestratorThreadId:'orch-1',workerThreadId:'worker-1',messages:[{id:'u1',role:'user',text:'Do work',createdAt:now,passId:'pass-1'}],passes:[{id:'pass-1',index:1,createdAt:now,userInput:'Do work',userInputs:['Do work'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',correctionCount:1,orchestratorThreadId:'orch-1',workerThreadId:'worker-1',processedTurns:['o1','w1','o2'],usage:{orchestrator:{threadId:'orch-1',tokenStatus:'available',tokens:token(45,35,10,8,3),creditStatus:'available',estimatedCreditsMicros:'2000000',estimatedUsdMicros:'1000000',allowance:{fiveHourPercent:0.25,weeklyPercent:0.5},groups:[{model:'gpt-6.1-sol',reasoningEffort:'low',speed:'standard',estimatedCreditsMicros:'2000000'}]},worker:{threadId:'worker-1',tokenStatus:'available',tokens:token(75,50,25,22,9),creditStatus:'available',estimatedCreditsMicros:'3000000',estimatedUsdMicros:'2500000',allowance:{fiveHourPercent:0.4,weeklyPercent:0.75},groups:[{model:'gpt-6-luna',reasoningEffort:'high',speed:'standard',estimatedCreditsMicros:'3000000'}]}}}],};
-    const usageFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...usageFixture,csrf:'test'} as any);
-    render(<App/>);const panel=await screen.findByLabelText('Usage summary for pass 1');expect(within(panel).getByText('120 tokens')).toBeTruthy();expect(within(panel).queryByText(/credits/)).toBeNull();fireEvent.click(panel.querySelector('summary')!);expect(within(panel).getByText('GPT-6.1 Sol · orchestrator')).toBeTruthy();expect(within(panel).getByText('GPT-6 Luna · worker')).toBeTruthy();expect(within(panel).getByText('85')).toBeTruthy();expect(within(panel).getByText('120')).toBeTruthy();
-  });
-  it('keeps separate historical pass summaries and role tooltips when a later pass updates',async()=>{
-    const now=new Date().toISOString();const makeRole=(threadId:string,total:number,model:string,credits:string)=>({threadId,tokenStatus:'available',tokens:{totalTokens:total,inputTokens:total-10,cachedInputTokens:0,cacheWriteInputTokens:0,outputTokens:10,reasoningOutputTokens:2,modelContextWindow:null,source:'thread'},creditStatus:'available',estimateSource:'codex-app-server-thread-usage',estimatedCreditsMicros:credits,estimatedUsdMicros:null,groups:[{model,reasoningEffort:model==='gpt-6-luna'?'high':'low',speed:'standard',estimatedCreditsMicros:credits,netNewInputTokens:'20',cachedInputTokens:'0',inputTokens:String(total-10),outputTokens:'10',totalTokens:String(total)}],allowance:{fiveHourPercent:0.1,weeklyPercent:0.2}});const pass1={id:'pass-1',index:1,createdAt:now,userInput:'First',userInputs:['First'],userMessageIds:['u1'],phase:'accepted',resolution:'delegated',correctionCount:0,orchestratorThreadId:'orch-1',workerThreadId:'worker-1',processedTurns:[],usage:{orchestrator:makeRole('orch-1',70,'gpt-6.1-sol','1000000'),worker:makeRole('worker-1',30,'gpt-6-luna','400000')}};const pass2={id:'pass-2',index:2,createdAt:now,userInput:'Second',userInputs:['Second'],userMessageIds:['u2'],phase:'accepted',resolution:'delegated',correctionCount:0,orchestratorThreadId:'orch-2',workerThreadId:'worker-2',processedTurns:[],usage:{orchestrator:makeRole('orch-2',150,'gpt-6.1-sol','2000000'),worker:makeRole('worker-2',50,'gpt-6-luna','500000')}};const task={id:'history-usage',title:'Historical pass usage',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-2',orchestratorThreadId:'orch-2',workerThreadId:'worker-2',passes:[pass1,pass2],messages:[{id:'u1',role:'user',text:'First',createdAt:now,passId:'pass-1'},{id:'u2',role:'user',text:'Second',createdAt:now,passId:'pass-2'}]};const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);
-    render(<App/>);const first=await screen.findByLabelText('Usage summary for pass 1');const second=screen.getByLabelText('Usage summary for pass 2');expect(within(first).getByText('100 tokens')).toBeTruthy();expect(within(second).getByText('200 tokens')).toBeTruthy();fireEvent.click(first.querySelector('summary')!);expect(within(first).getByText('GPT-6.1 Sol · orchestrator')).toBeTruthy();expect(within(first).getByText('GPT-6 Luna · worker')).toBeTruthy();const updatedPass2={...pass2,usage:{...pass2.usage,orchestrator:makeRole('orch-2',250,'gpt-6.1-sol','3000000')}};act(()=>eventSource.onmessage({data:JSON.stringify({state:{...activeFixture.state,tasks:[{...task,passes:[pass1,updatedPass2]}]},runtime:fixture.runtime})}));await waitFor(()=>expect(within(second).getByText('300 tokens')).toBeTruthy());expect(within(first).getByText('100 tokens')).toBeTruthy();
-  });
-  it('updates the completed pass usage footer from state events without a new model response',async()=>{
-    const now=new Date().toISOString();const tokens={totalTokens:40,inputTokens:30,cachedInputTokens:7,cacheWriteInputTokens:0,outputTokens:10,reasoningOutputTokens:2,modelContextWindow:128000,source:'thread'};const pass={id:'pass-1',index:1,createdAt:now,userInput:'Do work',userInputs:['Do work'],userMessageIds:['u1'],phase:'accepted',correctionCount:0,orchestratorThreadId:'orch-1',processedTurns:[],usage:{orchestrator:{threadId:'orch-1',tokenStatus:'unavailable',creditStatus:'unavailable'}}};const task={id:'usage-live',title:'Live usage',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,currentPassId:'pass-1',orchestratorThreadId:'orch-1',passes:[pass],messages:[{id:'u1',role:'user',text:'Do work',createdAt:now,passId:'pass-1'}]};const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);const panel=await screen.findByLabelText('Usage summary for pass 1');expect(within(panel).getByText('not reported')).toBeTruthy();const updated={...task,passes:[{...pass,usage:{orchestrator:{threadId:'orch-1',tokenStatus:'available',tokens,creditStatus:'available',estimatedCreditsMicros:'125000',estimatedUsdMicros:null}}}]};act(()=>eventSource.onmessage({data:JSON.stringify({state:{...activeFixture.state,tasks:[updated],activeTaskId:updated.id},runtime:fixture.runtime})}));await waitFor(()=>expect(within(panel).getByText('40 tokens')).toBeTruthy());expect(screen.queryByText('Final answer')).toBeNull();
-  });  it('does not label explicit Codex direct-turn metadata as DeepSeek',async()=>{
-    const now=new Date().toISOString();const pass={id:'direct-pass',index:1,createdAt:now,userInput:'Answer briefly',userInputs:['Answer briefly'],userMessageIds:['direct-user'],phase:'accepted',resolution:'direct',directThreadId:'direct-thread',executionProfile:{provider:'deepseek',model:'deepseek-v4.1-flash',effort:'max'},publicAnswer:'A direct answer.',reasoningTurns:[{role:'direct',threadId:'direct-thread',turnId:'direct-turn',provider:'codex',requestedModel:'codex-runtime-entry',requestedEffort:'low',startedAt:now,status:'completed'}],correctionCount:0,processedTurns:[]};const task={id:'direct-provider-label',title:'Direct provider label',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',currentPassId:pass.id,resolution:'direct',passes:[pass],messages:[{id:'direct-user',role:'user',text:'Answer briefly',createdAt:now,passId:pass.id},{id:'direct-answer',role:'direct',text:'A direct answer.',createdAt:now,passId:pass.id}]};const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);const output=await screen.findByRole('region',{name:'Final output'});expect(output.textContent).toContain('codex-runtime-entry · low');expect(output.textContent).not.toContain('DeepSeek Harness');expect(screen.queryByText(/requested native effort .*effective effort unknown/)).toBeNull();const panel=await screen.findByLabelText('Pass 1');expect(within(panel).getAllByText('codex-runtime-entry · low').length).toBeGreaterThan(0);expect(within(panel).queryByText(/DeepSeek Harness direct answer/)).toBeNull();
-  });  it('keeps the composer on the Codex orchestrator while worker profile stays in Settings',async()=>{
-    const apiMod=await import('../src/ui/api.js');let latest:any=structuredClone(fixture);vi.mocked(apiMod.bootstrap).mockResolvedValue({...latest,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(isSnapshotRoute(path))return latest as any;if(path==='/api/settings'&&body){latest={...latest,state:{...latest.state,settings:body}};return {} as any;}return {} as any;});
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});
-    expect(screen.getAllByRole('button',{name:'Orchestrator model'})).toHaveLength(1);expect(screen.queryByRole('button',{name:'Thinking effort'})).toBeNull();expect(screen.queryByRole('button',{name:'Worker model'})).toBeNull();
-    fireEvent.click(screen.getByRole('button',{name:'Orchestrator model'}));const menu=screen.getByRole('dialog',{name:'Orchestrator model'});expect(within(menu).getByRole('group',{name:'Codex · OpenAI'})).toBeTruthy();expect(within(menu).queryByRole('group',{name:'DeepSeek Harness · OpenCode Go'})).toBeNull();expect(within(menu).getByRole('option',{name:/GPT-6 Luna/})).toBeTruthy();fireEvent.click(within(menu).getByRole('option',{name:/GPT-6\.1 Terra/}));
-    await waitFor(()=>expect(screen.getByRole('button',{name:'Orchestrator model'}).textContent).toContain('GPT-6.1 Terra'));
-    fireEvent.click(screen.getByRole('button',{name:'Orchestrator model'}));const effortMenu=screen.getByRole('dialog',{name:'Orchestrator model'});expect(within(effortMenu).getByRole('radiogroup',{name:'Reasoning effort for GPT-6.1 Terra'})).toBeTruthy();fireEvent.click(within(effortMenu).getByRole('radio',{name:'High'}));
-    fireEvent.click(screen.getByRole('button',{name:'Settings'}));const settings=await screen.findByRole('dialog',{name:'Settings'});expect(within(settings).getByRole('button',{name:'Worker model'})).toBeTruthy();expect(within(settings).queryByRole('button',{name:'Hard-task orchestrator model'})).toBeNull();fireEvent.click(within(settings).getByRole('button',{name:'Worker model'}));const workerMenu=within(settings).getByRole('dialog',{name:'Worker model'});expect(within(workerMenu).getByRole('group',{name:'Codex · OpenAI'})).toBeTruthy();expect(within(workerMenu).getByRole('group',{name:'DeepSeek Harness · OpenCode Go'})).toBeTruthy();expect(within(workerMenu).getByRole('option',{name:/GPT-6 Luna/})).toBeTruthy();fireEvent.click(within(workerMenu).getByRole('option',{name:/DeepSeek V4.1 Flash/}));await waitFor(()=>expect(within(settings).getByRole('button',{name:'Worker model'}).textContent).toContain('DeepSeek V4.1 Flash'));fireEvent.click(within(settings).getByRole('button',{name:'Cancel'}));
-    fireEvent.click(screen.getByRole('button',{name:'Access mode'}));expect(screen.getByRole('option',{name:'Read-only'})).toBeTruthy();fireEvent.click(screen.getByRole('option',{name:'Full access (unrestricted)'}));
-    const {api}=await import('../src/ui/api.js');
-    await waitFor(()=>expect(vi.mocked(api).mock.calls.filter(([url])=>url==='/api/settings').length).toBeGreaterThanOrEqual(3));
-    const writes=vi.mocked(api).mock.calls.filter(([url])=>url==='/api/settings').map(([,body])=>body as any);
-    expect(writes.some(write=>write.orchestratorModel==='gpt-6.1-terra'&&write.orchestratorEffort==='high')).toBe(true);expect(latest.state.settings.executionProfile).toEqual(fixture.state.settings.executionProfile);expect(writes.at(-1)?.approvalPolicy).toBe('full-access');
-  });
-  it('uses one accessible Markdown source editor without a preview-mode toggle',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});const editor=screen.getByRole('textbox',{name:'Task message'});expect(editor.getAttribute('contenteditable')).toBe('true');expect(screen.queryByRole('button',{name:'Preview'})).toBeNull();
-    fireEvent.keyDown(editor,{key:'Enter',isComposing:true,keyCode:229});const {api}=await import('../src/ui/api.js');expect(vi.mocked(api).mock.calls.some(([url])=>url==='/api/tasks')).toBe(false);
-  });
-  it('submits the exact Markdown editor source once without trimming its boundaries',async()=>{
-    render(<App/>);await screen.findByRole('textbox',{name:'Task message'});const editor=screen.getByRole('textbox',{name:'Task message'});const view=EditorView.findFromDOM(editor as HTMLElement);expect(view).toBeTruthy();const qa=screen.getByRole('checkbox',{name:'QA loop'});expect((qa as HTMLInputElement).checked).toBe(false);fireEvent.click(qa);const source='  **draft**\n\n- item  ';act(()=>view!.dispatch({changes:{from:0,to:view!.state.doc.length,insert:source}}));fireEvent.click(screen.getByRole('button',{name:'Send task'}));const {api}=await import('../src/ui/api.js');await waitFor(()=>expect(vi.mocked(api).mock.calls.filter(([url,body])=>url==='/api/tasks'&&(body as any).message===source&&(body as any).qaEnabled===true)).toHaveLength(1));
-  });
-  it('changes a workspace directory for future sessions while preserving each saved session snapshot',async()=>{
-    const now=new Date().toISOString();const project={...demoProject,projectRoot:'D:/workspace/old'};const task={id:'snapshot-task',projectId:project.id,title:'Historical context',phase:'accepted',createdAt:now,updatedAt:now,userRoot:project.projectRoot,correctionCount:0,currentPassId:'pass-a',passes:[{id:'pass-a',index:1,createdAt:now,userInput:'prior work',userInputs:['prior work'],userMessageIds:['u1'],phase:'accepted',correctionCount:0,processedTurns:[]}],messages:[{id:'u1',role:'user',text:'prior work',createdAt:now,passId:'pass-a'}]};let latest:any={...fixture.state,projects:[project],selectedProjectId:project.id,settings:{...fixture.state.settings},tasks:[task],activeTaskId:task.id};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:latest,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(path==='/api/projects'&&body){const saved={...latest.projects[0],...body,updatedAt:new Date().toISOString()};latest={...latest,projects:[saved,...latest.projects.slice(1)]};return {project:saved,duplicate:false} as any;}if(isSnapshotRoute(path))return {state:latest,runtime:fixture.runtime} as any;if(path.startsWith('/api/directories?resolve=1'))return {path:'D:/workspace/next',parent:'D:/workspace',entries:[],truncated:false} as any;if(path.startsWith('/api/directories'))return path.includes('next')?{path:'D:/workspace/next',parent:'D:/workspace',entries:[],truncated:false} as any:{path:'D:/workspace/old',parent:'D:/workspace',entries:[{name:'next',path:'D:/workspace/next'}],truncated:false} as any;return {} as any;});
-    render(<App/>);await screen.findByRole('tab',{name:/Historical context/});fireEvent.click(screen.getByRole('button',{name:`Configure workspace old`}));const root=await screen.findByRole('textbox',{name:'Working directory'});expect((root as HTMLInputElement).value).toBe('D:/workspace/old');fireEvent.click(screen.getByRole('button',{name:'Browse workspace folders'}));await screen.findByText('next');fireEvent.click(document.querySelector('.directory-entry-select')!);fireEvent.click(await screen.findByRole('button',{name:'Use this folder'}));await waitFor(()=>expect((root as HTMLInputElement).value).toBe('D:/workspace/next'));fireEvent.click(screen.getByRole('button',{name:'Save workspace'}));await waitFor(()=>expect(latest.projects[0].projectRoot).toBe('D:/workspace/next'));expect(latest.tasks[0]).toMatchObject({id:'snapshot-task',projectId:project.id,userRoot:'D:/workspace/old',messages:task.messages});expect(vi.mocked(apiMod.api).mock.calls.find(([path])=>path==='/api/projects')?.[1]).toEqual({id:project.id,projectRoot:'D:/workspace/next',pinned:false});expect(vi.mocked(apiMod.api).mock.calls.some(([path])=>path==='/api/settings')).toBe(false);
-    fireEvent.click(screen.getByRole('button',{name:'New session'}));const editor=await screen.findByRole('textbox',{name:'Task message'});const view=EditorView.findFromDOM(editor as HTMLElement)!;act(()=>view.dispatch({changes:{from:0,to:view.state.doc.length,insert:'Use the updated project workspace.'}}));fireEvent.click(screen.getByRole('button',{name:'Send task'}));await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([path,body])=>path==='/api/tasks'&&(body as any).projectId===project.id)).toBe(true));
-  });
-  it('renames and deletes only the selected local session through confirmed actions',async()=>{
-    const now=new Date().toISOString();const task={id:'local-session',title:'Synthetic session',phase:'accepted',createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,messages:[{id:'m1',role:'user',text:'sample',createdAt:now}]};let latest:any={...fixture.state,tasks:[task],activeTaskId:task.id};const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,state:latest,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(isSnapshotRoute(path))return {state:latest,runtime:fixture.runtime} as any;if(path==='/api/tasks/local-session/rename'){latest={...latest,tasks:[{...task,title:body.title}]};return {} as any;}if(path==='/api/tasks/local-session/delete'){latest={...latest,tasks:[],activeTaskId:null};return {ok:true,id:'local-session'} as any;}return {} as any;});
-    const user=userEvent.setup();render(<App/>);await screen.findByRole('button',{name:'Actions for Synthetic session'});fireEvent.click(screen.getByRole('button',{name:'Actions for Synthetic session'}));fireEvent.click(screen.getByRole('menuitem',{name:'Rename'}));const title=await screen.findByRole('textbox',{name:/Session name/});await user.clear(title);await user.type(title,'Renamed local session');expect((title as HTMLInputElement).value).toBe('Renamed local session');fireEvent.click(screen.getByRole('button',{name:'Save name'}));await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/tasks/local-session/rename')).toBe(true));await waitFor(()=>expect(screen.getAllByText('Renamed local session').length).toBeGreaterThan(0));fireEvent.click(screen.getByRole('button',{name:'Actions for Renamed local session'}));fireEvent.click(screen.getByRole('menuitem',{name:'Delete session'}));expect(screen.getByText('This removes the local conversation and its saved pass history.')).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Delete local session'}));await screen.findByRole('textbox',{name:'Task message'});expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/tasks/local-session/delete')).toBe(true);expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>String(url).includes('project_notes')&&String(url).includes('delete'))).toBe(false);
-  });
-  it('disables session deletion throughout routed phases even when role metadata is absent',async()=>{
-    const now=new Date().toISOString();const apiMod=await import('../src/ui/api.js');
-    for(const phase of ['routing','direct_running','simple_running']){
-      const task={id:`task-${phase}`,title:`Task ${phase}`,phase,createdAt:now,updatedAt:now,userRoot:'D:/workspace/demo',correctionCount:0,messages:[{id:`message-${phase}`,role:'user',text:'Test routed phase',createdAt:now}]};const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
-      vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-      render(<App/>);fireEvent.click(await screen.findByRole('button',{name:`Actions for Task ${phase}`}));expect((screen.getByRole('menuitem',{name:'Delete session'}) as HTMLButtonElement).disabled).toBe(true);cleanup();
+  it('keeps compact Stop and Heads-up controls inside each session pane without adding another bar', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    const source = Array.from(document.querySelectorAll('.document-tabs .document-tab')).at(-1)!;
+    const movedId = (source as HTMLElement).dataset.sessionTab!;
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => (type === 'application/x-opnex-session-tab' ? movedId : '')),
+    };
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    const workspace = document.querySelector('.workspace-content')!;
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(document.querySelector('.task-view')!, { dataTransfer: transfer, clientX: 990 });
+    await waitFor(() => expect(document.querySelectorAll('.pane-body')).toHaveLength(2));
+    const bars = Array.from(document.querySelectorAll('.document-tabs')) as HTMLElement[];
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) {
+      expect(within(bar).queryByRole('button', { name: 'Heads-up' })).toBeNull();
+      expect(within(bar).queryByRole('button', { name: 'Stop' })).toBeNull();
+    }
+    const bodies = Array.from(
+      document.querySelectorAll('.pane-body[data-tab-kind="session"]')
+    ) as HTMLElement[];
+    expect(bodies).toHaveLength(2);
+    for (const body of bodies) {
+      const actions = body.querySelector('.session-pane-actions') as HTMLElement;
+      expect(actions?.getAttribute('role')).toBe('group');
+      expect(actions?.getAttribute('data-session-actions-for')).toBe(
+        (body as HTMLElement).dataset.workspaceTab
+      );
+      expect(within(actions).getByRole('button', { name: 'Heads-up' })).toBeTruthy();
+      expect(body.contains(actions)).toBe(true);
+      expect(body.querySelector('.session-pane-toolbar')).toBeNull();
     }
   });
-  it('renders pending approval requests with explicit approve and decline actions',async()=>{
-    const task={id:'task-approval',title:'Run command',phase:'worker_running',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),userRoot:'D:/repo',correctionCount:0,approvalRequests:[{requestId:17,method:'item/commandExecution/requestApproval',itemId:'item-1',threadId:'worker-1',turnId:'turn-1',command:'npm test',cwd:'D:/repo',reason:'Run the requested verification'}],messages:[{id:'m1',role:'user',text:'Run tests',createdAt:new Date().toISOString()}]};
-    const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);expect(await screen.findByText('Approval needed')).toBeTruthy();expect(screen.getByText('npm test')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button',{name:'Approve once'}));
-    await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url,body])=>url==='/api/tasks/task-approval/approval'&&(body as any).decision==='accept')).toBe(true));
+  it('keeps busy Stop inside and bound to its owning split session', async () => {
+    const now = new Date().toISOString();
+    const makeTask = (id: string, title: string) => {
+      const pass = {
+        id: `pass-${id}`,
+        index: 1,
+        createdAt: now,
+        userInput: title,
+        userInputs: [title],
+        userMessageIds: [`user-${id}`],
+        phase: 'worker_running',
+        resolution: 'delegated',
+        correctionCount: 0,
+        orchestratorThreadId: `orch-${id}`,
+        workerThreadId: `worker-${id}`,
+        routeDecision: {
+          route: 'hard_task',
+          rule_id: 'test',
+          justification: 'A scoped fixture route.',
+          model: 'gpt-6.1-sol',
+          effort: 'low',
+          decidedAt: now,
+        },
+        reasoningTurns: [],
+        processedTurns: [],
+      };
+      return {
+        id,
+        title,
+        phase: 'worker_running',
+        createdAt: now,
+        updatedAt: now,
+        userRoot: 'D:/workspace/demo',
+        currentPassId: pass.id,
+        orchestratorThreadId: `orch-${id}`,
+        workerThreadId: `worker-${id}`,
+        passes: [pass],
+        messages: [
+          { id: `user-${id}`, role: 'user', text: title, createdAt: now, passId: pass.id },
+        ],
+      } as any;
+    };
+    const alpha = makeTask('task-alpha', 'Alpha session');
+    const beta = makeTask('task-beta', 'Beta session');
+    const seeded = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [alpha, beta], activeTaskId: alpha.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...seeded, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path)
+        ? ({ state: seeded.state, runtime: fixture.runtime } as any)
+        : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Alpha session' });
+    fireEvent.click(document.querySelectorAll('.session-row .task-nav')[1]);
+    await screen.findByRole('tab', { name: 'Beta session' });
+    const source = document.querySelector('[data-session-tab="task-beta"]') as HTMLElement;
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) =>
+        type === 'application/x-opnex-session-tab' ? 'task-beta' : ''
+      ),
+    };
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    const workspace = document.querySelector('.workspace-content')!;
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(document.querySelector('.task-view')!, { dataTransfer: transfer, clientX: 990 });
+    await waitFor(() => expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(2));
+    const tabbars = Array.from(
+      document.querySelectorAll('.pane-grid-group .document-tabs')
+    ) as HTMLElement[];
+    expect(tabbars).toHaveLength(2);
+    for (const tabbar of tabbars) {
+      expect(within(tabbar).queryByRole('button', { name: 'Stop' })).toBeNull();
+      expect(within(tabbar).queryByRole('button', { name: 'Heads-up' })).toBeNull();
+    }
+    const betaBody = document.querySelector(
+      '[data-workspace-tab="task-beta"].pane-body'
+    ) as HTMLElement;
+    const alphaBody = document.querySelector(
+      '[data-workspace-tab="task-alpha"].pane-body'
+    ) as HTMLElement;
+    expect(within(betaBody).getByRole('button', { name: 'Stop' })).toBeTruthy();
+    expect(within(alphaBody).getByRole('button', { name: 'Stop' })).toBeTruthy();
+    expect(
+      betaBody.querySelector('.session-pane-actions')?.getAttribute('data-session-actions-for')
+    ).toBe('task-beta');
+    fireEvent.click(within(betaBody).getByRole('button', { name: 'Stop' }));
+    await waitFor(() =>
+      expect(
+        vi.mocked(apiMod.api).mock.calls.some(([path]) => path === '/api/tasks/task-beta/cancel')
+      ).toBe(true)
+    );
+    expect(
+      vi.mocked(apiMod.api).mock.calls.some(([path]) => path === '/api/tasks/task-alpha/cancel')
+    ).toBe(false);
   });
-  it('opens the shared skills library in a tab and invokes a saved skill only through an explicit slash command',async()=>{
-    const apiMod=await import('../src/ui/api.js');let saved=false;const id='082d966c-c8f5-4e27-92c2-7f03cbf019c0';const summary={id,name:'QA skill',description:'Focused test guidance',source:'Created in the app',revision:'a'.repeat(64),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),archived:false,fileCount:0};
-    vi.mocked(apiMod.api).mockImplementation(async(path:string,body:any)=>{if(isSnapshotRoute(path))return fixture as any;if(path==='/api/skills'&&body){saved=true;return {skill:{...summary,instructions:'Use focused tests.',files:[]}} as any;}if(path===`/api/skills/${id}`)return {skill:{...summary,instructions:'**Use** focused tests.',files:[]}} as any;if(path==='/api/skills'||path.startsWith('/api/skills?'))return {skills:saved?[summary]:[]} as any;if(path==='/api/tasks')return {id:'new-task',title:'Write hello world',phase:'routing',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),userRoot:'D:/workspace/demo',messages:[],passes:[]} as any;return {} as any;});vi.mocked(apiMod.apiPut).mockResolvedValue({skill:{...summary,revision:'b'.repeat(64),instructions:'Use revised focused tests.',files:[]}} as any);
-    render(<App/>);const editorElement=await screen.findByRole('textbox',{name:'Task message'});expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>String(url).startsWith('/api/skills'))).toBe(false);expect(screen.queryByText('Hard tasks')).toBeNull();expect(screen.queryByText('Effort')).toBeNull();expect(screen.queryByText('Approval')).toBeNull();expect(screen.queryByText(/Hard-task Luna/)).toBeNull();expect(screen.getByRole('button',{name:'Orchestrator model'})).toBeTruthy();expect(screen.queryByRole('button',{name:'Thinking effort'})).toBeNull();expect(screen.getByRole('button',{name:'Access mode'})).toBeTruthy();
-    fireEvent.click(document.querySelector('.activity-rail [aria-label="Library"]')!);await screen.findByRole('heading',{name:'Library'});expect(document.querySelector('[data-tab-kind="skills"]')).toBeTruthy();expect(document.querySelector('.skill-library-page')?.closest('[role="dialog"]')).toBeNull();expect(await screen.findByRole('heading',{name:'No saved skills yet'})).toBeTruthy();expect(document.querySelector('.skill-library-layout')).toBeNull();await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>String(url).startsWith('/api/skills'))).toBe(true));
-    fireEvent.change(screen.getByRole('textbox',{name:'Search saved skills'}),{target:{value:'missing'}});expect(await screen.findByRole('heading',{name:'No skills match “missing”'})).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Clear search'}));expect(await screen.findByRole('heading',{name:'No saved skills yet'})).toBeTruthy();
-    fireEvent.click(screen.getByRole('button',{name:'New skill'}));fireEvent.change(screen.getByRole('textbox',{name:'Skill name'}),{target:{value:'QA skill'}});fireEvent.change(screen.getByRole('textbox',{name:'Description'}),{target:{value:'Focused test guidance'}});fireEvent.change(screen.getByRole('textbox',{name:'Instructions'}),{target:{value:'Use focused tests.'}});fireEvent.click(screen.getByRole('button',{name:'Save skill'}));await screen.findByText('QA skill');fireEvent.click(screen.getByRole('button',{name:/QA skill/}));await screen.findByRole('heading',{name:'QA skill'});expect(document.querySelector('.skill-instructions-preview strong')?.textContent).toBe('Use');fireEvent.click(screen.getByRole('button',{name:'Edit skill'}));await screen.findByRole('textbox',{name:'Instructions'});fireEvent.change(screen.getByRole('textbox',{name:'Instructions'}),{target:{value:'Use revised focused tests.'}});fireEvent.click(screen.getByRole('button',{name:'Save skill'}));await screen.findByText('Skill saved with a new revision.');expect(apiMod.apiPut).toHaveBeenCalledWith(`/api/skills/${id}`,expect.objectContaining({expectedRevision:'a'.repeat(64),instructions:'Use revised focused tests.'}));
-    fireEvent.click(screen.getByRole('tab',{name:'New session'}));const editor=EditorView.findFromDOM(editorElement as HTMLElement)!;const user=userEvent.setup();await user.click(editorElement);const detailLoadsBefore=vi.mocked(apiMod.api).mock.calls.filter(([url])=>url===`/api/skills/${id}`).length;await user.keyboard('/');await screen.findByRole('dialog',{name:'Available skills'});await screen.findByRole('option',{name:/QA skill/});await user.keyboard('{Escape}');await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Available skills'})).toBeNull());expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/tasks')).toBe(false);act(()=>editor.dispatch({changes:{from:0,to:1,insert:''}}));await user.keyboard('/Q');await screen.findByRole('option',{name:/QA skill/});await user.keyboard('{ArrowDown}');await user.keyboard('{Enter}');expect(editor.state.doc.toString()).toBe(`/skill library:${id}@${summary.revision}`);expect(vi.mocked(apiMod.api).mock.calls.filter(([url])=>url===`/api/skills/${id}`).length).toBe(detailLoadsBefore);expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/tasks')).toBe(false);act(()=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:'/Q'}}));const mouseOption=await screen.findByRole('option',{name:/QA skill/});fireEvent.click(mouseOption);expect(editor.state.doc.toString()).toBe(`/skill library:${id}@${summary.revision}`);act(()=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:`Write hello world in Python.\n/skill library:${id}@${summary.revision}`}}));expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>url==='/api/tasks')).toBe(false);fireEvent.keyDown(editorElement,{key:'Enter'});await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url,body])=>url==='/api/tasks'&&(body as any).message===`Write hello world in Python.\n/skill library:${id}@${summary.revision}`)).toBe(true));
+  it('turns the send button into Stop while running and Steer once the user types', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'task-steer',
+      title: 'Steer session',
+      phase: 'routing',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      messages: [{ id: 'u1', role: 'user', text: 'Start.', createdAt: now }],
+      passes: [],
+    } as any;
+    const seeded = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...seeded, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path)
+        ? ({ state: seeded.state, runtime: fixture.runtime } as any)
+        : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('button', { name: 'Stop' });
+    expect(screen.queryByRole('button', { name: 'Send task' })).toBeNull();
+    const editor = EditorView.findFromDOM(
+      screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    act(() => editor.dispatch({ changes: { from: 0, to: 0, insert: 'Please narrow the scope.' } }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Steer' }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([path, body]) =>
+              path === '/api/tasks/task-steer/messages' &&
+              (body as any).message === 'Please narrow the scope.'
+          )
+      ).toBe(true)
+    );
   });
-  it('opens the slash picker only at a command position, pauses during IME input, and links an empty picker to the Skills tab',async()=>{
-    const apiMod=await import('../src/ui/api.js');const skillCalls:string[]=[];vi.mocked(apiMod.bootstrap).mockResolvedValue({...fixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{if(isSnapshotRoute(path))return fixture as any;if(path.startsWith('/api/skills')){skillCalls.push(path);return{skills:[]} as any;}return{} as any;});
-    render(<App/>);const editorElement=await screen.findByRole('textbox',{name:'Task message'});const editor=EditorView.findFromDOM(editorElement as HTMLElement)!;const user=userEvent.setup();expect(skillCalls).toEqual([]);
-    act(()=>editor.dispatch({changes:{from:0,to:0,insert:'/tmp/project/file.md'}}));expect(screen.queryByRole('dialog',{name:'Available skills'})).toBeNull();expect(skillCalls).toEqual([]);
-    act(()=>editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:''}}));fireEvent.compositionStart(editorElement);act(()=>editor.dispatch({changes:{from:0,to:0,insert:'/'}}));expect(screen.queryByRole('dialog',{name:'Available skills'})).toBeNull();expect(skillCalls).toEqual([]);fireEvent.compositionEnd(editorElement);
-    await screen.findByRole('dialog',{name:'Available skills'});expect(await screen.findByText('No saved skills yet.')).toBeTruthy();expect(skillCalls.some(path=>path.includes('limit=50'))).toBe(true);expect(skillCalls.every(path=>!/^\/api\/skills\/[^?]/.test(path))).toBe(true);
-    await user.click(screen.getByRole('button',{name:'Open Skills tab'}));const tabs=screen.getByRole('tablist',{name:'Open workspaces'});expect(within(tabs).getByRole('tab',{name:'Skills'}).getAttribute('aria-selected')).toBe('true');expect(document.querySelector('[data-tab-kind="skills"]')).toBeTruthy();
+  it('pins and archives sessions from right-click and the row menu without showing timestamps', async () => {
+    const now = new Date().toISOString();
+    const makeTask = (id: string, title: string) =>
+      ({
+        id,
+        title,
+        phase: 'accepted',
+        createdAt: now,
+        updatedAt: now,
+        userRoot: 'D:/workspace/demo',
+        correctionCount: 0,
+        messages: [{ id: `u-${id}`, role: 'user', text: title, createdAt: now }],
+        passes: [],
+      }) as any;
+    const alpha = makeTask('task-alpha', 'Alpha session');
+    const beta = makeTask('task-beta', 'Beta session');
+    const seeded = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [alpha, beta], activeTaskId: alpha.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...seeded, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path)
+        ? ({ state: seeded.state, runtime: fixture.runtime } as any)
+        : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Alpha session' });
+    expect(document.querySelector('.task-time')).toBeNull();
+    fireEvent.contextMenu(
+      document.querySelector('.session-row[data-session-type="conversation"]')!
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Pin session' }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([path, body]) => path === '/api/tasks/task-alpha/pin' && (body as any).pinned === true
+          )
+      ).toBe(true)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Beta session' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive session' }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([path, body]) =>
+              path === '/api/tasks/task-beta/archive' && (body as any).archived === true
+          )
+      ).toBe(true)
+    );
   });
-  it('discovers the project AgentMem skill through the explicit Codex-skill picker path',async()=>{
-    const apiMod=await import('../src/ui/api.js');const skill={id:'codex:agentmem-project:0123456789ab',name:'agentmem-project',description:'Use the host-configured AgentMem MCP within an 8-call skill budget.',source:'Project skill',revision:'a'.repeat(64),createdAt:'',updatedAt:'',archived:false,fileCount:0};
-    vi.mocked(apiMod.api).mockImplementation(async(path:string)=>{if(isSnapshotRoute(path))return fixture as any;if(path.startsWith('/api/skills?source=codex'))return{skills:[skill]} as any;return{} as any;});
-    render(<App/>);const editorElement=await screen.findByRole('textbox',{name:'Task message'});const editor=EditorView.findFromDOM(editorElement as HTMLElement)!;const user=userEvent.setup();act(()=>editor.dispatch({changes:{from:0,to:0,insert:'/skill codex:agentmem-project'}}));
-    const option=await screen.findByRole('option',{name:/agentmem-project/});expect(vi.mocked(apiMod.api).mock.calls.some(([url])=>String(url).includes(`source=codex&q=agentmem-project&limit=50&projectId=${demoProject.id}`))).toBe(true);await user.click(option);expect(editor.state.doc.toString()).toBe('/skill codex:agentmem-project:0123456789ab');
+  it('creates a session from a split draft in that same pane and transitions it into the conversation', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    const now = new Date().toISOString();
+    const created = {
+      id: 'task-from-side-draft',
+      title: 'Side fixture task',
+      phase: 'intake',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      messages: [
+        { id: 'message-side-fixture', role: 'user', text: 'fixture prompt', createdAt: now },
+      ],
+      passes: [],
+    } as any;
+    const updated = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [created], activeTaskId: created.id },
+    };
+    let payload: any;
+    vi.mocked(apiMod.api).mockImplementation(async (path: string, body: any) => {
+      if (path === '/api/tasks') {
+        payload = body;
+        return created;
+      }
+      if (isSnapshotRoute(path)) return updated as any;
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    const source = Array.from(document.querySelectorAll('.document-tabs .document-tab')).at(-1)!;
+    const tabId = (source as HTMLElement).dataset.sessionTab!;
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => (type === 'application/x-opnex-session-tab' ? tabId : '')),
+    };
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    const workspace = document.querySelector('.workspace-content')!;
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(document.querySelector('.task-view')!, { dataTransfer: transfer, clientX: 990 });
+    const side = document.querySelector('.side-session-view') as HTMLElement;
+    const editor = EditorView.findFromDOM(
+      within(side).getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    act(() =>
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: 'fixture prompt' },
+      })
+    );
+    const file = new File(['side attachment'], 'side.txt', { type: 'text/plain' });
+    fireEvent.change(within(side).getByLabelText('Choose files to attach'), {
+      target: { files: [file] },
+    });
+    await waitFor(() => expect(within(side).getByText('side.txt')).toBeTruthy());
+    fireEvent.click(within(side).getByRole('button', { name: 'Send task' }));
+    const sideBar = screen.getByRole('tablist', { name: 'Side pane workspaces' });
+    await waitFor(() =>
+      expect(within(sideBar).getByRole('tab', { name: 'Side fixture task' })).toBeTruthy()
+    );
+    const createdTab = within(sideBar).getByRole('tab', { name: 'Side fixture task' });
+    expect(createdTab.getAttribute('aria-selected')).toBe('true');
+    expect(
+      createdTab
+        .closest('.pane-grid-group')
+        ?.querySelector('[role="tablist"]')
+        ?.getAttribute('aria-label')
+    ).toBe('Side pane workspaces');
+    expect(document.querySelector('.side-session-view')?.classList.contains('new-tab-view')).toBe(
+      false
+    );
+    expect(
+      document.querySelector('.side-session-view')?.classList.contains('session-entering')
+    ).toBe(true);
+    expect(document.querySelector('.side-session-view .conversation')?.textContent).toContain(
+      'fixture prompt'
+    );
+    expect(payload).toMatchObject({
+      message: 'fixture prompt',
+      attachments: [{ name: 'side.txt', type: 'text/plain' }],
+    });
   });
-  it('forwards a native MCP elicitation form response without persisting its input in the task',async()=>{
-    const task={id:'task-elicitation',title:'Look up project data',phase:'direct_running',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),userRoot:'D:/repo',correctionCount:0,approvalRequests:[{requestId:18,method:'mcpServer/elicitation/request',itemId:'',threadId:'direct-1',turnId:'turn-1',serverName:'project_notes',mode:'form',message:'Confirm the selected project lookup.',requestedSchema:{type:'object',properties:{confirmed:{type:'boolean'}},required:['confirmed']}}],messages:[{id:'m2',role:'user',text:'Look up a decision',createdAt:new Date().toISOString()}]};
-    const activeFixture={...fixture,state:{...fixture.state,tasks:[task],activeTaskId:task.id}};
-    const apiMod=await import('../src/ui/api.js');vi.mocked(apiMod.bootstrap).mockResolvedValue({...activeFixture,csrf:'test'} as any);vi.mocked(apiMod.api).mockImplementation(async(path:string)=>isSnapshotRoute(path)?activeFixture as any:{} as any);
-    render(<App/>);expect(await screen.findByText('MCP server needs your input')).toBeTruthy();expect(screen.getByText(/project_notes · form/i)).toBeTruthy();
-    fireEvent.change(screen.getByRole('textbox',{name:'MCP response JSON'}),{target:{value:'{"confirmed":true}'}});fireEvent.click(screen.getByRole('button',{name:'Send response'}));
-    await waitFor(()=>expect(vi.mocked(apiMod.api).mock.calls.some(([url,body])=>url==='/api/tasks/task-elicitation/approval'&&(body as any).content?.confirmed===true)).toBe(true));
+  it('restores the split draft when session creation fails', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) => {
+      if (path === '/api/tasks') throw new Error('fixture create failure');
+      return isSnapshotRoute(path) ? (fixture as any) : ({} as any);
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    const source = Array.from(document.querySelectorAll('.document-tabs .document-tab')).at(-1)!;
+    const tabId = (source as HTMLElement).dataset.sessionTab!;
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => (type === 'application/x-opnex-session-tab' ? tabId : '')),
+    };
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    const workspace = document.querySelector('.workspace-content')!;
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(document.querySelector('.task-view')!, { dataTransfer: transfer, clientX: 990 });
+    const side = document.querySelector('.side-session-view') as HTMLElement;
+    const editor = EditorView.findFromDOM(
+      within(side).getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    act(() =>
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: 'retry this prompt' },
+      })
+    );
+    fireEvent.click(within(side).getByRole('button', { name: 'Send task' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('fixture create failure')
+    );
+    expect(
+      EditorView.findFromDOM(
+        within(side).getByRole('textbox', { name: 'Task message' }) as HTMLElement
+      )?.state.doc.toString()
+    ).toBe('retry this prompt');
+    expect(side.classList.contains('new-tab-view')).toBe(true);
+    expect(screen.getByRole('tablist', { name: 'Side pane workspaces' }).textContent).toContain(
+      'New session'
+    );
+  });
+  it('scrolls each split conversation independently and follows side updates only near the bottom', async () => {
+    const now = new Date().toISOString();
+    const makeTask = (id: string, title: string) =>
+      ({
+        id,
+        title,
+        phase: 'accepted',
+        createdAt: now,
+        updatedAt: now,
+        userRoot: 'D:/workspace/demo',
+        messages: [
+          { id: `${id}-message-1`, role: 'user', text: `${title} initial message`, createdAt: now },
+        ],
+        passes: [],
+      }) as any;
+    const taskA = makeTask('scroll-task-a', 'Scroll A'),
+      taskB = makeTask('scroll-task-b', 'Scroll B');
+    const data = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [taskA, taskB], activeTaskId: taskA.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...data, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (data as any) : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Scroll A' });
+    fireEvent.click(document.querySelectorAll('.session-row .task-nav')[1]);
+    await screen.findByRole('tab', { name: 'Scroll B' });
+    const source = document.querySelector('[data-session-tab="scroll-task-a"]')!;
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) =>
+        type === 'application/x-opnex-session-tab' ? 'scroll-task-a' : ''
+      ),
+    };
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    const workspace = document.querySelector('.workspace-content')!;
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(document.querySelector('.task-view')!, { dataTransfer: transfer, clientX: 990 });
+    const rootConversation = document.querySelector('.task-view .conversation') as HTMLElement;
+    const sideConversation = document.querySelector(
+      '.side-session-view .conversation'
+    ) as HTMLElement;
+    let rootTop = 800,
+      sideTop = 100,
+      sideHeight = 1600;
+    Object.defineProperties(rootConversation, {
+      scrollHeight: { configurable: true, get: () => 2000 },
+      clientHeight: { configurable: true, get: () => 500 },
+      scrollTop: {
+        configurable: true,
+        get: () => rootTop,
+        set: (value) => {
+          rootTop = value;
+        },
+      },
+    });
+    Object.defineProperties(sideConversation, {
+      scrollHeight: { configurable: true, get: () => sideHeight },
+      clientHeight: { configurable: true, get: () => 500 },
+      scrollTop: {
+        configurable: true,
+        get: () => sideTop,
+        set: (value) => {
+          sideTop = value;
+        },
+      },
+    });
+    fireEvent.scroll(rootConversation);
+    fireEvent.scroll(sideConversation);
+    const publish = (task: typeof taskA) =>
+      act(() =>
+        eventSource.onmessage({
+          data: JSON.stringify({
+            state: { ...data.state, tasks: [task, taskB], activeTaskId: taskB.id },
+            runtime: fixture.runtime,
+          }),
+        })
+      );
+    const firstUpdate = {
+      ...taskA,
+      messages: [
+        ...taskA.messages,
+        {
+          id: 'scroll-task-a-message-2',
+          role: 'user',
+          text: 'new side content while reading history',
+          createdAt: new Date(Date.now() + 1000).toISOString(),
+        },
+      ],
+    };
+    sideHeight = 1700;
+    publish(firstUpdate);
+    await waitFor(() =>
+      expect(screen.getByText('new side content while reading history')).toBeTruthy()
+    );
+    expect(sideTop).toBe(100);
+    expect(rootTop).toBe(800);
+    sideTop = 1300;
+    sideHeight = 1800;
+    fireEvent.scroll(sideConversation);
+    const secondUpdate = {
+      ...firstUpdate,
+      messages: [
+        ...firstUpdate.messages,
+        {
+          id: 'scroll-task-a-message-3',
+          role: 'user',
+          text: 'new side content while at bottom',
+          createdAt: new Date(Date.now() + 2000).toISOString(),
+        },
+      ],
+    };
+    publish(secondUpdate);
+    await waitFor(() => expect(screen.getByText('new side content while at bottom')).toBeTruthy());
+    expect(sideTop).toBe(1800);
+    expect(rootTop).toBe(800);
+  });
+  it('keeps the user-selected tab active when a pending create resolves in another tab', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    const now = new Date().toISOString();
+    const created = {
+      id: 'task-from-root-draft',
+      title: 'Created while switched',
+      phase: 'intake',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      messages: [
+        { id: 'created-message', role: 'user', text: 'pending fixture prompt', createdAt: now },
+      ],
+      passes: [],
+    } as any;
+    const updated = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [created], activeTaskId: created.id },
+    };
+    let createStarted = false;
+    let resolveCreate: (value: any) => void = () => {};
+    vi.mocked(apiMod.api).mockImplementation((async (path: string) => {
+      if (path === '/api/tasks') {
+        createStarted = true;
+        return new Promise((resolve) => {
+          resolveCreate = resolve;
+        }) as any;
+      }
+      if (isSnapshotRoute(path)) return updated as any;
+      return {} as any;
+    }) as any);
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    const tabs = screen.getAllByRole('tab', { name: 'New session' });
+    fireEvent.click(tabs[0]);
+    const editor = EditorView.findFromDOM(
+      screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    act(() =>
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: 'pending fixture prompt' },
+      })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Send task' }));
+    await waitFor(() => expect(createStarted).toBe(true));
+    fireEvent.click(screen.getAllByRole('tab', { name: 'New session' })[1]);
+    const stillSelected = screen.getAllByRole('tab', { name: 'New session' })[1];
+    expect(stillSelected.getAttribute('aria-selected')).toBe('true');
+    await act(async () => {
+      resolveCreate(created);
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Created while switched' })).toBeTruthy()
+    );
+    expect(screen.getByRole('tab', { name: 'New session' }).getAttribute('aria-selected')).toBe(
+      'true'
+    );
+    expect(
+      screen
+        .getByRole('tab', { name: 'Created while switched' })
+        .closest('.document-tab')
+        ?.classList.contains('session-arrived')
+    ).toBe(true);
+  });
+  it('opens the side pane on the dragged tab half', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => (type === 'application/x-opnex-session-tab' ? 'new:0' : '')),
+    };
+    fireEvent.dragStart(document.querySelector('.document-tab')!, { dataTransfer: transfer });
+    const content = document.querySelector('.workspace-content')!;
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const drop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperties(drop, { clientX: { value: 10 }, dataTransfer: { value: transfer } });
+    fireEvent(content, drop);
+    await waitFor(() => expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(2));
+    expect(screen.getByRole('tablist', { name: 'Side pane workspaces' })).toBeTruthy();
+  });
+  it('keeps a new-session draft visible when its tab is dragged into the side pane', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const editor = EditorView.findFromDOM(
+      screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    act(() =>
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: 'draft stays with this tab' },
+      })
+    );
+    const source = document.querySelector('.document-tab')!;
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => (type === 'application/x-opnex-session-tab' ? 'new:0' : '')),
+    };
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    const content = document.querySelector('.workspace-content')!;
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(content, { dataTransfer: transfer, clientX: 990 });
+    await waitFor(() =>
+      expect(document.querySelector('.side-session-view')?.textContent).toContain(
+        'draft stays with this tab'
+      )
+    );
+    expect(
+      document.querySelector('.workspace-content')?.classList.contains('has-side-session')
+    ).toBe(true);
+  });
+  it('opens one new session when selecting a workspace from the session list', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'existing-project-session',
+      title: 'Existing project session',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      messages: [{ id: 'message-1', role: 'user', text: 'Existing session', createdAt: now }],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+
+    render(<App />);
+    await screen.findAllByText(task.title);
+    fireEvent.click(screen.getByRole('button', { name: 'New session in demo' }));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(document.querySelectorAll('.document-tab[data-workspace-tab^="new:"]')).toHaveLength(1);
+  });
+
+  it('preserves an unsent draft and opens a fresh tab for a workspace new-session action', async () => {
+    render(<App />);
+    const editorElement = await screen.findByRole('textbox', { name: 'Task message' });
+    const editor = EditorView.findFromDOM(editorElement as HTMLElement)!;
+    act(() =>
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: 'unsent draft' },
+      })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'New session in demo' }));
+    await waitFor(() =>
+      expect(screen.getAllByRole('tab', { name: 'New session' })).toHaveLength(2)
+    );
+    fireEvent.click(screen.getAllByRole('tab', { name: 'New session' })[0]);
+
+    const preservedEditor = EditorView.findFromDOM(
+      screen.getByRole('textbox', { name: 'Task message' }) as HTMLElement
+    )!;
+    expect(preservedEditor.state.doc.toString()).toBe('unsent draft');
+  });
+
+  it('keeps a side pane until its last tab closes and then removes the empty pane', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const transfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => (type === 'application/x-opnex-session-tab' ? 'new:0' : '')),
+    };
+    fireEvent.dragStart(document.querySelector('.document-tab')!, { dataTransfer: transfer });
+    const splitTarget = document.querySelector('.workspace-content')!;
+    vi.spyOn(splitTarget, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(splitTarget, { dataTransfer: transfer, clientX: 990 });
+    await waitFor(() => expect(document.querySelector('.side-session-view')).toBeTruthy());
+    const editors = screen
+      .getAllByRole('textbox', { name: 'Task message' })
+      .map((el) => EditorView.findFromDOM(el as HTMLElement)!);
+    expect(editors).toHaveLength(2);
+    act(() =>
+      editors[1].dispatch({
+        changes: { from: 0, to: editors[1].state.doc.length, insert: 'side-only draft' },
+      })
+    );
+    expect(editors[0].state.doc.toString()).toBe('');
+    const fileInputs = screen.getAllByLabelText('Choose files to attach');
+    fireEvent.change(fileInputs[1], {
+      target: { files: [new File(['isolated test'], 'side.txt', { type: 'text/plain' })] },
+    });
+    await waitFor(() =>
+      expect(
+        document.querySelector('.side-session-view .pending-attachments')?.textContent
+      ).toContain('side.txt')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'New session in side pane' }));
+    const sideList = screen.getByRole('tablist', { name: 'Side pane workspaces' });
+    expect(within(sideList).getAllByRole('tab', { name: 'New session' })).toHaveLength(2);
+    const movedTab = within(sideList)
+      .getAllByRole('tab', { name: 'New session' })
+      .at(-1)!
+      .closest('.document-tab')!;
+    const movingData = {
+      setData: vi.fn(),
+      getData: vi.fn(),
+      types: ['application/x-opnex-session-tab'],
+    };
+    fireEvent.dragStart(movedTab, { dataTransfer: movingData });
+    const movingId = movingData.setData.mock.calls[0]?.[1];
+    movingData.getData.mockImplementation((type: string) =>
+      type === 'application/x-opnex-session-tab' ? movingId : ''
+    );
+    const mainTarget = document.querySelector('.document-tabs .document-tab')!;
+    fireEvent.dragOver(mainTarget, {
+      dataTransfer: movingData,
+      types: ['application/x-opnex-session-tab'],
+    });
+    fireEvent.drop(mainTarget, { dataTransfer: movingData });
+    await waitFor(() =>
+      expect(within(sideList).getAllByRole('tab', { name: 'New session' })).toHaveLength(1)
+    );
+    expect(
+      EditorView.findFromDOM(
+        within(document.querySelector('.side-session-view')!).getByRole('textbox', {
+          name: 'Task message',
+        }) as HTMLElement
+      )?.state.doc.toString()
+    ).toBe('side-only draft');
+    fireEvent.click(within(sideList).getByRole('button', { name: 'Close New session tab' }));
+    await waitFor(() => expect(document.querySelector('.side-session-view')).toBeNull());
+  });
+  it('creates three adjacent groups from both content halves and prunes the last group', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open new session tab' }));
+    const workspace = document.querySelector('.workspace-content')!;
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1600,
+      top: 0,
+      bottom: 900,
+      width: 1600,
+      height: 900,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const drag = (source: HTMLElement, target: HTMLElement, x: number) => {
+      let id = '';
+      const transfer = {
+        setData: vi.fn((_type: string, value: string) => {
+          id = value;
+        }),
+        getData: vi.fn((type: string) => (type === 'application/x-opnex-session-tab' ? id : '')),
+        types: ['application/x-opnex-session-tab'],
+      };
+      fireEvent.dragStart(source, { dataTransfer: transfer });
+      fireEvent.drop(target, { dataTransfer: transfer, clientX: x });
+    };
+    const rootTabs = () =>
+      Array.from(document.querySelectorAll('.document-tabs .document-tab')) as HTMLElement[];
+    const rootPane = document.querySelector('.task-view') as HTMLElement;
+    vi.spyOn(rootPane, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 800,
+      top: 0,
+      bottom: 900,
+      width: 800,
+      height: 900,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    drag(rootTabs()[0], rootPane, 10);
+    await waitFor(() => expect(document.querySelectorAll('.session-pane')).toHaveLength(1));
+    const splitTarget = document.querySelector('.session-pane') as HTMLElement;
+    vi.spyOn(splitTarget, 'getBoundingClientRect').mockReturnValue({
+      left: 800,
+      right: 1600,
+      top: 0,
+      bottom: 900,
+      width: 800,
+      height: 900,
+      x: 800,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    drag(rootTabs()[0], splitTarget, 1500);
+    await waitFor(() => expect(document.querySelectorAll('.session-pane')).toHaveLength(2));
+    expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(3);
+    const editors = screen
+      .getAllByRole('textbox', { name: 'Task message' })
+      .map((element) => EditorView.findFromDOM(element as HTMLElement)!);
+    act(() =>
+      editors.forEach((editor, index) =>
+        editor.dispatch({
+          changes: { from: 0, to: editor.state.doc.length, insert: `pane draft ${index}` },
+        })
+      )
+    );
+    const lastGroup = document.querySelectorAll('.pane-grid-group')[2];
+    fireEvent.click(
+      within(lastGroup as HTMLElement).getByRole('button', { name: 'Close New session tab' })
+    );
+    await waitFor(() => expect(document.querySelectorAll('.pane-grid-group')).toHaveLength(2));
+    expect(
+      screen
+        .getAllByRole('textbox', { name: 'Task message' })
+        .map((element) => EditorView.findFromDOM(element as HTMLElement)?.state.doc.toString())
+    ).toEqual(expect.arrayContaining(['pane draft 0', 'pane draft 1']));
+  });
+  it('reorders real session tabs and opens a dragged task in the side pane', async () => {
+    const now = new Date().toISOString();
+    const makeTask = (id: string, title: string) => ({
+      id,
+      title,
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      messages: [{ id: `m-${id}`, role: 'user', text: title, createdAt: now }],
+      passes: [],
+    });
+    const tasks = [makeTask('task-a', 'Alpha session'), makeTask('task-b', 'Beta session')];
+    const data = { ...fixture, state: { ...fixture.state, tasks, activeTaskId: 'task-a' } };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...data, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (data as any) : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Alpha session' });
+    fireEvent.click(document.querySelectorAll('.session-row .task-nav')[1]);
+    await screen.findByRole('tab', { name: 'Beta session' });
+    const second = screen
+      .getByRole('tab', { name: 'Beta session' })
+      .closest('.document-tab') as HTMLElement;
+    const dataTransfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) =>
+        type === 'application/x-opnex-session-tab' ? 'task-b' : ''
+      ),
+      types: ['application/x-opnex-session-tab'],
+    };
+    fireEvent.dragStart(second, { dataTransfer });
+    const content = document.querySelector('.workspace-content')!;
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    fireEvent.drop(content, { dataTransfer, clientX: 990 });
+    await waitFor(() =>
+      expect(document.querySelector('.side-session-view')?.textContent).toContain('Beta session')
+    );
+    expect(screen.getByRole('tab', { name: 'Alpha session' }).getAttribute('aria-selected')).toBe(
+      'true'
+    );
+    fireEvent.dragStart(
+      screen.getByRole('tab', { name: 'Beta session' }).closest('.document-tab')!,
+      { dataTransfer }
+    );
+    const mainTarget = screen.getByRole('tab', { name: 'Alpha session' }).closest('.document-tab')!;
+    fireEvent.dragOver(mainTarget, { dataTransfer });
+    fireEvent.drop(mainTarget, { dataTransfer });
+    await waitFor(() => expect(document.querySelector('.side-session-view')).toBeNull());
+    expect(screen.getByRole('tab', { name: 'Beta session' }).getAttribute('aria-selected')).toBe(
+      'true'
+    );
+    const first = screen.getByRole('tab', { name: 'Alpha session' }).closest('.document-tab')!;
+    const target = screen.getByRole('tab', { name: 'Beta session' }).closest('.document-tab')!;
+    const reorderTransfer = { setData: vi.fn(), getData: vi.fn(() => 'task-a') };
+    fireEvent.dragStart(first, { dataTransfer: reorderTransfer });
+    fireEvent.drop(target, { dataTransfer: reorderTransfer });
+    expect(
+      Array.from(document.querySelectorAll('.document-tab'))
+        .map((node) => node.textContent)
+        .slice(0, 2)
+    ).toEqual(['Alpha session', 'Beta session']);
+  });
+  it('opens an agent-requested browser as a peer workspace and preserves the session tab', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'task-docked',
+      title: 'Docked task',
+      phase: 'worker_running',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: 'pass-docked',
+      workspaceCommand: {
+        id: 'cmd-1',
+        mode: 'browser',
+        placement: 'side',
+        url: 'https://github.com/openai/codex',
+        createdAt: now,
+      },
+      messages: [{ id: 'msg-docked', role: 'user', text: 'Keep working here', createdAt: now }],
+      passes: [],
+    } as any;
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const bridge = nativeWorkspaceBridge();
+    (window as any).opnexDesktop = { browser: bridge };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    expect(await screen.findByText('Keep working here')).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.browser-peer-tab')).toBeTruthy());
+    await waitFor(() =>
+      expect(bridge.workspaceOpen).toHaveBeenCalledWith(
+        expect.stringMatching(/^browser:/),
+        'https://github.com/openai/codex'
+      )
+    );
+    expect(
+      document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')
+    ).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Docked task' })).toBeTruthy();
+    expect(document.querySelector('.conversation')?.textContent).toContain('Keep working here');
+    expect(document.querySelector('.workspace-content.mode-tasks.has-docked-workspace')).toBeNull();
+  });
+  it('navigates, hides, and restores its native Browser peer view', async () => {
+    const bridge = nativeWorkspaceBridge();
+    (window as any).opnexDesktop = { browser: bridge };
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(document.querySelector('.activity-rail [aria-label="Browser"]')!);
+    const browserTab = await waitFor(() => {
+      const value = document.querySelector('.browser-peer-tab') as HTMLElement | null;
+      if (!value) throw new Error('Browser tab not opened');
+      return value;
+    });
+    const workspaceId = browserTab.dataset.workspaceTab!;
+    await waitFor(() =>
+      expect(bridge.workspaceOpen).toHaveBeenCalledWith(workspaceId, 'https://www.google.com/')
+    );
+    const address = await screen.findByRole('combobox', { name: 'Website address' });
+    fireEvent.change(address, { target: { value: 'https://example.com/fixture' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+    await waitFor(() =>
+      expect(bridge.workspaceNavigate).toHaveBeenCalledWith(workspaceId, {
+        url: 'https://example.com/fixture',
+      })
+    );
+    fireEvent.click(
+      document.querySelector('.document-tabs [role="tab"][aria-label="New session"]')!
+    );
+    await waitFor(() =>
+      expect(bridge.workspaceSetBounds).toHaveBeenCalledWith(workspaceId, null, false)
+    );
+    fireEvent.click(document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')!);
+    await waitFor(() =>
+      expect(bridge.workspaceSetBounds).toHaveBeenCalledWith(workspaceId, null, true)
+    );
+    expect(
+      (screen.getByRole('combobox', { name: 'Website address' }) as HTMLInputElement).value
+    ).toBe('https://example.com/fixture');
+    expect(
+      document.querySelector('.workspace-content .browser-peer-tab .native-browser-page')
+    ).toBeTruthy();
+  });
+  it('opens a dragged Browser shortcut as a separate workspace tab without replacing the session', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'task-drag-docked',
+      title: 'Drag a workspace',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: 'pass-drag',
+      messages: [{ id: 'msg-drag', role: 'user', text: 'Keep this chat visible', createdAt: now }],
+      passes: [],
+    } as any;
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const bridge = nativeWorkspaceBridge();
+    (window as any).opnexDesktop = { browser: bridge };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    expect(await screen.findByText('Keep this chat visible')).toBeTruthy();
+    const dataTransfer = {
+      setData: vi.fn(),
+      getData: vi.fn((type: string) => (type === 'application/x-opnex-workspace' ? 'browser' : '')),
+    };
+    fireEvent.dragStart(screen.getByRole('tab', { name: 'Browser' }), { dataTransfer });
+    fireEvent.drop(document.querySelector('.workspace-content')!, { dataTransfer, clientX: 1000 });
+    await waitFor(() => expect(document.querySelector('.browser-peer-tab')).toBeTruthy());
+    expect(
+      document.querySelector('.document-tabs [role="tab"][aria-label="Browser"]')
+    ).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Drag a workspace' })).toBeTruthy();
+    expect(document.querySelector('.conversation')?.textContent).toContain(
+      'Keep this chat visible'
+    );
+    expect(document.querySelector('.workspace-content.mode-tasks.has-docked-workspace')).toBeNull();
+  });
+  it('opens the local Git workspace in a peer tab without opening github.com', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'task-github-docked',
+      title: 'GitHub side view',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: 'pass-gh',
+      workspaceCommand: {
+        id: 'cmd-gh',
+        mode: 'github',
+        placement: 'side',
+        url: 'https://github.com/example/repo',
+        createdAt: now,
+      },
+      messages: [{ id: 'msg-gh', role: 'user', text: 'Review the branch', createdAt: now }],
+      passes: [],
+    } as any;
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const bridge = nativeWorkspaceBridge();
+    (window as any).opnexDesktop = { browser: bridge };
+    const workspace = {
+      available: true,
+      authorizedRoot: 'D:/workspace/demo',
+      repositoryRoot: 'D:/workspace/demo',
+      currentBranch: 'feature',
+      branches: [{ name: 'feature', hash: 'abc12345', current: true, remote: false }],
+      branchPage: { offset: 0, pageSize: 100, totalCount: 1, hasMore: false, nextOffset: null },
+      worktrees: [],
+      commits: [],
+      history: { offset: 0, pageSize: 100, hasMore: false, nextOffset: null },
+      github: {
+        available: true,
+        authenticated: false,
+        detail: 'Sign in with GitHub CLI to view repository data.',
+      },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path)
+        ? (activeFixture as any)
+        : path.startsWith('/api/git-workspace?projectId=')
+          ? (workspace as any)
+          : path.startsWith('/api/github?projectId=')
+            ? (workspace.github as any)
+            : ({} as any)
+    );
+    render(<App />);
+    expect(await screen.findByText('Review the branch')).toBeTruthy();
+    expect((await screen.findAllByText('feature')).length).toBeGreaterThan(0);
+    expect(document.querySelector('.document-tabs [role="tab"][aria-label="Git"]')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'GitHub side view' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Sign in with GitHub/ })).toBeTruthy();
+    expect(bridge.workspaceOpen).not.toHaveBeenCalled();
+    expect(document.querySelector('.conversation')?.textContent).toContain('Review the branch');
+    expect(document.querySelector('.workspace-content.mode-tasks.has-docked-workspace')).toBeNull();
+  });
+  it('sends a user-confirmed page annotation through the ordinary follow-up message path', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'annotation-task',
+      title: 'Page review',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: 'annotation-pass',
+      messages: [{ id: 'annotation-user', role: 'user', text: 'Review this page', createdAt: now }],
+      passes: [],
+    } as any;
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    let receiveBrowserEvent: (event: any) => void = () => {};
+    const bridge = nativeWorkspaceBridge();
+    bridge.onEvent.mockImplementation((callback: (event: any) => void) => {
+      receiveBrowserEvent = callback;
+      return () => {};
+    });
+    (window as any).opnexDesktop = { browser: bridge };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(document.querySelector('.activity-rail [aria-label="Browser"]')!);
+    const browserHost = await waitFor(() => {
+      const value = document.querySelector('.browser-peer-tab') as HTMLElement | null;
+      if (!value) throw new Error('Browser tab not opened');
+      return value;
+    });
+    const workspaceId = browserHost.dataset.workspaceTab!;
+    await waitFor(() =>
+      expect(bridge.workspaceOpen).toHaveBeenCalledWith(workspaceId, 'https://www.google.com/')
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Commenting' }));
+    await waitFor(() =>
+      expect(bridge.workspaceSetCommenting).toHaveBeenCalledWith(workspaceId, true)
+    );
+    receiveBrowserEvent({
+      type: 'annotation',
+      workspaceId,
+      tabs: [],
+      tab: {
+        id: workspaceId,
+        workspaceId,
+        url: 'https://example.com/docs',
+        title: 'Documentation',
+      },
+      annotation: {
+        url: 'https://example.com/docs',
+        title: 'Documentation',
+        target: 'h2 Highlights',
+        selectedText: 'A selected paragraph',
+      },
+    });
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Add a comment' }), {
+      target: { value: 'Check this section.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add to message' }));
+    const editor = EditorView.findFromDOM(
+      (await screen.findByRole('textbox', { name: 'Task message' })) as HTMLElement
+    )!;
+    await waitFor(() =>
+      expect(editor.state.doc.toString()).toContain('User comment: Check this section.')
+    );
+    expect(editor.state.doc.toString()).toContain('A selected paragraph');
+    fireEvent.click(screen.getByRole('button', { name: 'Send task' }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([route, body]) =>
+              route === '/api/tasks/annotation-task/messages' &&
+              String((body as any)?.message).includes('User comment: Check this section.')
+          )
+      ).toBe(true)
+    );
+  });
+  it('opens each current pass role through the legacy desktop bridge', async () => {
+    const now = new Date().toISOString();
+    const pass = {
+      id: 'pass-session-links',
+      index: 1,
+      createdAt: now,
+      userInput: 'Inspect the work',
+      userInputs: ['Inspect the work'],
+      userMessageIds: ['u1'],
+      phase: 'accepted',
+      resolution: 'delegated',
+      correctionCount: 0,
+      routerThreadId: 'isolated-router-thread',
+      directThreadId: 'direct-thread-current',
+      simpleThreadId: 'simple-thread-current',
+      orchestratorThreadId: 'orchestrator-thread-1',
+      workerThreadId: 'worker-thread-current',
+      processedTurns: [],
+    };
+    const task = {
+      id: 'task-session-links',
+      title: 'Session links',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      orchestratorThreadId: 'stale-orchestrator-thread',
+      workerThreadId: 'stale-worker-thread',
+      passes: [pass],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Inspect the work', createdAt: now, passId: pass.id },
+      ],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const openCodexThread = vi.fn().mockResolvedValue(true);
+    (window as any).pseudoharnessDesktop = { openCodexThread };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('tab', { name: /Session links/ });
+    fireEvent.click(screen.getByRole('button', { name: 'Heads-up' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Current sessions/ }));
+    const routerLink = within(
+      screen.getByRole('complementary', { name: 'Heads-up panel' })
+    ).getByRole('link', { name: 'Open Router session in Codex' });
+    expect(routerLink.getAttribute('href')).toBe('codex://threads/isolated-router-thread');
+    fireEvent.click(routerLink);
+    expect(openCodexThread).toHaveBeenCalledWith('isolated-router-thread');
+    const orchestratorLink = screen.getByRole('link', {
+      name: 'Open Orchestrator session in Codex',
+    });
+    expect(orchestratorLink.getAttribute('href')).toBe('codex://threads/orchestrator-thread-1');
+    fireEvent.click(orchestratorLink);
+    expect(openCodexThread).toHaveBeenCalledWith('orchestrator-thread-1');
+    const directLink = screen.getByRole('link', { name: 'Open Direct answer session in Codex' });
+    expect(directLink.getAttribute('href')).toBe('codex://threads/direct-thread-current');
+    fireEvent.click(directLink);
+    expect(openCodexThread).toHaveBeenCalledWith('direct-thread-current');
+    const simpleLink = screen.getByRole('link', {
+      name: 'Open Simple implementation session in Codex',
+    });
+    expect(simpleLink.getAttribute('href')).toBe('codex://threads/simple-thread-current');
+    fireEvent.click(simpleLink);
+    expect(openCodexThread).toHaveBeenCalledWith('simple-thread-current');
+    const workerLink = screen.getByRole('link', { name: 'Open Worker session in Codex' });
+    expect(workerLink.getAttribute('href')).toBe('codex://threads/worker-thread-current');
+    fireEvent.click(workerLink);
+    expect(openCodexThread).toHaveBeenCalledWith('worker-thread-current');
+    expect(openCodexThread).toHaveBeenCalledTimes(5);
+    expect(screen.getByText('isolated-router-thread')).toBeTruthy();
+    expect(screen.getByText('direct-thread-current')).toBeTruthy();
+    expect(screen.getByText('simple-thread-current')).toBeTruthy();
+    expect(screen.getByText('orchestrator-thread-1')).toBeTruthy();
+    expect(screen.getByText('worker-thread-current')).toBeTruthy();
+  });
+  it('browses folders, applies the selected canonical path and saves the project-owned working directory without global settings', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async (path: string, body?: any) => {
+      if (isSnapshotRoute(path)) return fixture as any;
+      if (path.startsWith('/api/directories'))
+        return path.includes('chosen')
+          ? ({
+              path: 'D:/workspace/demo/chosen',
+              parent: 'D:/workspace/demo',
+              entries: [{ name: 'nested', path: 'D:/workspace/demo/chosen/nested' }],
+              truncated: false,
+            } as any)
+          : ({
+              path: 'D:/workspace/demo',
+              parent: 'D:/workspace',
+              entries: [{ name: 'chosen', path: 'D:/workspace/demo/chosen' }],
+              truncated: false,
+            } as any);
+      if (path === '/api/projects')
+        return {
+          project: { ...demoProject, projectRoot: body?.projectRoot || demoProject.projectRoot },
+          duplicate: false,
+        } as any;
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    const root = screen.getByRole('textbox', { name: /Working directory/ }) as HTMLInputElement;
+    expect(root.readOnly).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByText('chosen');
+    expect(root.value).toBe('D:/workspace/demo');
+    const row = document.querySelector('.directory-entry-row')!;
+    const arrow = row.querySelector('.directory-entry-expand')!;
+    const folder = row.querySelector('.directory-entry-select')!;
+    expect(arrow.compareDocumentPosition(folder) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(folder);
+    expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Collapse chosen' }).getAttribute('aria-expanded')
+    ).toBe('true');
+    fireEvent.click(arrow);
+    expect(
+      screen.getByRole('button', { name: 'Expand chosen' }).getAttribute('aria-expanded')
+    ).toBe('false');
+    expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this folder' }));
+    await waitFor(() => expect(root.value).toBe('D:/workspace/demo/chosen'));
+    expect(
+      vi
+        .mocked(apiMod.api)
+        .mock.calls.some(([url]) => String(url).startsWith('/api/directories?path='))
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Save workspace' }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([url, body]) =>
+              url === '/api/projects' && (body as any).projectRoot === 'D:/workspace/demo/chosen'
+          )
+      ).toBe(true)
+    );
+  });
+  it('keeps the project root unchanged when browsing is cancelled and reports browse errors', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) => {
+      if (isSnapshotRoute(path)) return fixture as any;
+      if (path.startsWith('/api/directories'))
+        throw Error('You do not have permission to browse that folder.');
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    const root = screen.getByRole('textbox', { name: /Working directory/ }) as HTMLInputElement;
+    expect(root.readOnly).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    const path = await screen.findByRole('textbox', { name: 'Folder path' });
+    fireEvent.change(path, { target: { value: 'D:/manual/path' } });
+    expect((await screen.findByRole('alert')).textContent).toContain('You do not have permission');
+    expect(
+      (screen.getByRole('button', { name: 'Use this folder' }) as HTMLButtonElement).disabled
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel folder selection' }));
+    await waitFor(() => expect(root.value).toBe('D:/workspace/demo'));
+  });
+  it('requires a final directory validation and reports failure without accepting a stale listing', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async (url: string) => {
+      if (isSnapshotRoute(url)) return fixture as any;
+      if (url.startsWith('/api/directories?resolve=1'))
+        throw Error('That folder does not exist or is not a directory.');
+      if (
+        url.startsWith('/api/directories?path=') &&
+        decodeURIComponent(url.split('?path=')[1]).endsWith('/chosen')
+      )
+        return {
+          path: 'D:/workspace/demo/chosen',
+          parent: 'D:/workspace/demo',
+          entries: [],
+          truncated: false,
+        } as any;
+      if (url.startsWith('/api/directories'))
+        return {
+          path: 'D:/workspace/demo',
+          parent: 'D:/workspace',
+          entries: [{ name: 'chosen', path: 'D:/workspace/demo/chosen' }],
+          truncated: false,
+        } as any;
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    const root = screen.getByRole('textbox', { name: /Working directory/ }) as HTMLInputElement;
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByText('chosen');
+    fireEvent.click(document.querySelector('.directory-entry-select')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('does not exist');
+    expect(screen.getByRole('img', { name: 'No subfolders in chosen' })).toBeTruthy();
+    expect(root.value).toBe('D:/workspace/demo');
+    expect(screen.getByRole('dialog', { name: 'Choose a folder' })).toBeTruthy();
+  });
+  it('shows the folder chooser as a dialog and closes it with Escape without changing the root', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      path.startsWith('/api/directories')
+        ? ({
+            path: 'D:/workspace/demo',
+            parent: 'D:/workspace',
+            entries: [],
+            truncated: false,
+          } as any)
+        : isSnapshotRoute(path)
+          ? (fixture as any)
+          : ({} as any)
+    );
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    const root = screen.getByRole('textbox', { name: /Working directory/ }) as HTMLInputElement;
+    const browse = screen.getByRole('button', { name: /Browse workspace folders/ });
+    fireEvent.click(browse);
+    const picker = await screen.findByRole('dialog', { name: 'Choose a folder' });
+    expect(picker).toBeTruthy();
+    expect(browse.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Folder path' }), { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Choose a folder' })).toBeNull()
+    );
+    expect(root.value).toBe('D:/workspace/demo');
+    await waitFor(() => expect(document.activeElement).toBe(browse));
+  });
+  it('selects folders immediately and keeps cancel responsive during final path validation', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let finishValidation: (value: any) => void = () => {};
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) => {
+      if (isSnapshotRoute(path)) return fixture as any;
+      if (path.startsWith('/api/directories?resolve=1'))
+        return (await new Promise((resolve) => {
+          finishValidation = resolve;
+        })) as any;
+      if (
+        path.startsWith('/api/directories?path=') &&
+        decodeURIComponent(path.split('?path=')[1]).endsWith('/chosen')
+      )
+        return {
+          path: 'D:/workspace/demo/chosen',
+          parent: 'D:/workspace/demo',
+          entries: [],
+          truncated: false,
+        } as any;
+      if (path.startsWith('/api/directories'))
+        return {
+          path: 'D:/workspace/demo',
+          parent: 'D:/workspace',
+          entries: [{ name: 'chosen', path: 'D:/workspace/demo/chosen' }],
+          truncated: false,
+        } as any;
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByText('chosen');
+    fireEvent.click(document.querySelector('.directory-entry-select')!);
+    const list = document.querySelector('.directory-picker-list') as HTMLElement;
+    expect(list.classList.contains('is-loading')).toBe(false);
+    expect(list.getAttribute('aria-busy')).toBe('false');
+    expect((document.querySelector('.directory-entry-select') as HTMLButtonElement).disabled).toBe(
+      false
+    );
+    expect(
+      (screen.getByRole('button', { name: 'Cancel folder selection' }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+    expect(screen.getByRole('button', { name: 'Use this folder' }).hasAttribute('disabled')).toBe(
+      false
+    );
+    expect(screen.getByText('Selected: D:/workspace/demo/chosen')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+    expect(await screen.findByRole('button', { name: 'Checking folder…' })).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Cancel folder selection' }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel folder selection' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Choose a folder' })).toBeNull()
+    );
+    await act(async () =>
+      finishValidation({
+        path: 'D:/workspace/demo/chosen',
+        parent: 'D:/workspace/demo',
+        entries: [],
+        truncated: false,
+      })
+    );
+    expect(
+      (screen.getByRole('textbox', { name: /Working directory/ }) as HTMLInputElement).value
+    ).toBe('D:/workspace/demo');
+  });
+  it('shows a folder-specific read error and retries its lazy expansion', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let attempts = 0;
+    vi.mocked(apiMod.api).mockImplementation(async (url: string) => {
+      if (isSnapshotRoute(url)) return fixture as any;
+      if (url.startsWith('/api/directories')) {
+        const path = decodeURIComponent(url.split('?path=')[1] || '');
+        if (path.endsWith('/chosen')) {
+          attempts++;
+          if (attempts === 1) throw Error('You do not have permission to browse that folder.');
+          return {
+            path,
+            parent: 'D:/workspace/demo',
+            entries: [{ name: 'nested', path: path + '/nested' }],
+            truncated: false,
+          } as any;
+        }
+        return {
+          path: 'D:/workspace/demo',
+          parent: 'D:/workspace',
+          entries: [{ name: 'chosen', path: 'D:/workspace/demo/chosen' }],
+          truncated: false,
+        } as any;
+      }
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByText('chosen');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand chosen' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('permission to browse');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('nested')).toBeTruthy();
+    expect(attempts).toBe(2);
+  });
+  it('ignores a late tree response after the picker is cancelled', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let finishExpand: (value: any) => void = () => {};
+    vi.mocked(apiMod.api).mockImplementation(async (url: string) => {
+      if (isSnapshotRoute(url)) return fixture as any;
+      if (url.startsWith('/api/directories')) {
+        const path = decodeURIComponent(url.split('?path=')[1] || '');
+        if (path.endsWith('/chosen'))
+          return (await new Promise((resolve) => {
+            finishExpand = resolve;
+          })) as any;
+        return {
+          path: 'D:/workspace/demo',
+          parent: 'D:/workspace',
+          entries: [{ name: 'chosen', path: 'D:/workspace/demo/chosen' }],
+          truncated: false,
+        } as any;
+      }
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    const root = screen.getByRole('textbox', { name: /Working directory/ }) as HTMLInputElement;
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByText('chosen');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand chosen' }));
+    expect(
+      (screen.getByRole('button', { name: 'Cancel folder selection' }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel folder selection' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Choose a folder' })).toBeNull()
+    );
+    await act(async () =>
+      finishExpand({
+        path: 'D:/workspace/demo/chosen',
+        parent: 'D:/workspace/demo',
+        entries: [{ name: 'late', path: 'D:/workspace/demo/chosen/late' }],
+        truncated: false,
+      })
+    );
+    expect(root.value).toBe('D:/workspace/demo');
+  });
+  it('expands nested folders inline from the row, keeps the arrow independent, and pages large listings', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async (url: string) => {
+      if (isSnapshotRoute(url)) return fixture as any;
+      if (url.startsWith('/api/directories')) {
+        const path = decodeURIComponent(url.split('?path=')[1] || '');
+        if (path === 'D:/workspace/demo')
+          return {
+            path,
+            parent: 'D:/workspace',
+            entries: [{ name: 'chosen', path: 'D:/workspace/demo/chosen' }],
+            truncated: false,
+          } as any;
+        if (path.endsWith('/chosen'))
+          return {
+            path,
+            parent: 'D:/workspace/demo',
+            entries: [{ name: 'nested', path: path + '/nested' }],
+            truncated: false,
+          } as any;
+        if (path.endsWith('/nested'))
+          return {
+            path,
+            parent: path.slice(0, path.lastIndexOf('/')),
+            entries: [{ name: 'deep', path: path + '/deep' }],
+            truncated: false,
+          } as any;
+        return { path, parent: null, entries: [], truncated: false } as any;
+      }
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByText('chosen');
+    const chosen = [
+      ...document.querySelectorAll<HTMLButtonElement>('.directory-entry-select'),
+    ].find((button) => button.textContent?.includes('chosen'))!;
+    fireEvent.click(chosen);
+    await waitFor(() => expect(chosen.getAttribute('aria-pressed')).toBe('true'));
+    expect(
+      screen.getByRole('button', { name: 'Collapse chosen' }).getAttribute('aria-expanded')
+    ).toBe('true');
+    expect(await screen.findByText('nested')).toBeTruthy();
+    fireEvent.click(chosen);
+    expect(screen.queryByText('nested')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Expand chosen' }).getAttribute('aria-expanded')
+    ).toBe('false');
+    expect(chosen.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(chosen);
+    expect(await screen.findByText('nested')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Collapse chosen' }).getAttribute('aria-expanded')
+    ).toBe('true');
+    const nestedSelect = [
+      ...document.querySelectorAll<HTMLButtonElement>('.directory-entry-select'),
+    ].find((button) => button.textContent?.includes('nested'))!;
+    fireEvent.click(nestedSelect);
+    await waitFor(() => expect(nestedSelect.getAttribute('aria-pressed')).toBe('true'));
+    expect(
+      screen.getByRole('button', { name: 'Collapse nested' }).getAttribute('aria-expanded')
+    ).toBe('true');
+    expect(await screen.findByText('deep')).toBeTruthy();
+    fireEvent.click(nestedSelect);
+    expect(screen.queryByText('deep')).toBeNull();
+    expect(nestedSelect.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand nested' }));
+    expect(await screen.findByText('deep')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Use this folder' }) as HTMLButtonElement).disabled
+    ).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel folder selection' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Choose a folder' })).toBeNull()
+    );
+    const many = Array.from({ length: 500 }, (_, index) => ({
+      name: `folder-${index}`,
+      path: `D:/workspace/demo/folder-${index}`,
+    }));
+    vi.mocked(apiMod.api).mockImplementation(async (url: string) =>
+      url.startsWith('/api/directories')
+        ? ({
+            path: 'D:/workspace/demo',
+            parent: 'D:/workspace',
+            entries: many,
+            truncated: false,
+          } as any)
+        : isSnapshotRoute(url)
+          ? (fixture as any)
+          : ({} as any)
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await waitFor(() =>
+      expect(document.querySelectorAll('.directory-entry-select')).toHaveLength(100)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show 100 more folders' }));
+    await waitFor(() =>
+      expect(document.querySelectorAll('.directory-entry-select')).toHaveLength(200)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel folder selection' }));
+  });
+  it('keeps failed folder reads expandable and only marks a directory as a leaf after a successful empty listing', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let childReads = 0;
+    vi.mocked(apiMod.api).mockImplementation(async (url: string) => {
+      if (isSnapshotRoute(url)) return fixture as any;
+      if (url === '/api/directories?path=D%3A%2Fworkspace%2Fdemo%2Fchosen') {
+        childReads++;
+        if (childReads === 1) throw Error('Permission denied.');
+        return {
+          path: 'D:/workspace/demo/chosen',
+          parent: 'D:/workspace/demo',
+          entries: [],
+          truncated: false,
+        } as any;
+      }
+      if (url.startsWith('/api/directories'))
+        return {
+          path: 'D:/workspace/demo',
+          parent: 'D:/workspace',
+          entries: [{ name: 'chosen', path: 'D:/workspace/demo/chosen' }],
+          truncated: false,
+        } as any;
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByText('chosen');
+    const chosen = document.querySelector<HTMLButtonElement>('.directory-entry-select')!;
+    fireEvent.click(chosen);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Collapse chosen' })).toBeTruthy();
+    expect(screen.queryByRole('img', { name: 'No subfolders in chosen' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('img', { name: 'No subfolders in chosen' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Expand chosen' })).toBeNull();
+    expect(childReads).toBe(2);
+    fireEvent.click(chosen);
+    expect(chosen.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('img', { name: 'No subfolders in chosen' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel folder selection' }));
+  });
+  it('creates a folder only inside the selected parent and leaves root settings unsaved until accepted', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let createAttempts = 0;
+    vi.mocked(apiMod.api).mockImplementation(async (url: string, body?: any) => {
+      if (isSnapshotRoute(url)) return fixture as any;
+      if (url === '/api/directories' && body) {
+        createAttempts++;
+        if (createAttempts === 1)
+          throw Error('A folder or file with that name already exists. Choose another name.');
+        return {
+          parent: 'D:/workspace/demo/Projects',
+          entry: { name: body.name, path: `D:/workspace/demo/Projects/${body.name}` },
+        } as any;
+      }
+      if (url.startsWith('/api/directories?resolve=1'))
+        return {
+          path: 'D:/workspace/demo/Projects/New workspace',
+          parent: 'D:/workspace/demo/Projects',
+          entries: [],
+          truncated: false,
+        } as any;
+      if (url.startsWith('/api/directories')) {
+        const path = decodeURIComponent(url.split('?path=')[1] || '');
+        if (path === 'D:/workspace/demo/Projects')
+          return { path, parent: 'D:/workspace/demo', entries: [], truncated: false } as any;
+        return {
+          path: 'D:/workspace/demo',
+          parent: 'D:/workspace',
+          entries: [{ name: 'Projects', path: 'D:/workspace/demo/Projects' }],
+          truncated: false,
+        } as any;
+      }
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    const root = screen.getByRole('textbox', { name: /Working directory/ }) as HTMLInputElement;
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByText('Projects');
+    const projects = [
+      ...document.querySelectorAll<HTMLButtonElement>('.directory-entry-select'),
+    ].find((button) => button.textContent?.includes('Projects'))!;
+    fireEvent.click(projects);
+    expect(await screen.findByText('Selected: D:/workspace/demo/Projects')).toBeTruthy();
+    expect(await screen.findByRole('img', { name: 'No subfolders in Projects' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Expand Projects' })).toBeNull();
+    expect(projects.hasAttribute('aria-expanded')).toBe(false);
+    fireEvent.click(projects);
+    expect(projects.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('img', { name: 'No subfolders in Projects' })).toBeTruthy();
+    const createButton = screen.getByRole('button', {
+      name: /Create folder inside D:\/workspace\/demo\/Projects/,
+    });
+    await waitFor(() => expect(createButton.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(createButton);
+    const name = await screen.findByRole('textbox', { name: /New folder inside/ });
+    fireEvent.change(name, { target: { value: 'New workspace' } });
+    fireEvent.click(
+      within(document.querySelector('.directory-create-form')!).getByRole('button', {
+        name: 'Cancel',
+      })
+    );
+    expect(
+      vi.mocked(apiMod.api).mock.calls.filter(([url]) => url === '/api/directories')
+    ).toHaveLength(0);
+    fireEvent.click(createButton);
+    fireEvent.change(await screen.findByRole('textbox', { name: /New folder inside/ }), {
+      target: { value: 'New workspace' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('already exists');
+    expect(root.value).toBe('D:/workspace/demo');
+    expect(screen.getByRole('dialog', { name: 'Choose a folder' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(await screen.findByText('New workspace')).toBeTruthy();
+    expect(
+      await screen.findByText('Selected: D:/workspace/demo/Projects/New workspace')
+    ).toBeTruthy();
+    expect(root.value).toBe('D:/workspace/demo');
+    expect(
+      screen.getByRole('button', { name: 'Collapse Projects' }).getAttribute('aria-expanded')
+    ).toBe('true');
+    expect(screen.getByRole('img', { name: 'No subfolders in New workspace' })).toBeTruthy();
+    expect(
+      vi.mocked(apiMod.api).mock.calls.filter(([url]) => url === '/api/projects')
+    ).toHaveLength(0);
+    const createCall = vi
+      .mocked(apiMod.api)
+      .mock.calls.find(([url, body]) => url === '/api/directories' && body !== undefined);
+    expect(createCall?.[1]).toEqual({
+      parent: 'D:/workspace/demo/Projects',
+      name: 'New workspace',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+    await waitFor(() => expect(root.value).toBe('D:/workspace/demo/Projects/New workspace'));
+    expect(
+      vi.mocked(apiMod.api).mock.calls.filter(([url]) => url === '/api/projects')
+    ).toHaveLength(0);
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Configure New workspace' })).getByRole('button', {
+        name: 'Cancel',
+      })
+    );
+  });
+  it('requires a browsed parent before enabling folder creation from the computer roots view', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.api).mockImplementation(async (url: string) => {
+      if (isSnapshotRoute(url)) return fixture as any;
+      if (url.startsWith('/api/directories?roots=1'))
+        return { path: null, parent: null, entries: [], roots: ['D:\\'], truncated: false } as any;
+      if (url.startsWith('/api/directories')) {
+        const path = decodeURIComponent(url.split('?path=')[1] || '');
+        return path === 'D:\\'
+          ? ({
+              path,
+              parent: null,
+              entries: [{ name: 'workspace', path: 'D:\\workspace' }],
+              truncated: false,
+            } as any)
+          : ({
+              path: 'D:\\workspace\\demo',
+              parent: 'D:\\workspace',
+              entries: [],
+              truncated: false,
+            } as any);
+      }
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    fireEvent.click(screen.getByRole('button', { name: 'Configure workspace demo' }));
+    fireEvent.click(screen.getByRole('button', { name: /Browse workspace folders/ }));
+    await screen.findByRole('button', { name: /Create folder inside/ });
+    fireEvent.click(screen.getByRole('button', { name: 'Computer' }));
+    const create = screen.getByRole('button', {
+      name: 'Choose a parent folder before creating a folder',
+    });
+    expect((create as HTMLButtonElement).disabled).toBe(true);
+    await screen.findByText('D:\\');
+    fireEvent.click(document.querySelector('.directory-entry-select')!);
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /Create folder inside D:/ }).hasAttribute('disabled')
+      ).toBe(false)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel folder selection' }));
+  });
+  it('collapses the explorer and opens a new real session tab with Ctrl+N', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const sidebar = screen.getByRole('complementary', { name: 'Session explorer', hidden: true });
+    const toggle = screen.getByRole('button', { name: 'Collapse sidebar' });
+    const sidebarSeparator = screen.getByRole('separator', { name: 'Resize session explorer' });
+    expect(sidebarSeparator.getAttribute('aria-valuemin')).toBe('112');
+    expect(sidebarSeparator.getAttribute('aria-valuemax')).toBe('420');
+    expect(toggle.closest('.activity-rail')).toBeTruthy();
+    expect(document.querySelector('kbd')).toBeNull();
+    fireEvent.click(toggle);
+    expect(sidebarSeparator.getAttribute('aria-valuemin')).toBe('0');
+    expect(sidebarSeparator.getAttribute('aria-valuenow')).toBe('0');
+    expect(sidebarSeparator.getAttribute('aria-valuetext')).toBe('Collapsed');
+    expect(
+      screen.getByRole('button', { name: 'Expand sidebar' }).getAttribute('aria-expanded')
+    ).toBe('false');
+    expect(sidebar.getAttribute('aria-hidden')).toBe('true');
+    expect(sidebar.hasAttribute('inert')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    expect(sidebarSeparator.getAttribute('aria-valuemin')).toBe('112');
+    expect(
+      screen.getByRole('button', { name: 'Collapse sidebar' }).getAttribute('aria-expanded')
+    ).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true });
+    expect((await screen.findAllByRole('tab', { name: /New session/ })).length).toBeGreaterThan(1);
+  });
+  it('shows a direct orchestrator answer without implying that Luna ran', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'direct-1',
+      title: 'What is two plus two?',
+      phase: 'accepted',
+      resolution: 'direct',
+      routingNote: 'A trivial factual answer needs no worker.',
+      reviewNote:
+        'Answered directly by the orchestrator under the delegation policy. No Luna worker was started.',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'What is two plus two?',
+          userInputs: ['What is two plus two?'],
+          userMessageIds: ['u1'],
+          phase: 'accepted',
+          resolution: 'direct',
+          routingNote: 'A trivial factual answer needs no worker.',
+          reviewNote:
+            'Answered directly by the orchestrator under the delegation policy. No Luna worker was started.',
+          publicAnswer: 'Four.',
+          correctionCount: 0,
+          processedTurns: [],
+        },
+      ],
+      messages: [
+        { id: 'u1', role: 'user', text: 'What is two plus two?', createdAt: now, passId: 'pass-1' },
+        { id: 'a1', role: 'orchestrator', text: 'Four.', createdAt: now, passId: 'pass-1' },
+      ],
+    };
+    const directFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...directFixture, csrf: 'test' } as any);
+    render(<App />);
+    expect(await screen.findByText('Direct answer')).toBeTruthy();
+    expect(screen.getByText('Four.')).toBeTruthy();
+    expect(screen.getByText(/No Luna worker was started/)).toBeTruthy();
+    expect(screen.getByText(/Routing basis: A trivial factual answer/)).toBeTruthy();
+    expect(document.querySelector('.final-artifact')?.textContent).toContain('Orchestrator');
+    expect(screen.queryByText('GPT-6 Luna · low')).toBeNull();
+    expect(screen.queryByText('Luna worker')).toBeNull();
+    const composer = document.querySelector('.composer-dock');
+    const workspace = document.querySelector('.workspace-area');
+    expect(composer?.closest('.workspace-content')).toBeTruthy();
+    expect(workspace?.contains(composer!)).toBe(true);
+    expect(screen.queryByRole('complementary', { name: 'Heads-up panel' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Heads-up' }));
+    const panel = await screen.findByRole('complementary', { name: 'Heads-up panel' });
+    expect(panel.getAttribute('aria-hidden')).toBe('false');
+    expect(within(panel).getByText('Status')).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Details' }));
+    const details = within(panel)
+      .getByText('This session')
+      .closest('.heads-up-disclosure') as HTMLElement;
+    expect(details.classList.contains('is-expanded')).toBe(true);
+    within(panel).getByRole('button', { name: 'Close heads-up panel' }).focus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(panel.getAttribute('aria-hidden')).toBe('true'));
+  });
+  it('keeps legacy execution labels unknown when a pass has no saved execution evidence', async () => {
+    const now = new Date().toISOString();
+    const pass = {
+      id: 'legacy-execution',
+      index: 1,
+      createdAt: now,
+      userInput: 'Resume the old session',
+      userInputs: ['Resume the old session'],
+      userMessageIds: ['u1'],
+      phase: 'accepted',
+      resolution: 'delegated',
+      correctionCount: 0,
+      directThreadId: 'old-direct',
+      simpleThreadId: 'old-simple',
+      workerThreadId: 'old-worker',
+      deepSeekExecution: {
+        kind: 'deepseek-harness-sdk',
+        provider: 'opencode-go',
+        model: 'deepseek-v4.1-flash',
+        nativeReasoningEffort: 'max',
+      },
+      processedTurns: [],
+    };
+    const task = {
+      id: 'legacy-execution-task',
+      title: 'Legacy execution',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      correctionCount: 0,
+      passes: [pass],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Resume the old session', createdAt: now, passId: pass.id },
+        {
+          id: 'w1',
+          role: 'worker',
+          text: 'Saved worker reply',
+          createdAt: new Date(Date.parse(now) + 1000).toISOString(),
+          passId: pass.id,
+        },
+        {
+          id: 'd1',
+          role: 'direct',
+          text: 'Saved direct reply',
+          createdAt: new Date(Date.parse(now) + 2000).toISOString(),
+          passId: pass.id,
+        },
+        {
+          id: 's1',
+          role: 'simple',
+          text: 'Saved simple result',
+          createdAt: new Date(Date.parse(now) + 3000).toISOString(),
+          passId: pass.id,
+        },
+      ],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    render(<App />);
+    const panel = await screen.findByLabelText('Pass 1');
+    expect(within(panel).getByText('Direct answer', { selector: 'strong' })).toBeTruthy();
+    expect(within(panel).getByText('Simple implementation', { selector: 'strong' })).toBeTruthy();
+    expect(within(panel).getAllByText('Model details unavailable').length).toBeGreaterThan(0);
+    fireEvent.click(within(panel).getByRole('button', { name: /^Workers/ }));
+    expect(await within(panel).findByText('Saved worker reply')).toBeTruthy();
+    expect(await within(panel).findByText('Worker', { selector: 'strong' })).toBeTruthy();
+    const headings = Array.from(panel.querySelectorAll('.agent-message .message-meta strong')).map(
+      (element) => element.textContent
+    );
+    expect(headings).not.toContain('Luna worker');
+    expect(headings).not.toContain('Luna simple implementation');
+  });
+  it('labels a routed direct-answer stream with the high effort actually selected for Luna', async () => {
+    const now = new Date().toISOString();
+    const turn = {
+      role: 'direct',
+      threadId: 'direct-thread',
+      turnId: 'direct-turn',
+      requestedModel: 'gpt-6-luna',
+      requestedEffort: 'high',
+      startedAt: now,
+      status: 'streaming',
+    };
+    const task = {
+      id: 'routed-direct-live',
+      title: 'Explain a concept',
+      phase: 'direct_running',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      directThreadId: 'direct-thread',
+      activeRole: 'direct',
+      activeTurnId: 'direct-turn',
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'Explain a concept',
+          userInputs: ['Explain a concept'],
+          userMessageIds: ['u1'],
+          phase: 'direct_running',
+          resolution: 'direct',
+          directThreadId: 'direct-thread',
+          reasoningTurns: [turn],
+          processedTurns: [],
+        },
+      ],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Explain a concept', createdAt: now, passId: 'pass-1' },
+      ],
+    };
+    const directFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...directFixture, csrf: 'test' } as any);
+    render(<App />);
+    const response = await screen.findByLabelText('direct model response');
+    expect(within(response).getByText('GPT-6 Luna · high')).toBeTruthy();
+  });
+  it('uses the recorded direct-turn effort in the final output card instead of the router effort', async () => {
+    const now = new Date().toISOString();
+    const turn = {
+      role: 'direct',
+      threadId: 'direct-thread',
+      turnId: 'direct-turn',
+      requestedModel: 'gpt-6-luna',
+      requestedEffort: 'high',
+      startedAt: now,
+      status: 'completed',
+    };
+    const pass = {
+      id: 'pass-1',
+      index: 1,
+      createdAt: now,
+      userInput: 'what is dec001',
+      userInputs: ['what is dec001'],
+      userMessageIds: ['u1'],
+      phase: 'accepted',
+      resolution: 'direct',
+      directThreadId: 'direct-thread',
+      reasoningTurns: [turn],
+      publicAnswer: 'DEC-0001 pairs the selected knowledge base with its registered workspace.',
+      processedTurns: [],
+    };
+    const task = {
+      id: 'routed-direct-final',
+      title: 'what is dec001',
+      phase: 'accepted',
+      resolution: 'direct',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      directThreadId: 'direct-thread',
+      passes: [pass],
+      messages: [
+        { id: 'u1', role: 'user', text: 'what is dec001', createdAt: now, passId: 'pass-1' },
+      ],
+    };
+    const directFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...directFixture, csrf: 'test' } as any);
+    render(<App />);
+    const output = await screen.findByRole('region', { name: 'Final output' });
+    expect(output.textContent).toContain('GPT-6 Luna · high');
+    expect(output.textContent).not.toContain('low');
+  });
+  it('shows routing details and labels simple work as Luna self-verified without implying hard-task review', async () => {
+    const now = new Date().toISOString();
+    const routeDecision = {
+      route: 'simple_implementation',
+      effectiveRoute: 'simple_implementation',
+      rule_id: 'simple_bounded_correction',
+      justification: 'This is a known bounded correction.',
+      model: 'gpt-6-luna',
+      effort: 'low',
+      speed: 'Fast',
+      decidedAt: now,
+    };
+    const receipt = {
+      status: 'complete',
+      result: 'Updated the requested label.',
+      changes: ['src/ui/App.tsx'],
+      acceptance: { met: ['The visible label matches the request.'], unmet: [] },
+      verification: [
+        {
+          check: 'Reviewed the rendered label',
+          result: 'passed',
+          evidence: 'Confirmed in the UI.',
+        },
+        { check: 'Unrelated full integration suite', result: 'not_run', evidence: null },
+      ],
+      risks: [],
+      knowledge: { consulted: [], updated: [] },
+      decision_required: null,
+    };
+    const executionProfile = { provider: 'codex', model: 'gpt-6-luna', effort: 'max' };
+    const task = {
+      id: 'simple-1',
+      title: 'Update a label',
+      phase: 'accepted',
+      resolution: 'simple',
+      routeDecision,
+      simpleThreadId: 'simple-thread',
+      executionProfile,
+      reviewNote:
+        'GPT-6 Luna at max effort completed and verified this simple implementation. No Sol review occurred.',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'Update the label.',
+          userInputs: ['Update the label.'],
+          userMessageIds: ['u1'],
+          phase: 'accepted',
+          resolution: 'simple',
+          simpleThreadId: 'simple-thread',
+          executionProfile,
+          routeDecision,
+          receipt,
+          reviewNote:
+            'GPT-6 Luna at max effort completed and verified this simple implementation. No Sol review occurred.',
+          correctionCount: 0,
+          processedTurns: [],
+        },
+      ],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Update the label.', createdAt: now, passId: 'pass-1' },
+        { id: 's1', role: 'simple', text: receipt.result, createdAt: now, passId: 'pass-1' },
+      ],
+    };
+    const simpleFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...simpleFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (simpleFixture as any) : ({} as any)
+    );
+    render(<App />);
+    expect((await screen.findAllByText('Simple implementation complete')).length).toBeGreaterThan(
+      0
+    );
+    expect(screen.getByText('GPT-6 Luna · max')).toBeTruthy();
+    expect(screen.getByText('GPT-6 Luna · max · self-verified')).toBeTruthy();
+    expect(screen.queryByText('Worker review')).toBeNull();
+    expect(screen.queryByText('Luna · reviewed by orchestrator')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Heads-up' }));
+    const panel = await screen.findByRole('complementary', { name: 'Heads-up panel' });
+    expect(within(panel).getByText('Route')).toBeTruthy();
+    expect(panel.querySelector('.heads-up-route-value strong')?.textContent).toBe(
+      'Simple implementation'
+    );
+    expect(within(panel).queryByText('simple_bounded_correction')).toBeNull();
+    expect(within(panel).queryByText(/Conservative fallback/)).toBeNull();
+  });
+  it('renders commentary and tool lifecycle for the active worker without exposing raw reasoning or duplicating the final answer', async () => {
+    const now = new Date().toISOString();
+    const summary = {
+      role: 'worker',
+      threadId: 'worker-1',
+      turnId: 'turn-1',
+      itemId: 'reason-1',
+      summaryIndex: 0,
+      text: 'Readable provider summary.',
+      passId: 'pass-1',
+      updatedAt: now,
+    };
+    const turn = {
+      role: 'worker',
+      threadId: 'worker-1',
+      turnId: 'turn-1',
+      requestedModel: 'gpt-6-luna',
+      requestedEffort: 'high',
+      startedAt: now,
+      status: 'streaming',
+    };
+    const commentary = {
+      role: 'worker',
+      threadId: 'worker-1',
+      turnId: 'turn-1',
+      itemId: 'commentary-1',
+      kind: 'commentary',
+      itemType: 'agentMessage',
+      title: '',
+      text: 'I will inspect the event path.',
+      status: 'running',
+      startedAt: now,
+      updatedAt: now,
+      passId: 'pass-1',
+    };
+    const command = {
+      role: 'worker',
+      threadId: 'worker-1',
+      turnId: 'turn-1',
+      itemId: 'cmd-1',
+      kind: 'tool',
+      itemType: 'commandExecution',
+      title: 'rg -n activity src',
+      detail: 'cwd: D:/workspace/demo',
+      output: 'matched line',
+      status: 'running',
+      startedAt: new Date(Date.parse(now) + 50).toISOString(),
+      updatedAt: now,
+      passId: 'pass-1',
+    };
+    const task = {
+      id: 'summary-1',
+      title: 'Explain this change',
+      phase: 'worker_running',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      workerThreadId: 'worker-1',
+      activeRole: 'worker',
+      activeTurnId: 'turn-1',
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'Explain this change',
+          userInputs: ['Explain this change'],
+          userMessageIds: ['u1'],
+          phase: 'worker_running',
+          correctionCount: 0,
+          workerThreadId: 'worker-1',
+          activeRole: 'worker',
+          activeTurnId: 'turn-1',
+          processedTurns: [],
+          reasoningTurns: [turn],
+          reasoningSummaries: [summary],
+          liveActivity: [commentary, command],
+        },
+      ],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Explain this change', createdAt: now, passId: 'pass-1' },
+        {
+          id: 'worker-final',
+          role: 'worker',
+          text: 'Final receipt answer preserved.',
+          createdAt: new Date(Date.parse(now) + 1000).toISOString(),
+          passId: 'pass-1',
+        },
+      ],
+    };
+    const activityFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activityFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activityFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const panel = await screen.findByLabelText('Pass 1');
+    fireEvent.click(within(panel).getByRole('button', { name: /^Workers/ }));
+    const response = await screen.findByLabelText('worker model response');
+    expect(within(response).getByText('I will inspect the event path.')).toBeTruthy();
+    expect(within(response).getByText('Readable provider summary.')).toBeTruthy();
+    expect(within(response).getByText('Running rg -n activity src')).toBeTruthy();
+    fireEvent.click(within(response).getByText('Details'));
+    expect(within(response).getByText(/matched line/)).toBeTruthy();
+    expect(within(response).queryByText(/raw reasoning/i)).toBeNull();
+    expect(screen.getByText('Final receipt answer preserved.')).toBeTruthy();
+    const completedTask = {
+      ...task,
+      passes: [
+        {
+          ...task.passes[0],
+          liveActivity: [
+            { ...commentary, status: 'completed' },
+            { ...command, status: 'completed' },
+          ],
+        },
+      ],
+    };
+    act(() =>
+      eventSource.onmessage({
+        data: JSON.stringify({
+          state: { ...fixture.state, tasks: [completedTask], activeTaskId: completedTask.id },
+        }),
+      })
+    );
+    await waitFor(() => expect(within(response).getByText('Ran rg -n activity src')).toBeTruthy());
+    expect(document.querySelectorAll('[data-activity-id="cmd-1"]')).toHaveLength(1);
+  });
+  it('renders assistant Markdown while leaving raw HTML and unsafe links inert', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'markdown-1',
+      title: 'Markdown answer',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'format it',
+          userInputs: ['format it'],
+          userMessageIds: ['u1'],
+          phase: 'accepted',
+          resolution: 'direct',
+          publicAnswer:
+            '# A result\n\n- first\n- **bold**\n\n| Name | Value |\n|---|---|\n| item | `42` |\n\n[bad link](javascript:alert(1))\n\n<script>alert(1)</script>',
+          correctionCount: 0,
+          processedTurns: [],
+        },
+      ],
+      messages: [
+        { id: 'u1', role: 'user', text: 'format it', createdAt: now, passId: 'pass-1' },
+        {
+          id: 'a1',
+          role: 'orchestrator',
+          text: '# A result\n\n- first\n- **bold**\n\n| Name | Value |\n|---|---|\n| item | `42` |\n\n[bad link](javascript:alert(1))\n\n<script>alert(1)</script>',
+          createdAt: now,
+          passId: 'pass-1',
+        },
+      ],
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+      csrf: 'test',
+    } as any);
+    const { container } = render(<App />);
+    expect(await screen.findByRole('heading', { name: 'A result' })).toBeTruthy();
+    expect(screen.getByRole('table')).toBeTruthy();
+    expect(screen.getByText('bold').tagName).toBe('STRONG');
+    expect(screen.getByText('42').tagName).toBe('CODE');
+    expect(!screen.getByText('bad link').closest('a')?.getAttribute('href')).toBe(true);
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.textContent).toContain('<script>alert(1)</script>');
+  });
+  it('keeps archived service metadata without blocking local session history', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'saving-1',
+      title: 'Saved receipt',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      legacyAgentMem: {
+        projectId: 'demo-project',
+        taskId: 'work-1',
+        lease: 'legacy-lease',
+        recordStatus: 'saving',
+      },
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'Question',
+          userInputs: ['Question'],
+          userMessageIds: ['u1'],
+          phase: 'accepted',
+          resolution: 'direct',
+          publicAnswer: 'Answer',
+          agentmemTaskId: 'work-1',
+          agentmemLease: 'legacy-lease',
+          agentmemRecordStatus: 'saving',
+          correctionCount: 0,
+          processedTurns: [],
+        },
+      ],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Question', createdAt: now, passId: 'pass-1' },
+        { id: 'a1', role: 'orchestrator', text: 'Answer', createdAt: now, passId: 'pass-1' },
+      ],
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+      csrf: 'test',
+    } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path)
+        ? ({ ...fixture, state: { ...fixture.state, tasks: [task], activeTaskId: task.id } } as any)
+        : ({} as any)
+    );
+    render(<App />);
+    expect(await screen.findByRole('tab', { name: 'Saved receipt' })).toBeTruthy();
+    expect(screen.queryByText(/Saving AgentMem receipt/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Retry AgentMem completion/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Saved receipt' }));
+    expect(
+      (screen.getByRole('menuitem', { name: 'Delete session' }) as HTMLButtonElement).disabled
+    ).toBe(false);
+    expect(
+      vi.mocked(apiMod.api).mock.calls.some(([url]) => String(url).includes('/agentmem'))
+    ).toBe(false);
+  });
+  it('shows honest waiting and unavailable states inline for turns without reasoning text', async () => {
+    const now = new Date().toISOString();
+    const turn = {
+      role: 'orchestrator',
+      threadId: 'orch-1',
+      turnId: 'turn-1',
+      requestedModel: 'gpt-6.1-sol',
+      requestedEffort: 'low',
+      status: 'streaming',
+    };
+    const pass = {
+      id: 'pass-1',
+      index: 1,
+      createdAt: now,
+      userInput: 'Explain a concept',
+      userInputs: ['Explain a concept'],
+      userMessageIds: ['u1'],
+      phase: 'planning',
+      correctionCount: 0,
+      orchestratorThreadId: 'orch-1',
+      activeRole: 'orchestrator',
+      activeTurnId: 'turn-1',
+      reasoningTurns: [turn],
+      processedTurns: [],
+    };
+    const task = {
+      id: 'summary-wait',
+      title: 'Explain a concept',
+      phase: 'planning',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      orchestratorThreadId: 'orch-1',
+      activeRole: 'orchestrator',
+      activeTurnId: 'turn-1',
+      reasoningTurns: [turn],
+      passes: [pass],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Explain a concept', createdAt: now, passId: 'pass-1' },
+      ],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    const first = render(<App />);
+    const liveResponse = await screen.findByLabelText('orchestrator model response');
+    expect(within(liveResponse).getByText('Waiting for activity…')).toBeTruthy();
+    first.unmount();
+    const summaryTurn = { ...turn, startedAt: now };
+    const summary = {
+      role: 'orchestrator',
+      threadId: 'orch-1',
+      turnId: 'turn-1',
+      itemId: 'reason-1',
+      summaryIndex: 0,
+      text: 'Live readable summary fallback.',
+      passId: 'pass-1',
+    };
+    const summaryTask = {
+      ...task,
+      messages: [
+        ...task.messages,
+        {
+          id: 'prepared',
+          role: 'orchestrator',
+          text: 'Prepared a complete assignment.',
+          createdAt: new Date(Date.parse(now) + 1000).toISOString(),
+          passId: 'pass-1',
+        },
+      ],
+      reasoningTurns: [summaryTurn],
+      reasoningSummaries: [summary],
+      passes: [{ ...pass, reasoningTurns: [summaryTurn], reasoningSummaries: [summary] }],
+    };
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({
+      ...fixture,
+      state: { ...fixture.state, tasks: [summaryTask], activeTaskId: summaryTask.id },
+      csrf: 'test',
+    } as any);
+    render(<App />);
+    const summaryResponse = await screen.findByLabelText('orchestrator model response');
+    expect(within(summaryResponse).getByText('Live readable summary fallback.')).toBeTruthy();
+    expect(screen.queryByText('Prepared a complete assignment.')).toBeNull();
+    cleanup();
+    const doneTurn = { ...turn, status: 'completed' };
+    const doneTask = {
+      ...task,
+      phase: 'accepted',
+      activeRole: undefined,
+      activeTurnId: undefined,
+      reasoningTurns: [doneTurn],
+      passes: [
+        {
+          ...pass,
+          phase: 'accepted',
+          activeRole: undefined,
+          activeTurnId: undefined,
+          reasoningTurns: [doneTurn],
+        },
+      ],
+    };
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({
+      ...fixture,
+      state: { ...fixture.state, tasks: [doneTask], activeTaskId: doneTask.id },
+      csrf: 'test',
+    } as any);
+    render(<App />);
+    const doneResponse = await screen.findByLabelText('orchestrator model response');
+    expect(
+      within(doneResponse).getByText('No activity details were reported for this turn.')
+    ).toBeTruthy();
+  });
+  it('collapses Luna dialogue and reasoning, keeps the final artifact visible, and summarizes repository and knowledge changes in a closed receipt', async () => {
+    const now = new Date().toISOString();
+    const turn = {
+      role: 'worker',
+      threadId: 'worker-1',
+      turnId: 'worker-turn',
+      requestedModel: 'gpt-6-luna',
+      requestedEffort: 'high',
+      status: 'completed',
+      startedAt: now,
+    };
+    const receipt = {
+      status: 'complete',
+      result: '# Final result\n\nA user-visible result.',
+      changes: ['src/output.ts'],
+      acceptance: { met: ['Output is ready'], unmet: [] },
+      verification: [{ check: 'Build', result: 'passed', evidence: 'Production build passed.' }],
+      risks: [],
+      knowledge: {
+        consulted: ['knowledge/architecture.md'],
+        updated: ['knowledge/architecture.md'],
+      },
+      decision_required: null,
+    };
+    const pass = {
+      id: 'pass-1',
+      index: 1,
+      createdAt: now,
+      userInput: 'Complete the task',
+      userInputs: ['Complete the task'],
+      userMessageIds: ['u1'],
+      phase: 'accepted',
+      resolution: 'delegated',
+      correctionCount: 0,
+      processedTurns: ['worker-turn'],
+      workerThreadId: 'worker-1',
+      reasoningTurns: [turn],
+      reasoningSummaries: [
+        {
+          role: 'worker',
+          threadId: 'worker-1',
+          turnId: 'worker-turn',
+          itemId: 'r1',
+          summaryIndex: 0,
+          text: '# Investigating\n\nThis is a long streamed section.\n\n### More detail\n\nCompacted text remains bounded.',
+          passId: 'pass-1',
+        },
+      ],
+      receipt,
+    };
+    const task = {
+      id: 'collapsed-worker',
+      title: 'Collapsed worker',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      passes: [pass],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Complete the task', createdAt: now, passId: 'pass-1' },
+        { id: 'w1', role: 'worker', text: receipt.result, createdAt: now, passId: 'pass-1' },
+      ],
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+      csrf: 'test',
+    } as any);
+    render(<App />);
+    const panel = await screen.findByLabelText('Pass 1');
+    const activity = within(panel).getByRole('button', { name: /^Workers/ });
+    expect(activity.getAttribute('aria-expanded')).toBe('false');
+    expect(activity.parentElement?.querySelector('.disclosure-panel')?.hasAttribute('inert')).toBe(
+      true
+    );
+    expect(within(panel).getByRole('region', { name: 'Final output' })).toBeTruthy();
+    expect(
+      within(panel)
+        .getByRole('button', { name: /^Receipt/ })
+        .getAttribute('aria-expanded')
+    ).toBe('false');
+    expect(within(panel).getByRole('region', { name: 'Final output' }).textContent).toContain(
+      'A user-visible result.'
+    );
+    expect(within(panel).getAllByText('A user-visible result.')).toHaveLength(1);
+    fireEvent.click(activity);
+    expect(await within(panel).findByText('This is a long streamed section.')).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: /^Receipt/ }));
+    expect(within(panel).getByText('src/output.ts')).toBeTruthy();
+    expect(within(panel).getAllByText('knowledge/architecture.md').length).toBeGreaterThan(0);
+    expect(within(panel).getByText('Production build passed.')).toBeTruthy();
+  });
+  it('keeps worker progress updates inside the collapsed panel without scrolling the main conversation', async () => {
+    const now = new Date().toISOString();
+    const turn = {
+      role: 'worker',
+      threadId: 'worker-1',
+      turnId: 'turn-1',
+      requestedModel: 'gpt-6-luna',
+      requestedEffort: 'high',
+      startedAt: now,
+      status: 'streaming',
+    };
+    const summary = {
+      role: 'worker',
+      threadId: 'worker-1',
+      turnId: 'turn-1',
+      itemId: 'reason-1',
+      summaryIndex: 0,
+      text: 'First compact reasoning update.',
+      passId: 'pass-1',
+    };
+    const pass = {
+      id: 'pass-1',
+      index: 1,
+      createdAt: now,
+      userInput: 'Work',
+      userInputs: ['Work'],
+      userMessageIds: ['u1'],
+      phase: 'worker_running',
+      correctionCount: 0,
+      workerThreadId: 'worker-1',
+      activeRole: 'worker',
+      activeTurnId: 'turn-1',
+      reasoningTurns: [turn],
+      reasoningSummaries: [summary],
+      processedTurns: [],
+    };
+    const task = {
+      id: 'worker-scroll',
+      title: 'Worker progress',
+      phase: 'worker_running',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: 'pass-1',
+      correctionCount: 0,
+      workerThreadId: 'worker-1',
+      activeRole: 'worker',
+      activeTurnId: 'turn-1',
+      passes: [pass],
+      messages: [
+        { id: 'u1', role: 'user', text: 'Work', createdAt: now, passId: 'pass-1' },
+        {
+          id: 'w1',
+          role: 'worker',
+          text: 'Inspecting workspace',
+          createdAt: now,
+          passId: 'pass-1',
+        },
+      ],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    render(<App />);
+    const panel = await screen.findByLabelText('Pass 1');
+    const activity = within(panel).getByRole('button', { name: /^Workers/ });
+    expect(activity.getAttribute('aria-expanded')).toBe('false');
+    const scroller = document.querySelector('.conversation') as HTMLElement;
+    let scrollTop = 100;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => 1000 },
+      clientHeight: { configurable: true, get: () => 500 },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value) => {
+          scrollTop = value;
+        },
+      },
+    });
+    fireEvent.scroll(scroller);
+    const updated = {
+      ...task,
+      messages: [
+        ...task.messages,
+        {
+          id: 'w2',
+          role: 'worker',
+          text: 'Searching workspace context',
+          createdAt: new Date(Date.parse(now) + 1000).toISOString(),
+          passId: 'pass-1',
+        },
+        {
+          id: 'status',
+          role: 'system',
+          text: 'Worker activity: Reading source files',
+          createdAt: new Date(Date.parse(now) + 2000).toISOString(),
+          passId: 'pass-1',
+        },
+      ],
+      passes: [
+        {
+          ...pass,
+          reasoningSummaries: [{ ...summary, text: 'Second incremental reasoning update.' }],
+        },
+      ],
+    };
+    act(() =>
+      eventSource.onmessage({
+        data: JSON.stringify({
+          state: { ...activeFixture.state, tasks: [updated], activeTaskId: updated.id },
+          runtime: fixture.runtime,
+        }),
+      })
+    );
+    await waitFor(() =>
+      expect(within(panel).getByText('Second incremental reasoning update.')).toBeTruthy()
+    );
+    expect(activity.getAttribute('aria-expanded')).toBe('false');
+    expect(scrollTop).toBe(100);
+    const hiddenUpdate = within(panel).getByText('Searching workspace context');
+    expect(hiddenUpdate.closest('.disclosure-panel')?.getAttribute('aria-hidden')).toBe('true');
+    expect(hiddenUpdate.closest('.disclosure-panel')?.hasAttribute('inert')).toBe(true);
+    expect(
+      within(panel)
+        .getByText('Reading source files')
+        .closest('.disclosure-panel')
+        ?.getAttribute('aria-hidden')
+    ).toBe('true');
+  });
+  it('shows a compact active worker row and keeps assignment details collapsed until requested', async () => {
+    const now = new Date().toISOString();
+    const assignment = {
+      outcome: 'Build local harness',
+      deliverable: 'Runnable app',
+      read_scope: ['project'],
+      write_scope: ['project/src'],
+      exclusions: ['deployment'],
+      constraints: ['local only'],
+      context_refs: ['docs'],
+      acceptance: ['app works'],
+      verification: ['tests'],
+      ordinary_authority: ['choose details'],
+      escalation_conditions: ['decision'],
+      receipt_requirements: ['receipt'],
+    };
+    const task = {
+      id: 'task-1',
+      title: 'Implement local harness',
+      phase: 'worker_running',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/programming/opnex',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      messages: [
+        { id: 'm1', role: 'user', text: 'Build the harness', createdAt: now, passId: 'pass-1' },
+      ],
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'Build the harness',
+          userInputs: ['Build the harness'],
+          userMessageIds: ['m1'],
+          phase: 'worker_running',
+          correctionCount: 0,
+          workerThreadId: 'worker-1',
+          processedTurns: [],
+          assignment,
+        },
+      ],
+      assignment,
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: 'task-1' },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const panel = await screen.findByLabelText('Pass 1');
+    const workers = within(panel).getByRole('button', { name: /^Workers/ });
+    expect(workers.getAttribute('aria-expanded')).toBe('false');
+    const workerPanel = workers.parentElement?.querySelector('.disclosure-panel');
+    expect(workerPanel?.getAttribute('aria-hidden')).toBe('true');
+    expect(workerPanel?.hasAttribute('inert')).toBe(true);
+    fireEvent.click(workers);
+    expect(await within(panel).findByText('Authorized write scope')).toBeTruthy();
+  });
+  it('keeps each pass assignment and receipt beside its own messages and does not carry artifacts into a direct pass', async () => {
+    const now = new Date().toISOString();
+    const firstAssignment = {
+      outcome: 'First-pass outcome',
+      deliverable: 'First deliverable',
+      read_scope: [],
+      write_scope: [],
+      exclusions: [],
+      constraints: [],
+      context_refs: [],
+      acceptance: ['First acceptance'],
+      verification: ['First verification'],
+      ordinary_authority: ['ordinary'],
+      escalation_conditions: ['blocked'],
+      receipt_requirements: ['receipt'],
+    };
+    const firstReceipt = {
+      status: 'complete',
+      result: 'First worker result',
+      changes: [],
+      acceptance: { met: ['First acceptance'], unmet: [] },
+      verification: [],
+      risks: [],
+      knowledge: { consulted: [], updated: [] },
+      decision_required: null,
+    };
+    const task = {
+      id: 'multi',
+      title: 'Multiple prompts',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-2',
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'First delegated prompt',
+          userInputs: ['First delegated prompt'],
+          userMessageIds: ['u1'],
+          phase: 'accepted',
+          resolution: 'delegated',
+          assignment: firstAssignment,
+          receipt: firstReceipt,
+          reviewNote: 'First pass accepted',
+          correctionCount: 0,
+          processedTurns: [],
+        },
+        {
+          id: 'pass-2',
+          index: 2,
+          createdAt: now,
+          userInput: 'Second simple prompt',
+          userInputs: ['Second simple prompt'],
+          userMessageIds: ['u2'],
+          phase: 'accepted',
+          resolution: 'direct',
+          publicAnswer: 'Second direct answer',
+          reviewNote: 'Answered directly',
+          correctionCount: 0,
+          processedTurns: [],
+        },
+      ],
+      messages: [
+        {
+          id: 'u1',
+          role: 'user',
+          text: 'First delegated prompt',
+          createdAt: now,
+          passId: 'pass-1',
+        },
+        { id: 'w1', role: 'worker', text: 'First worker result', createdAt: now, passId: 'pass-1' },
+        { id: 'u2', role: 'user', text: 'Second simple prompt', createdAt: now, passId: 'pass-2' },
+        {
+          id: 'a2',
+          role: 'orchestrator',
+          text: 'Second direct answer',
+          createdAt: now,
+          passId: 'pass-2',
+        },
+      ],
+    };
+    const multiFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...multiFixture, csrf: 'test' } as any);
+    render(<App />);
+    const passOne = await screen.findByLabelText('Pass 1');
+    const passTwo = screen.getByLabelText('Pass 2');
+    expect(within(passOne).getByText('First delegated prompt')).toBeTruthy();
+    expect(within(passOne).getAllByText('First worker result').length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(within(passOne).getByRole('button', { name: /^Workers/ }));
+    expect(within(passOne).getByText('First-pass outcome')).toBeTruthy();
+    fireEvent.click(within(passOne).getByRole('button', { name: /^Receipt/ }));
+    expect(within(passOne).getAllByText('First acceptance').length).toBeGreaterThanOrEqual(1);
+    expect(within(passTwo).getByText('Second simple prompt')).toBeTruthy();
+    expect(within(passTwo).getByText('Second direct answer')).toBeTruthy();
+    expect(within(passTwo).queryByText('First-pass outcome')).toBeNull();
+    expect(within(passTwo).queryByText('Worker receipt')).toBeNull();
+  });
+  it('shows collapsed token totals and per-model role rows when expanded', async () => {
+    const now = new Date().toISOString();
+    const token = (
+      totalTokens: number,
+      inputTokens: number,
+      outputTokens: number,
+      cachedInputTokens: number,
+      reasoningOutputTokens: number
+    ) => ({
+      totalTokens,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens,
+      modelContextWindow: 128000,
+      source: 'thread',
+    });
+    const task = {
+      id: 'usage-task',
+      title: 'Usage accounting',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 1,
+      currentPassId: 'pass-1',
+      orchestratorThreadId: 'orch-1',
+      workerThreadId: 'worker-1',
+      messages: [{ id: 'u1', role: 'user', text: 'Do work', createdAt: now, passId: 'pass-1' }],
+      passes: [
+        {
+          id: 'pass-1',
+          index: 1,
+          createdAt: now,
+          userInput: 'Do work',
+          userInputs: ['Do work'],
+          userMessageIds: ['u1'],
+          phase: 'accepted',
+          resolution: 'delegated',
+          correctionCount: 1,
+          orchestratorThreadId: 'orch-1',
+          workerThreadId: 'worker-1',
+          processedTurns: ['o1', 'w1', 'o2'],
+          usage: {
+            orchestrator: {
+              threadId: 'orch-1',
+              tokenStatus: 'available',
+              tokens: token(45, 35, 10, 8, 3),
+              creditStatus: 'available',
+              estimatedCreditsMicros: '2000000',
+              estimatedUsdMicros: '1000000',
+              allowance: { fiveHourPercent: 0.25, weeklyPercent: 0.5 },
+              groups: [
+                {
+                  model: 'gpt-6.1-sol',
+                  reasoningEffort: 'low',
+                  speed: 'standard',
+                  estimatedCreditsMicros: '2000000',
+                },
+              ],
+            },
+            worker: {
+              threadId: 'worker-1',
+              tokenStatus: 'available',
+              tokens: token(75, 50, 25, 22, 9),
+              creditStatus: 'available',
+              estimatedCreditsMicros: '3000000',
+              estimatedUsdMicros: '2500000',
+              allowance: { fiveHourPercent: 0.4, weeklyPercent: 0.75 },
+              groups: [
+                {
+                  model: 'gpt-6-luna',
+                  reasoningEffort: 'high',
+                  speed: 'standard',
+                  estimatedCreditsMicros: '3000000',
+                },
+              ],
+            },
+          },
+        },
+      ],
+    };
+    const usageFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...usageFixture, csrf: 'test' } as any);
+    render(<App />);
+    const panel = await screen.findByLabelText('Usage summary for pass 1');
+    expect(within(panel).getByText('120 tokens')).toBeTruthy();
+    expect(within(panel).queryByText(/credits/)).toBeNull();
+    fireEvent.click(panel.querySelector('summary')!);
+    expect(within(panel).getByText('GPT-6.1 Sol · orchestrator')).toBeTruthy();
+    expect(within(panel).getByText('GPT-6 Luna · worker')).toBeTruthy();
+    expect(within(panel).getByText('85')).toBeTruthy();
+    expect(within(panel).getByText('120')).toBeTruthy();
+  });
+  it('keeps separate historical pass summaries and role tooltips when a later pass updates', async () => {
+    const now = new Date().toISOString();
+    const makeRole = (threadId: string, total: number, model: string, credits: string) => ({
+      threadId,
+      tokenStatus: 'available',
+      tokens: {
+        totalTokens: total,
+        inputTokens: total - 10,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 10,
+        reasoningOutputTokens: 2,
+        modelContextWindow: null,
+        source: 'thread',
+      },
+      creditStatus: 'available',
+      estimateSource: 'codex-app-server-thread-usage',
+      estimatedCreditsMicros: credits,
+      estimatedUsdMicros: null,
+      groups: [
+        {
+          model,
+          reasoningEffort: model === 'gpt-6-luna' ? 'high' : 'low',
+          speed: 'standard',
+          estimatedCreditsMicros: credits,
+          netNewInputTokens: '20',
+          cachedInputTokens: '0',
+          inputTokens: String(total - 10),
+          outputTokens: '10',
+          totalTokens: String(total),
+        },
+      ],
+      allowance: { fiveHourPercent: 0.1, weeklyPercent: 0.2 },
+    });
+    const pass1 = {
+      id: 'pass-1',
+      index: 1,
+      createdAt: now,
+      userInput: 'First',
+      userInputs: ['First'],
+      userMessageIds: ['u1'],
+      phase: 'accepted',
+      resolution: 'delegated',
+      correctionCount: 0,
+      orchestratorThreadId: 'orch-1',
+      workerThreadId: 'worker-1',
+      processedTurns: [],
+      usage: {
+        orchestrator: makeRole('orch-1', 70, 'gpt-6.1-sol', '1000000'),
+        worker: makeRole('worker-1', 30, 'gpt-6-luna', '400000'),
+      },
+    };
+    const pass2 = {
+      id: 'pass-2',
+      index: 2,
+      createdAt: now,
+      userInput: 'Second',
+      userInputs: ['Second'],
+      userMessageIds: ['u2'],
+      phase: 'accepted',
+      resolution: 'delegated',
+      correctionCount: 0,
+      orchestratorThreadId: 'orch-2',
+      workerThreadId: 'worker-2',
+      processedTurns: [],
+      usage: {
+        orchestrator: makeRole('orch-2', 150, 'gpt-6.1-sol', '2000000'),
+        worker: makeRole('worker-2', 50, 'gpt-6-luna', '500000'),
+      },
+    };
+    const task = {
+      id: 'history-usage',
+      title: 'Historical pass usage',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-2',
+      orchestratorThreadId: 'orch-2',
+      workerThreadId: 'worker-2',
+      passes: [pass1, pass2],
+      messages: [
+        { id: 'u1', role: 'user', text: 'First', createdAt: now, passId: 'pass-1' },
+        { id: 'u2', role: 'user', text: 'Second', createdAt: now, passId: 'pass-2' },
+      ],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    render(<App />);
+    const first = await screen.findByLabelText('Usage summary for pass 1');
+    const second = screen.getByLabelText('Usage summary for pass 2');
+    expect(within(first).getByText('100 tokens')).toBeTruthy();
+    expect(within(second).getByText('200 tokens')).toBeTruthy();
+    fireEvent.click(first.querySelector('summary')!);
+    expect(within(first).getByText('GPT-6.1 Sol · orchestrator')).toBeTruthy();
+    expect(within(first).getByText('GPT-6 Luna · worker')).toBeTruthy();
+    const updatedPass2 = {
+      ...pass2,
+      usage: { ...pass2.usage, orchestrator: makeRole('orch-2', 250, 'gpt-6.1-sol', '3000000') },
+    };
+    act(() =>
+      eventSource.onmessage({
+        data: JSON.stringify({
+          state: { ...activeFixture.state, tasks: [{ ...task, passes: [pass1, updatedPass2] }] },
+          runtime: fixture.runtime,
+        }),
+      })
+    );
+    await waitFor(() => expect(within(second).getByText('300 tokens')).toBeTruthy());
+    expect(within(first).getByText('100 tokens')).toBeTruthy();
+  });
+  it('updates the completed pass usage footer from state events without a new model response', async () => {
+    const now = new Date().toISOString();
+    const tokens = {
+      totalTokens: 40,
+      inputTokens: 30,
+      cachedInputTokens: 7,
+      cacheWriteInputTokens: 0,
+      outputTokens: 10,
+      reasoningOutputTokens: 2,
+      modelContextWindow: 128000,
+      source: 'thread',
+    };
+    const pass = {
+      id: 'pass-1',
+      index: 1,
+      createdAt: now,
+      userInput: 'Do work',
+      userInputs: ['Do work'],
+      userMessageIds: ['u1'],
+      phase: 'accepted',
+      correctionCount: 0,
+      orchestratorThreadId: 'orch-1',
+      processedTurns: [],
+      usage: {
+        orchestrator: {
+          threadId: 'orch-1',
+          tokenStatus: 'unavailable',
+          creditStatus: 'unavailable',
+        },
+      },
+    };
+    const task = {
+      id: 'usage-live',
+      title: 'Live usage',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      currentPassId: 'pass-1',
+      orchestratorThreadId: 'orch-1',
+      passes: [pass],
+      messages: [{ id: 'u1', role: 'user', text: 'Do work', createdAt: now, passId: 'pass-1' }],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const panel = await screen.findByLabelText('Usage summary for pass 1');
+    expect(within(panel).getByText('not reported')).toBeTruthy();
+    const updated = {
+      ...task,
+      passes: [
+        {
+          ...pass,
+          usage: {
+            orchestrator: {
+              threadId: 'orch-1',
+              tokenStatus: 'available',
+              tokens,
+              creditStatus: 'available',
+              estimatedCreditsMicros: '125000',
+              estimatedUsdMicros: null,
+            },
+          },
+        },
+      ],
+    };
+    act(() =>
+      eventSource.onmessage({
+        data: JSON.stringify({
+          state: { ...activeFixture.state, tasks: [updated], activeTaskId: updated.id },
+          runtime: fixture.runtime,
+        }),
+      })
+    );
+    await waitFor(() => expect(within(panel).getByText('40 tokens')).toBeTruthy());
+    expect(screen.queryByText('Final answer')).toBeNull();
+  });
+  it('does not label explicit Codex direct-turn metadata as DeepSeek', async () => {
+    const now = new Date().toISOString();
+    const pass = {
+      id: 'direct-pass',
+      index: 1,
+      createdAt: now,
+      userInput: 'Answer briefly',
+      userInputs: ['Answer briefly'],
+      userMessageIds: ['direct-user'],
+      phase: 'accepted',
+      resolution: 'direct',
+      directThreadId: 'direct-thread',
+      executionProfile: { provider: 'deepseek', model: 'deepseek-v4.1-flash', effort: 'max' },
+      publicAnswer: 'A direct answer.',
+      reasoningTurns: [
+        {
+          role: 'direct',
+          threadId: 'direct-thread',
+          turnId: 'direct-turn',
+          provider: 'codex',
+          requestedModel: 'codex-runtime-entry',
+          requestedEffort: 'low',
+          startedAt: now,
+          status: 'completed',
+        },
+      ],
+      correctionCount: 0,
+      processedTurns: [],
+    };
+    const task = {
+      id: 'direct-provider-label',
+      title: 'Direct provider label',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      currentPassId: pass.id,
+      resolution: 'direct',
+      passes: [pass],
+      messages: [
+        {
+          id: 'direct-user',
+          role: 'user',
+          text: 'Answer briefly',
+          createdAt: now,
+          passId: pass.id,
+        },
+        {
+          id: 'direct-answer',
+          role: 'direct',
+          text: 'A direct answer.',
+          createdAt: now,
+          passId: pass.id,
+        },
+      ],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    const output = await screen.findByRole('region', { name: 'Final output' });
+    expect(output.textContent).toContain('codex-runtime-entry · low');
+    expect(output.textContent).not.toContain('DeepSeek Harness');
+    expect(screen.queryByText(/requested native effort .*effective effort unknown/)).toBeNull();
+    const panel = await screen.findByLabelText('Pass 1');
+    expect(within(panel).getAllByText('codex-runtime-entry · low').length).toBeGreaterThan(0);
+    expect(within(panel).queryByText(/DeepSeek Harness direct answer/)).toBeNull();
+  });
+  it('keeps the composer on the Codex orchestrator while worker profile stays in Settings', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let latest: any = structuredClone(fixture);
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...latest, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string, body: any) => {
+      if (isSnapshotRoute(path)) return latest as any;
+      if (path === '/api/settings' && body) {
+        latest = { ...latest, state: { ...latest.state, settings: body } };
+        return {} as any;
+      }
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    expect(screen.getAllByRole('button', { name: 'Orchestrator model' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Thinking effort' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Worker model' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Orchestrator model' }));
+    const menu = screen.getByRole('dialog', { name: 'Orchestrator model' });
+    expect(within(menu).getByRole('group', { name: 'Codex · OpenAI' })).toBeTruthy();
+    expect(
+      within(menu).queryByRole('group', { name: 'DeepSeek Harness · OpenCode Go' })
+    ).toBeNull();
+    expect(within(menu).getByRole('option', { name: /GPT-6 Luna/ })).toBeTruthy();
+    fireEvent.click(within(menu).getByRole('option', { name: /GPT-6\.1 Terra/ }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Orchestrator model' }).textContent).toContain(
+        'GPT-6.1 Terra'
+      )
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Orchestrator model' }));
+    const effortMenu = screen.getByRole('dialog', { name: 'Orchestrator model' });
+    expect(
+      within(effortMenu).getByRole('radiogroup', { name: 'Reasoning effort for GPT-6.1 Terra' })
+    ).toBeTruthy();
+    fireEvent.click(within(effortMenu).getByRole('radio', { name: 'High' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    const settings = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(settings).getByRole('button', { name: 'Worker model' })).toBeTruthy();
+    expect(
+      within(settings).queryByRole('button', { name: 'Hard-task orchestrator model' })
+    ).toBeNull();
+    fireEvent.click(within(settings).getByRole('button', { name: 'Worker model' }));
+    const workerMenu = within(settings).getByRole('dialog', { name: 'Worker model' });
+    expect(within(workerMenu).getByRole('group', { name: 'Codex · OpenAI' })).toBeTruthy();
+    expect(
+      within(workerMenu).getByRole('group', { name: 'DeepSeek Harness · OpenCode Go' })
+    ).toBeTruthy();
+    expect(within(workerMenu).getByRole('option', { name: /GPT-6 Luna/ })).toBeTruthy();
+    fireEvent.click(within(workerMenu).getByRole('option', { name: /DeepSeek V4.1 Flash/ }));
+    await waitFor(() =>
+      expect(within(settings).getByRole('button', { name: 'Worker model' }).textContent).toContain(
+        'DeepSeek V4.1 Flash'
+      )
+    );
+    fireEvent.click(within(settings).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Access mode' }));
+    expect(screen.getByRole('option', { name: 'Read-only' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('option', { name: 'Full access (unrestricted)' }));
+    const { api } = await import('../src/ui/api.js');
+    await waitFor(() =>
+      expect(
+        vi.mocked(api).mock.calls.filter(([url]) => url === '/api/settings').length
+      ).toBeGreaterThanOrEqual(3)
+    );
+    const writes = vi
+      .mocked(api)
+      .mock.calls.filter(([url]) => url === '/api/settings')
+      .map(([, body]) => body as any);
+    expect(
+      writes.some(
+        (write) =>
+          write.orchestratorModel === 'gpt-6.1-terra' && write.orchestratorEffort === 'high'
+      )
+    ).toBe(true);
+    expect(latest.state.settings.executionProfile).toEqual(fixture.state.settings.executionProfile);
+    expect(writes.at(-1)?.approvalPolicy).toBe('full-access');
+  });
+  it('uses one accessible Markdown source editor without a preview-mode toggle', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const editor = screen.getByRole('textbox', { name: 'Task message' });
+    expect(editor.getAttribute('contenteditable')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    fireEvent.keyDown(editor, { key: 'Enter', isComposing: true, keyCode: 229 });
+    const { api } = await import('../src/ui/api.js');
+    expect(vi.mocked(api).mock.calls.some(([url]) => url === '/api/tasks')).toBe(false);
+  });
+  it('submits the exact Markdown editor source once without trimming its boundaries', async () => {
+    render(<App />);
+    await screen.findByRole('textbox', { name: 'Task message' });
+    const editor = screen.getByRole('textbox', { name: 'Task message' });
+    const view = EditorView.findFromDOM(editor as HTMLElement);
+    expect(view).toBeTruthy();
+    const qa = screen.getByRole('checkbox', { name: 'QA loop' });
+    expect((qa as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(qa);
+    const source = '  **draft**\n\n- item  ';
+    act(() => view!.dispatch({ changes: { from: 0, to: view!.state.doc.length, insert: source } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send task' }));
+    const { api } = await import('../src/ui/api.js');
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(api)
+          .mock.calls.filter(
+            ([url, body]) =>
+              url === '/api/tasks' &&
+              (body as any).message === source &&
+              (body as any).qaEnabled === true
+          )
+      ).toHaveLength(1)
+    );
+  });
+  it('changes a workspace directory for future sessions while preserving each saved session snapshot', async () => {
+    const now = new Date().toISOString();
+    const project = { ...demoProject, projectRoot: 'D:/workspace/old' };
+    const task = {
+      id: 'snapshot-task',
+      projectId: project.id,
+      title: 'Historical context',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: project.projectRoot,
+      correctionCount: 0,
+      currentPassId: 'pass-a',
+      passes: [
+        {
+          id: 'pass-a',
+          index: 1,
+          createdAt: now,
+          userInput: 'prior work',
+          userInputs: ['prior work'],
+          userMessageIds: ['u1'],
+          phase: 'accepted',
+          correctionCount: 0,
+          processedTurns: [],
+        },
+      ],
+      messages: [{ id: 'u1', role: 'user', text: 'prior work', createdAt: now, passId: 'pass-a' }],
+    };
+    let latest: any = {
+      ...fixture.state,
+      projects: [project],
+      selectedProjectId: project.id,
+      settings: { ...fixture.state.settings },
+      tasks: [task],
+      activeTaskId: task.id,
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({
+      ...fixture,
+      state: latest,
+      csrf: 'test',
+    } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string, body: any) => {
+      if (path === '/api/projects' && body) {
+        const saved = { ...latest.projects[0], ...body, updatedAt: new Date().toISOString() };
+        latest = { ...latest, projects: [saved, ...latest.projects.slice(1)] };
+        return { project: saved, duplicate: false } as any;
+      }
+      if (isSnapshotRoute(path)) return { state: latest, runtime: fixture.runtime } as any;
+      if (path.startsWith('/api/directories?resolve=1'))
+        return {
+          path: 'D:/workspace/next',
+          parent: 'D:/workspace',
+          entries: [],
+          truncated: false,
+        } as any;
+      if (path.startsWith('/api/directories'))
+        return path.includes('next')
+          ? ({
+              path: 'D:/workspace/next',
+              parent: 'D:/workspace',
+              entries: [],
+              truncated: false,
+            } as any)
+          : ({
+              path: 'D:/workspace/old',
+              parent: 'D:/workspace',
+              entries: [{ name: 'next', path: 'D:/workspace/next' }],
+              truncated: false,
+            } as any);
+      return {} as any;
+    });
+    render(<App />);
+    await screen.findByRole('tab', { name: /Historical context/ });
+    fireEvent.click(screen.getByRole('button', { name: `Configure workspace old` }));
+    const root = await screen.findByRole('textbox', { name: 'Working directory' });
+    expect((root as HTMLInputElement).value).toBe('D:/workspace/old');
+    fireEvent.click(screen.getByRole('button', { name: 'Browse workspace folders' }));
+    await screen.findByText('next');
+    fireEvent.click(document.querySelector('.directory-entry-select')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this folder' }));
+    await waitFor(() => expect((root as HTMLInputElement).value).toBe('D:/workspace/next'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save workspace' }));
+    await waitFor(() => expect(latest.projects[0].projectRoot).toBe('D:/workspace/next'));
+    expect(latest.tasks[0]).toMatchObject({
+      id: 'snapshot-task',
+      projectId: project.id,
+      userRoot: 'D:/workspace/old',
+      messages: task.messages,
+    });
+    expect(
+      vi.mocked(apiMod.api).mock.calls.find(([path]) => path === '/api/projects')?.[1]
+    ).toEqual({ id: project.id, projectRoot: 'D:/workspace/next', pinned: false });
+    expect(vi.mocked(apiMod.api).mock.calls.some(([path]) => path === '/api/settings')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    const editor = await screen.findByRole('textbox', { name: 'Task message' });
+    const view = EditorView.findFromDOM(editor as HTMLElement)!;
+    act(() =>
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: 'Use the updated project workspace.',
+        },
+      })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Send task' }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([path, body]) => path === '/api/tasks' && (body as any).projectId === project.id
+          )
+      ).toBe(true)
+    );
+  });
+  it('renames and deletes only the selected local session through confirmed actions', async () => {
+    const now = new Date().toISOString();
+    const task = {
+      id: 'local-session',
+      title: 'Synthetic session',
+      phase: 'accepted',
+      createdAt: now,
+      updatedAt: now,
+      userRoot: 'D:/workspace/demo',
+      correctionCount: 0,
+      messages: [{ id: 'm1', role: 'user', text: 'sample', createdAt: now }],
+    };
+    let latest: any = { ...fixture.state, tasks: [task], activeTaskId: task.id };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({
+      ...fixture,
+      state: latest,
+      csrf: 'test',
+    } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string, body: any) => {
+      if (isSnapshotRoute(path)) return { state: latest, runtime: fixture.runtime } as any;
+      if (path === '/api/tasks/local-session/rename') {
+        latest = { ...latest, tasks: [{ ...task, title: body.title }] };
+        return {} as any;
+      }
+      if (path === '/api/tasks/local-session/delete') {
+        latest = { ...latest, tasks: [], activeTaskId: null };
+        return { ok: true, id: 'local-session' } as any;
+      }
+      return {} as any;
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole('button', { name: 'Actions for Synthetic session' });
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Synthetic session' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const title = await screen.findByRole('textbox', { name: /Session name/ });
+    await user.clear(title);
+    await user.type(title, 'Renamed local session');
+    expect((title as HTMLInputElement).value).toBe('Renamed local session');
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await waitFor(() =>
+      expect(
+        vi.mocked(apiMod.api).mock.calls.some(([url]) => url === '/api/tasks/local-session/rename')
+      ).toBe(true)
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText('Renamed local session').length).toBeGreaterThan(0)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Renamed local session' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete session' }));
+    expect(
+      screen.getByText('This removes the local conversation and its saved pass history.')
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete local session' }));
+    await screen.findByRole('textbox', { name: 'Task message' });
+    expect(
+      vi.mocked(apiMod.api).mock.calls.some(([url]) => url === '/api/tasks/local-session/delete')
+    ).toBe(true);
+    expect(
+      vi
+        .mocked(apiMod.api)
+        .mock.calls.some(
+          ([url]) => String(url).includes('project_notes') && String(url).includes('delete')
+        )
+    ).toBe(false);
+  });
+  it('disables session deletion throughout routed phases even when role metadata is absent', async () => {
+    const now = new Date().toISOString();
+    const apiMod = await import('../src/ui/api.js');
+    for (const phase of ['routing', 'direct_running', 'simple_running']) {
+      const task = {
+        id: `task-${phase}`,
+        title: `Task ${phase}`,
+        phase,
+        createdAt: now,
+        updatedAt: now,
+        userRoot: 'D:/workspace/demo',
+        correctionCount: 0,
+        messages: [
+          { id: `message-${phase}`, role: 'user', text: 'Test routed phase', createdAt: now },
+        ],
+      };
+      const activeFixture = {
+        ...fixture,
+        state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+      };
+      vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+      vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+        isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+      );
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: `Actions for Task ${phase}` }));
+      expect(
+        (screen.getByRole('menuitem', { name: 'Delete session' }) as HTMLButtonElement).disabled
+      ).toBe(true);
+      cleanup();
+    }
+  });
+  it('renders pending approval requests with explicit approve and decline actions', async () => {
+    const task = {
+      id: 'task-approval',
+      title: 'Run command',
+      phase: 'worker_running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      userRoot: 'D:/repo',
+      correctionCount: 0,
+      approvalRequests: [
+        {
+          requestId: 17,
+          method: 'item/commandExecution/requestApproval',
+          itemId: 'item-1',
+          threadId: 'worker-1',
+          turnId: 'turn-1',
+          command: 'npm test',
+          cwd: 'D:/repo',
+          reason: 'Run the requested verification',
+        },
+      ],
+      messages: [
+        { id: 'm1', role: 'user', text: 'Run tests', createdAt: new Date().toISOString() },
+      ],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    expect(await screen.findByText('Approval needed')).toBeTruthy();
+    expect(screen.getByText('npm test')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve once' }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([url, body]) =>
+              url === '/api/tasks/task-approval/approval' && (body as any).decision === 'accept'
+          )
+      ).toBe(true)
+    );
+  });
+  it('opens the shared skills library in a tab and invokes a saved skill only through an explicit slash command', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    let saved = false;
+    const id = '082d966c-c8f5-4e27-92c2-7f03cbf019c0';
+    const summary = {
+      id,
+      name: 'QA skill',
+      description: 'Focused test guidance',
+      source: 'Created in the app',
+      revision: 'a'.repeat(64),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      archived: false,
+      fileCount: 0,
+    };
+    vi.mocked(apiMod.api).mockImplementation(async (path: string, body: any) => {
+      if (isSnapshotRoute(path)) return fixture as any;
+      if (path === '/api/skills' && body) {
+        saved = true;
+        return { skill: { ...summary, instructions: 'Use focused tests.', files: [] } } as any;
+      }
+      if (path === `/api/skills/${id}`)
+        return { skill: { ...summary, instructions: '**Use** focused tests.', files: [] } } as any;
+      if (path === '/api/skills' || path.startsWith('/api/skills?'))
+        return { skills: saved ? [summary] : [] } as any;
+      if (path === '/api/tasks')
+        return {
+          id: 'new-task',
+          title: 'Write hello world',
+          phase: 'routing',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          userRoot: 'D:/workspace/demo',
+          messages: [],
+          passes: [],
+        } as any;
+      return {} as any;
+    });
+    vi.mocked(apiMod.apiPut).mockResolvedValue({
+      skill: {
+        ...summary,
+        revision: 'b'.repeat(64),
+        instructions: 'Use revised focused tests.',
+        files: [],
+      },
+    } as any);
+    render(<App />);
+    const editorElement = await screen.findByRole('textbox', { name: 'Task message' });
+    expect(
+      vi.mocked(apiMod.api).mock.calls.some(([url]) => String(url).startsWith('/api/skills'))
+    ).toBe(false);
+    expect(screen.queryByText('Hard tasks')).toBeNull();
+    expect(screen.queryByText('Effort')).toBeNull();
+    expect(screen.queryByText('Approval')).toBeNull();
+    expect(screen.queryByText(/Hard-task Luna/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Orchestrator model' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Thinking effort' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Access mode' })).toBeTruthy();
+    fireEvent.click(document.querySelector('.activity-rail [aria-label="Library"]')!);
+    await screen.findByRole('heading', { name: 'Library' });
+    expect(document.querySelector('[data-tab-kind="skills"]')).toBeTruthy();
+    expect(document.querySelector('.skill-library-page')?.closest('[role="dialog"]')).toBeNull();
+    expect(await screen.findByRole('heading', { name: 'No saved skills yet' })).toBeTruthy();
+    expect(document.querySelector('.skill-library-layout')).toBeNull();
+    await waitFor(() =>
+      expect(
+        vi.mocked(apiMod.api).mock.calls.some(([url]) => String(url).startsWith('/api/skills'))
+      ).toBe(true)
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search saved skills' }), {
+      target: { value: 'missing' },
+    });
+    expect(await screen.findByRole('heading', { name: 'No skills match “missing”' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(await screen.findByRole('heading', { name: 'No saved skills yet' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'New skill' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Skill name' }), {
+      target: { value: 'QA skill' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), {
+      target: { value: 'Focused test guidance' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Instructions' }), {
+      target: { value: 'Use focused tests.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
+    await screen.findByText('QA skill');
+    fireEvent.click(screen.getByRole('button', { name: /QA skill/ }));
+    await screen.findByRole('heading', { name: 'QA skill' });
+    expect(document.querySelector('.skill-instructions-preview strong')?.textContent).toBe('Use');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit skill' }));
+    await screen.findByRole('textbox', { name: 'Instructions' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Instructions' }), {
+      target: { value: 'Use revised focused tests.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save skill' }));
+    await screen.findByText('Skill saved with a new revision.');
+    expect(apiMod.apiPut).toHaveBeenCalledWith(
+      `/api/skills/${id}`,
+      expect.objectContaining({
+        expectedRevision: 'a'.repeat(64),
+        instructions: 'Use revised focused tests.',
+      })
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'New session' }));
+    const editor = EditorView.findFromDOM(editorElement as HTMLElement)!;
+    const user = userEvent.setup();
+    await user.click(editorElement);
+    const detailLoadsBefore = vi
+      .mocked(apiMod.api)
+      .mock.calls.filter(([url]) => url === `/api/skills/${id}`).length;
+    await user.keyboard('/');
+    await screen.findByRole('dialog', { name: 'Available skills' });
+    await screen.findByRole('option', { name: /QA skill/ });
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Available skills' })).toBeNull()
+    );
+    expect(vi.mocked(apiMod.api).mock.calls.some(([url]) => url === '/api/tasks')).toBe(false);
+    act(() => editor.dispatch({ changes: { from: 0, to: 1, insert: '' } }));
+    await user.keyboard('/Q');
+    await screen.findByRole('option', { name: /QA skill/ });
+    await user.keyboard('{ArrowDown}');
+    await user.keyboard('{Enter}');
+    expect(editor.state.doc.toString()).toBe(`/skill library:${id}@${summary.revision}`);
+    expect(
+      vi.mocked(apiMod.api).mock.calls.filter(([url]) => url === `/api/skills/${id}`).length
+    ).toBe(detailLoadsBefore);
+    expect(vi.mocked(apiMod.api).mock.calls.some(([url]) => url === '/api/tasks')).toBe(false);
+    act(() => editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: '/Q' } }));
+    const mouseOption = await screen.findByRole('option', { name: /QA skill/ });
+    fireEvent.click(mouseOption);
+    expect(editor.state.doc.toString()).toBe(`/skill library:${id}@${summary.revision}`);
+    act(() =>
+      editor.dispatch({
+        changes: {
+          from: 0,
+          to: editor.state.doc.length,
+          insert: `Write hello world in Python.\n/skill library:${id}@${summary.revision}`,
+        },
+      })
+    );
+    expect(vi.mocked(apiMod.api).mock.calls.some(([url]) => url === '/api/tasks')).toBe(false);
+    fireEvent.keyDown(editorElement, { key: 'Enter' });
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([url, body]) =>
+              url === '/api/tasks' &&
+              (body as any).message ===
+                `Write hello world in Python.\n/skill library:${id}@${summary.revision}`
+          )
+      ).toBe(true)
+    );
+  });
+  it('opens the slash picker only at a command position, pauses during IME input, and links an empty picker to the Skills tab', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    const skillCalls: string[] = [];
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...fixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) => {
+      if (isSnapshotRoute(path)) return fixture as any;
+      if (path.startsWith('/api/skills')) {
+        skillCalls.push(path);
+        return { skills: [] } as any;
+      }
+      return {} as any;
+    });
+    render(<App />);
+    const editorElement = await screen.findByRole('textbox', { name: 'Task message' });
+    const editor = EditorView.findFromDOM(editorElement as HTMLElement)!;
+    const user = userEvent.setup();
+    expect(skillCalls).toEqual([]);
+    act(() => editor.dispatch({ changes: { from: 0, to: 0, insert: '/tmp/project/file.md' } }));
+    expect(screen.queryByRole('dialog', { name: 'Available skills' })).toBeNull();
+    expect(skillCalls).toEqual([]);
+    act(() => editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: '' } }));
+    fireEvent.compositionStart(editorElement);
+    act(() => editor.dispatch({ changes: { from: 0, to: 0, insert: '/' } }));
+    expect(screen.queryByRole('dialog', { name: 'Available skills' })).toBeNull();
+    expect(skillCalls).toEqual([]);
+    fireEvent.compositionEnd(editorElement);
+    await screen.findByRole('dialog', { name: 'Available skills' });
+    expect(await screen.findByText('No saved skills yet.')).toBeTruthy();
+    expect(skillCalls.some((path) => path.includes('limit=50'))).toBe(true);
+    expect(skillCalls.every((path) => !/^\/api\/skills\/[^?]/.test(path))).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Open Skills tab' }));
+    const tabs = screen.getByRole('tablist', { name: 'Open workspaces' });
+    expect(within(tabs).getByRole('tab', { name: 'Skills' }).getAttribute('aria-selected')).toBe(
+      'true'
+    );
+    expect(document.querySelector('[data-tab-kind="skills"]')).toBeTruthy();
+  });
+  it('discovers the project AgentMem skill through the explicit Codex-skill picker path', async () => {
+    const apiMod = await import('../src/ui/api.js');
+    const skill = {
+      id: 'codex:agentmem-project:0123456789ab',
+      name: 'agentmem-project',
+      description: 'Use the host-configured AgentMem MCP within an 8-call skill budget.',
+      source: 'Project skill',
+      revision: 'a'.repeat(64),
+      createdAt: '',
+      updatedAt: '',
+      archived: false,
+      fileCount: 0,
+    };
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) => {
+      if (isSnapshotRoute(path)) return fixture as any;
+      if (path.startsWith('/api/skills?source=codex')) return { skills: [skill] } as any;
+      return {} as any;
+    });
+    render(<App />);
+    const editorElement = await screen.findByRole('textbox', { name: 'Task message' });
+    const editor = EditorView.findFromDOM(editorElement as HTMLElement)!;
+    const user = userEvent.setup();
+    act(() =>
+      editor.dispatch({ changes: { from: 0, to: 0, insert: '/skill codex:agentmem-project' } })
+    );
+    const option = await screen.findByRole('option', { name: /agentmem-project/ });
+    expect(
+      vi
+        .mocked(apiMod.api)
+        .mock.calls.some(([url]) =>
+          String(url).includes(
+            `source=codex&q=agentmem-project&limit=50&projectId=${demoProject.id}`
+          )
+        )
+    ).toBe(true);
+    await user.click(option);
+    expect(editor.state.doc.toString()).toBe('/skill codex:agentmem-project:0123456789ab');
+  });
+  it('forwards a native MCP elicitation form response without persisting its input in the task', async () => {
+    const task = {
+      id: 'task-elicitation',
+      title: 'Look up project data',
+      phase: 'direct_running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      userRoot: 'D:/repo',
+      correctionCount: 0,
+      approvalRequests: [
+        {
+          requestId: 18,
+          method: 'mcpServer/elicitation/request',
+          itemId: '',
+          threadId: 'direct-1',
+          turnId: 'turn-1',
+          serverName: 'project_notes',
+          mode: 'form',
+          message: 'Confirm the selected project lookup.',
+          requestedSchema: {
+            type: 'object',
+            properties: { confirmed: { type: 'boolean' } },
+            required: ['confirmed'],
+          },
+        },
+      ],
+      messages: [
+        { id: 'm2', role: 'user', text: 'Look up a decision', createdAt: new Date().toISOString() },
+      ],
+    };
+    const activeFixture = {
+      ...fixture,
+      state: { ...fixture.state, tasks: [task], activeTaskId: task.id },
+    };
+    const apiMod = await import('../src/ui/api.js');
+    vi.mocked(apiMod.bootstrap).mockResolvedValue({ ...activeFixture, csrf: 'test' } as any);
+    vi.mocked(apiMod.api).mockImplementation(async (path: string) =>
+      isSnapshotRoute(path) ? (activeFixture as any) : ({} as any)
+    );
+    render(<App />);
+    expect(await screen.findByText('MCP server needs your input')).toBeTruthy();
+    expect(screen.getByText(/project_notes · form/i)).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'MCP response JSON' }), {
+      target: { value: '{"confirmed":true}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send response' }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(apiMod.api)
+          .mock.calls.some(
+            ([url, body]) =>
+              url === '/api/tasks/task-elicitation/approval' &&
+              (body as any).content?.confirmed === true
+          )
+      ).toBe(true)
+    );
   });
 });

@@ -36,7 +36,8 @@ const left = Math.round(scale * 8.5);
 const top = Math.round(scale * 5.5);
 for (let row = 0; row < p.length; row += 1) {
   for (let column = 0; column < p[row].length; column += 1) {
-    if (p[row][column] === '1') fillRectangle(left + column * cell, top + row * cell, cell, cell, [240, 240, 240, 255]);
+    if (p[row][column] === '1')
+      fillRectangle(left + column * cell, top + row * cell, cell, cell, [240, 240, 240, 255]);
   }
 }
 
@@ -47,7 +48,8 @@ for (let y = 0; y < size; y += 1) {
     for (let channel = 0; channel < 4; channel += 1) {
       let total = 0;
       for (let sy = 0; sy < scale; sy += 1) {
-        for (let sx = 0; sx < scale; sx += 1) total += pixels[((y * scale + sy) * size * scale + x * scale + sx) * 4 + channel];
+        for (let sx = 0; sx < scale; sx += 1)
+          total += pixels[((y * scale + sy) * size * scale + x * scale + sx) * 4 + channel];
       }
       rgba[output + channel] = Math.round(total / (scale * scale));
     }
@@ -70,7 +72,8 @@ function chunk(type, data) {
 }
 
 const scanlines = Buffer.alloc(size * (size * 4 + 1));
-for (let y = 0; y < size; y += 1) rgba.copy(scanlines, y * (size * 4 + 1) + 1, y * size * 4, (y + 1) * size * 4);
+for (let y = 0; y < size; y += 1)
+  rgba.copy(scanlines, y * (size * 4 + 1) + 1, y * size * 4, (y + 1) * size * 4);
 const header = Buffer.alloc(13);
 header.writeUInt32BE(size, 0);
 header.writeUInt32BE(size, 4);

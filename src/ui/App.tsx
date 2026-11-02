@@ -1,51 +1,131 @@
-import { createRef, lazy, Suspense, useCallback, useEffect, Fragment, useMemo, useRef, useState } from 'react';
-import { Activity, AlertCircle, Archive, BookOpen, Check, ChevronDown, ChevronRight, Command, Copy, FileText, Folder, FolderPlus, GitBranch, Globe, Keyboard, Maximize2, MessageSquarePlus, Minus, PanelLeft, PanelRight, Pin, Plus, Search, Settings2, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { SessionConversation } from './SessionConversation';
+import { SessionExplorer } from './SessionExplorer';
+import {
+  createRef,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import {
+  AlertCircle,
+  BookOpen,
+  Copy,
+  FileText,
+  Folder,
+  GitBranch,
+  Globe,
+  Maximize2,
+  MessageSquarePlus,
+  Minus,
+  PanelLeft,
+  PanelRight,
+  Plus,
+  Settings2,
+  X,
+} from 'lucide-react';
 import { api, bootstrap, KERNEL_PROTOCOL_VERSION } from './api';
-import { Markdown } from './Markdown';
 import Composer from './Composer';
 import { prepareMarkdownSubmission } from './LiveMarkdownEditor';
 import SettingsDialog from './SettingsDialog';
 import { ProjectEditorDialog } from './ProjectEditorDialog';
-import { SessionDialog, SessionRow } from './SessionControls';
+import { SessionDialog } from './SessionControls';
 import { HeadsUpPanel } from './HeadsUpPanel';
-import { PassGitDiff } from './PassGitDiff';
-import { RecruitmentTeamPanel } from './RecruitmentTeamPanel';
-import { ToolCallLogView, toolCallLogTitle } from './ToolCallLogView';
-import { ForgeBoard } from './ForgeBoard';
 import ForgeSessionCreate from './ForgeSessionCreate';
 import { accessModeFromApproval, runtimeApprovalForAccess } from './access-mode.js';
 import { respondForgeApproval } from './api';
 import './Forge.css';
 import { EmbeddedWorkspace } from './EmbeddedWorkspace';
-import { closePaneTab, moveTabToTab, normalizePanes, resizeAdjacentPanes, splitPane, type SessionPane } from './paneGroups';
+import {
+  closePaneTab,
+  moveTabToTab,
+  normalizePanes,
+  resizeAdjacentPanes,
+  splitPane,
+  type SessionPane,
+} from './paneGroups';
 import { formatBrowserAnnotation } from './browser-annotation';
-import { createWorkspaceTabId, createWorkspaceTabRecord, registerWorkspaceTab, removeWorkspaceTab, workspaceKindForMode, workspaceTabKind, workspaceTabTitle, type WorkspaceTabRecord, type WorkspaceTabRegistry } from './workspaceTabs';
+import {
+  createWorkspaceTabId,
+  createWorkspaceTabRecord,
+  registerWorkspaceTab,
+  removeWorkspaceTab,
+  workspaceKindForMode,
+  workspaceTabKind,
+  workspaceTabTitle,
+  type WorkspaceTabRecord,
+  type WorkspaceTabRegistry,
+} from './workspaceTabs';
 import { workspaceOptionLabel } from './workspace-label';
-import type { AppState, ApprovalRequest, Assignment, BrowserAnnotation, DeepSeekExecutionProfile, ExecutionProfile, ForgeTicket, LiveActivity, PassUsage, PassTokenUsage, Project, Runtime, Settings, Task, TaskPass, Message, ReasoningTurn, TaskAttachment } from '../types';
-import { qualityCorrectionPlannerInFlight, qualityLoopCanAcceptFindings, qualityLoopResumeAction } from '../../server/quality-loop-resume.js';
-import { formatReadOnlyWorkerResults } from '../../server/read-only-results.js';
-const SkillsLibraryPage=lazy(()=>import('./SkillsLibraryDialog').then(module=>({default:module.SkillsLibraryPage})));
+import type {
+  AppState,
+  BrowserAnnotation,
+  ExecutionProfile,
+  ForgeTicket,
+  Project,
+  Runtime,
+  Settings,
+  Task,
+  TaskAttachment,
+} from '../types';
+const SkillsLibraryPage = lazy(() =>
+  import('./SkillsLibraryDialog').then((module) => ({
+    default: module.SkillsLibraryPage,
+  }))
+);
 
-const phaseText:Record<string,string>={intake:'Ready',routing:'Routing request',direct_running:'Answering directly',simple_running:'Simple implementation running',planning:'Planning hard task',worker_running:'Worker running · orchestrator idle',escalated:'Decision needed',reviewing:'Reviewing receipt',accepted:'Accepted',needs_attention:'Needs attention',cancelled:'Cancelled',paused_after_restart:'Paused after restart'};
-// Status and routing-decision text uses the muted six-hue palette; tool dots stay green/red.
-const phaseHue:Record<string,string>={intake:'ash',routing:'slate',direct_running:'teal',simple_running:'slate',planning:'slate',worker_running:'sand',escalated:'sand',reviewing:'teal',accepted:'sage',needs_attention:'clay',cancelled:'ash',paused_after_restart:'ash'};
-const routeHue:Record<string,string>={direct_answer:'teal',simple_implementation:'slate',hard_task:'sand',escalated:'sand'};
-const statusHue=(text?:string)=>!text?undefined:text==='Recruiting workers'||text==='Waiting for workers'?'sand':text==='Reviewing worker receipts'||text==='Auditing corrections'?'teal':text==='Drafting assignments'?'slate':undefined;
-const fallbackSettings:Settings={orchestratorModel:'gpt-6.1-sol',orchestratorEffort:'low',fontFamily:'sans',approvalPolicy:'on-request',executionProfile:{provider:'codex',model:'gpt-6-luna',effort:'max'},mcpServers:[]};
-const stamp=(s:string)=>new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(new Date(s));
-const auditStamp=(s:string)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(s));
-const makePaneId=()=>`pane:${Date.now()}:${Math.random().toString(36).slice(2,7)}`;
-const makeFallbackTab=()=>`new:${Date.now()}:${Math.random().toString(36).slice(2,6)}`;
-function ExpandableSessionRows({expanded,children}:{expanded:boolean;children:React.ReactNode}){return <div className={`project-session-rows ${expanded?'open':'closed'}`} aria-hidden={!expanded} inert={!expanded}><div className="project-session-rows-content">{children}</div></div>;}
-async function encodeAttachments(files:FileList|null,existing:TaskAttachment[]):Promise<TaskAttachment[]>{
-  if(!files?.length)return [];
-  const selected=Array.from(files);
-  if(existing.length+selected.length>5)throw new Error('Choose no more than five files.');
-  const allowed=new Set(['image/png','image/jpeg','image/webp','text/plain','text/markdown','text/csv','application/json']);
-  let total=existing.reduce((sum,file)=>sum+file.size,0);
-  for(const file of selected){if(file.size>5*1024*1024)throw new Error(`${file.name} is over the 5 MiB per-file limit.`);if(!allowed.has(file.type))throw new Error(`Unsupported attachment format: ${file.name}.`);total+=file.size;}
-  if(total>12*1024*1024)throw new Error('Attachments exceed the 12 MiB total limit.');
-  return Promise.all(selected.map(async file=>{const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return{name:file.name,type:file.type,size:file.size,data:btoa(binary)};}));
+const fallbackSettings: Settings = {
+  orchestratorModel: 'gpt-6.1-sol',
+  orchestratorEffort: 'low',
+  fontFamily: 'sans',
+  approvalPolicy: 'on-request',
+  executionProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'max' },
+  mcpServers: [],
+};
+const makePaneId = () => `pane:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`;
+const makeFallbackTab = () => `new:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`;
+async function encodeAttachments(
+  files: FileList | null,
+  existing: TaskAttachment[]
+): Promise<TaskAttachment[]> {
+  if (!files?.length) return [];
+  const selected = Array.from(files);
+  if (existing.length + selected.length > 5) throw new Error('Choose no more than five files.');
+  const allowed = new Set([
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+    'text/plain',
+    'text/markdown',
+    'text/csv',
+    'application/json',
+  ]);
+  let total = existing.reduce((sum, file) => sum + file.size, 0);
+  for (const file of selected) {
+    if (file.size > 5 * 1024 * 1024)
+      throw new Error(`${file.name} is over the 5 MiB per-file limit.`);
+    if (!allowed.has(file.type)) throw new Error(`Unsupported attachment format: ${file.name}.`);
+    total += file.size;
+  }
+  if (total > 12 * 1024 * 1024) throw new Error('Attachments exceed the 12 MiB total limit.');
+  return Promise.all(
+    selected.map(async (file) => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000)
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        data: btoa(binary),
+      };
+    })
+  );
 }
 export default function App() {
   const desktopBridge = window.opnexDesktop || window.pseudoharnessDesktop;
@@ -54,18 +134,33 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [newSessionTypes, setNewSessionTypes] = useState<Record<string, 'conversation' | 'forge'>>({});
-  const [qualityModes,setQualityModes]=useState<Record<string,boolean>>({});
-  const [pendingAttachments, setPendingAttachments] = useState<Record<string, TaskAttachment[]>>({});
-  const [recruitmentSteerTargets, setRecruitmentSteerTargets] = useState<Record<string,string>>({});
-  const [panes, setPanes] = useState<SessionPane[]>([{ id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 }]);
+  const [newSessionTypes, setNewSessionTypes] = useState<Record<string, 'conversation' | 'forge'>>(
+    {}
+  );
+  const [qualityModes, setQualityModes] = useState<Record<string, boolean>>({});
+  const [pendingAttachments, setPendingAttachments] = useState<Record<string, TaskAttachment[]>>(
+    {}
+  );
+  const [recruitmentSteerTargets, setRecruitmentSteerTargets] = useState<Record<string, string>>(
+    {}
+  );
+  const [panes, setPanes] = useState<SessionPane[]>([
+    { id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 },
+  ]);
+  const panesRef = useRef(panes);
+  panesRef.current = panes;
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTabRegistry>({});
   const [focusedPaneId, setFocusedPaneId] = useState('pane:root');
+  const focusedPaneIdRef = useRef(focusedPaneId);
+  focusedPaneIdRef.current = focusedPaneId;
   const [tabErrors, setTabErrors] = useState<Record<string, string>>({});
   const [headsUpOpen, setHeadsUpOpen] = useState<Record<string, boolean>>({});
   const [sendingTabs, setSendingTabs] = useState<Record<string, boolean>>({});
   const [draggedTab, setDraggedTab] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ paneId: string; half: 'left' | 'right' } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{
+    paneId: string;
+    half: 'left' | 'right';
+  } | null>(null);
   const [tabDropTarget, setTabDropTarget] = useState<string | null>(null);
   const [sessionArrival, setSessionArrival] = useState('');
   const [closingTabs, setClosingTabs] = useState<Record<string, boolean>>({});
@@ -74,24 +169,63 @@ export default function App() {
   useEffect(() => windowControls?.onState(setWindowMaximized), [windowControls]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
-  const [sessionDialog, setSessionDialog] = useState<{ kind: 'rename' | 'delete'; taskId: string } | null>(null);
+  const [sessionDialog, setSessionDialog] = useState<{
+    kind: 'rename' | 'delete';
+    taskId: string;
+  } | null>(null);
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
   const [sessionDialogMounted, setSessionDialogMounted] = useState(false);
   const [projectEditor, setProjectEditor] = useState<Project | 'new' | null>(null);
   const [showAllProjects, setShowAllProjects] = useState<Record<string, boolean>>({});
   const [projectMoveError, setProjectMoveError] = useState('');
-  const [projectDropTarget, setProjectDropTarget] = useState<string|null>(null);
+  const [projectDropTarget, setProjectDropTarget] = useState<string | null>(null);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const shortcutsCloseRef = useRef<HTMLButtonElement>(null);
+  const shortcutsRestoreFocus = useRef<HTMLElement | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(296);
   const [sidebarResizing, setSidebarResizing] = useState(false);
-  useEffect(()=>{
-    const frame=requestAnimationFrame(()=>window.dispatchEvent(new Event('opnex:shell-layout')));
-    return()=>cancelAnimationFrame(frame);
-  },[sidebarCollapsed,sidebarWidth]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() =>
+      window.dispatchEvent(new Event('opnex:shell-layout'))
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [sidebarCollapsed, sidebarWidth]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState('');
+  useLayoutEffect(() => {
+    if (shortcutsOpen) shortcutsCloseRef.current?.focus();
+    else {
+      shortcutsRestoreFocus.current?.focus();
+      shortcutsRestoreFocus.current = null;
+    }
+  }, [shortcutsOpen]);
+  const openShortcuts = () => {
+    shortcutsRestoreFocus.current = document.activeElement as HTMLElement | null;
+    setShortcutsOpen(true);
+  };
+  const closeShortcuts = () => setShortcutsOpen(false);
+  const trapShortcutsTab = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Tab') return;
+    const items = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        'a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((item) => !item.closest('[hidden],[inert],[aria-hidden="true"]'));
+    const first = items[0];
+    const last = items.at(-1);
+    if (!first || !last) {
+      event.preventDefault();
+      shortcutsCloseRef.current?.focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
   const paneInputRefs = useRef<Record<string, any>>({});
   const headsUpTriggerRefs = useRef<Record<string, any>>({});
   const sessionScrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -103,41 +237,93 @@ export default function App() {
   const tabDropTargetRef = useRef<string | null>(null);
   const projectExpandedRef = useRef<string[]>([]);
   const projectExpansionQueue = useRef(Promise.resolve());
-  const kernelCursor = useRef<{instanceId:string;revision:number}|null>(null);
-  const recentSessionNavigation = useRef<{ids:string[];activeId:string|null}|null>(null);
-  const tabDragSuppressUntil = useRef<{tab:string;until:number}|null>(null);
+  const kernelCursor = useRef<{ instanceId: string; revision: number } | null>(null);
+  const recentSessionNavigation = useRef<{
+    ids: string[];
+    activeId: string | null;
+  } | null>(null);
+  const tabDragSuppressUntil = useRef<{ tab: string; until: number } | null>(null);
   const closeTimers = useRef<Record<string, number>>({});
   const settingsQueue = useRef(Promise.resolve());
   const contextSelectionQueue = useRef(Promise.resolve());
   const settingsDraft = useRef<Settings | null>(null);
-  const rootPane = panes[0] || { id: 'pane:root', tabs: ['new:0'], activeTab: 'new:0', weight: 1 };
-  const models = useMemo(() => runtime?.codex.models || [], [runtime]);
-  const selectedProject = state?.projects?.find(project => project.id === state.selectedProjectId) || null;
-  const applyKernelSnapshot=(value:any)=>{
-    if(value.protocolVersion!==undefined&&value.protocolVersion!==KERNEL_PROTOCOL_VERSION){setError('The client and local kernel use different protocol versions. Reload Opnex to reconnect.');return false;}
-    const incomingId=typeof value.kernelInstanceId==='string'?value.kernelInstanceId:'';
-    const incomingRevision=Number.isSafeInteger(value.cursor)?value.cursor:Number.isSafeInteger(value.state?.revision)?value.state.revision:undefined;
-    const previous=kernelCursor.current;
-    if(previous&&incomingId&&previous.instanceId===incomingId&&incomingRevision!==undefined&&incomingRevision<previous.revision)return false;
-    if(incomingId&&incomingRevision!==undefined)kernelCursor.current={instanceId:incomingId,revision:incomingRevision};
-    setState(value.state);setRuntime(value.runtime);return true;
+  const rootPane = panes[0] || {
+    id: 'pane:root',
+    tabs: ['new:0'],
+    activeTab: 'new:0',
+    weight: 1,
   };
-  useEffect(()=>{projectExpandedRef.current=state?.expandedProjectIds||[];},[state?.expandedProjectIds]);
+  const models = useMemo(() => runtime?.codex.models || [], [runtime]);
+  const selectedProject =
+    state?.projects?.find((project) => project.id === state.selectedProjectId) || null;
+  const applyKernelSnapshot = (value: any) => {
+    if (value.protocolVersion !== undefined && value.protocolVersion !== KERNEL_PROTOCOL_VERSION) {
+      setError(
+        'The client and local kernel use different protocol versions. Reload Opnex to reconnect.'
+      );
+      return false;
+    }
+    const incomingId = typeof value.kernelInstanceId === 'string' ? value.kernelInstanceId : '';
+    const incomingRevision = Number.isSafeInteger(value.cursor)
+      ? value.cursor
+      : Number.isSafeInteger(value.state?.revision)
+        ? value.state.revision
+        : undefined;
+    const previous = kernelCursor.current;
+    if (
+      previous &&
+      incomingId &&
+      previous.instanceId === incomingId &&
+      incomingRevision !== undefined &&
+      incomingRevision < previous.revision
+    )
+      return false;
+    if (incomingId && incomingRevision !== undefined)
+      kernelCursor.current = {
+        instanceId: incomingId,
+        revision: incomingRevision,
+      };
+    setState(value.state);
+    setRuntime(value.runtime);
+    return true;
+  };
+  useEffect(() => {
+    projectExpandedRef.current = state?.expandedProjectIds || [];
+  }, [state?.expandedProjectIds]);
   // One app-wide font family; settings only switch the stack.
-  useEffect(()=>{document.documentElement.dataset.font=state?.settings.fontFamily==='mono'?'mono':'sans';},[state?.settings.fontFamily]);
+  useEffect(() => {
+    document.documentElement.dataset.font = state?.settings.fontFamily === 'mono' ? 'mono' : 'sans';
+  }, [state?.settings.fontFamily]);
 
-  const taskForTab = (id: string): Task | null => state?.tasks.find(task => task.id === id) || null;
-  const setTabError = (id: string, message: string) => setTabErrors(current => ({ ...current, [id]: message }));
-  const clearTabError = (id: string) => setTabErrors(current => {
-    if (!(id in current)) return current;
-    const next = { ...current };
-    delete next[id];
-    return next;
-  });
-  const tabInputRef = (id: string) => paneInputRefs.current[id] ??= createRef();
-  const headsUpTriggerRef = (id: string) => headsUpTriggerRefs.current[id] ??= createRef<HTMLButtonElement>();
-  const setPaneTabs = (paneId: string, value: string[] | ((current: string[]) => string[])) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, tabs: typeof value === 'function' ? value(pane.tabs) : value } : pane));
-  const setPaneActive = (paneId: string, tab: string) => setPanes(current => current.map(pane => pane.id === paneId ? { ...pane, activeTab: tab } : pane));
+  const taskForTab = (id: string): Task | null =>
+    state?.tasks.find((task) => task.id === id) || null;
+  const setTabError = (id: string, message: string) =>
+    setTabErrors((current) => ({ ...current, [id]: message }));
+  const clearTabError = (id: string) =>
+    setTabErrors((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  const tabInputRef = (id: string) => (paneInputRefs.current[id] ??= createRef());
+  const headsUpTriggerRef = (id: string) =>
+    (headsUpTriggerRefs.current[id] ??= createRef<HTMLButtonElement>());
+  const setPaneTabs = (paneId: string, value: string[] | ((current: string[]) => string[])) =>
+    setPanes((current) =>
+      current.map((pane) =>
+        pane.id === paneId
+          ? {
+              ...pane,
+              tabs: typeof value === 'function' ? value(pane.tabs) : value,
+            }
+          : pane
+      )
+    );
+  const setPaneActive = (paneId: string, tab: string) =>
+    setPanes((current) =>
+      current.map((pane) => (pane.id === paneId ? { ...pane, activeTab: tab } : pane))
+    );
   const refresh = async (): Promise<AppState | null> => {
     try {
       const value = await api('/api/v1/snapshot');
@@ -148,26 +334,114 @@ export default function App() {
       return null;
     }
   };
-  const queueContextSelection=(url:string,body:unknown)=>{const operation=contextSelectionQueue.current.then(()=>api(url,body));contextSelectionQueue.current=operation.then(()=>undefined,()=>undefined);return operation;};
-  const selectSessionContext=(id:string)=>{const task=state?.tasks.find(row=>row.id===id);const projectId=task?.projectId||null;setState(current=>current?{...current,selectedProjectId:projectId,expandedProjectIds:projectId?[...new Set([...(current.expandedProjectIds||[]),projectId])]:[...new Set([...(current.expandedProjectIds||[]),'unclassified'])]}:current);return queueContextSelection('/api/tasks/'+id+'/select',{});};
+  const queueContextSelection = (url: string, body: unknown) => {
+    const operation = contextSelectionQueue.current.then(() => api(url, body));
+    contextSelectionQueue.current = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    return operation;
+  };
+  const selectSessionContext = (id: string) => {
+    const task = state?.tasks.find((row) => row.id === id);
+    const projectId = task?.projectId || null;
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            selectedProjectId: projectId,
+            expandedProjectIds: projectId
+              ? [...new Set([...(current.expandedProjectIds || []), projectId])]
+              : [...new Set([...(current.expandedProjectIds || []), 'unclassified'])],
+          }
+        : current
+    );
+    return queueContextSelection('/api/tasks/' + id + '/select', {});
+  };
   const openSettings = () => {
     setSettingsMounted(true);
     setSettingsOpen(true);
   };
-  const openProjectEditor = (project:Project|'new') => {
+  const openProjectEditor = (project: Project | 'new') => {
     setProjectEditor(project);
   };
-  const projectSaved = async(project:Project,duplicate:boolean) => {
-    const shouldSelect=projectEditor==='new'||duplicate;
+  const projectSaved = async (project: Project, duplicate: boolean) => {
+    const shouldSelect = projectEditor === 'new' || duplicate;
     setProjectEditor(null);
-    if(shouldSelect){setState(current=>current?{...current,selectedProjectId:project.id}:current);await queueContextSelection('/api/projects/select',{projectId:project.id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}
+    if (shouldSelect) {
+      setState((current) => (current ? { ...current, selectedProjectId: project.id } : current));
+      await queueContextSelection('/api/projects/select', {
+        projectId: project.id,
+      });
+      const active = panes.find((pane) => pane.id === focusedPaneId)?.activeTab;
+      if (active && !active.startsWith('new:')) openNewTab();
+    }
     await refresh();
   };
-  const selectProject = async(id:string|null) => {setState(current=>current?{...current,selectedProjectId:id}:current);try{await queueContextSelection('/api/projects/select',{projectId:id});const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab;if(active&&!active.startsWith('new:'))openNewTab();}catch(cause){setError(String(cause));await refresh();}};
-  const toggleProjectExpanded = (id:string) => {const current=projectExpandedRef.current;const expanded=!current.includes(id);const next=expanded?[...current,id]:current.filter(value=>value!==id);projectExpandedRef.current=next;setState(value=>value?{...value,expandedProjectIds:next}:value);projectExpansionQueue.current=projectExpansionQueue.current.then(()=>api(`/api/projects/${id}/expanded`,{expanded})).then(()=>undefined).catch(cause=>setError(String(cause)));};
-  const moveSessionToProject = async(taskId:string,projectId:string|null)=>{try{await api('/api/tasks/'+taskId+'/project',{projectId});setProjectMoveError('');await refresh();}catch(cause){setProjectMoveError(String(cause));}};
-  const dragSession = (event:React.DragEvent<HTMLDivElement>,task:Task)=>{event.dataTransfer.setData('application/x-opnex-session-project',task.id);event.dataTransfer.effectAllowed='move';};
-  const dropSessionInto = (event:React.DragEvent<HTMLElement>,projectId:string|null)=>{const id=event.dataTransfer.getData('application/x-opnex-session-project');if(!id)return;event.preventDefault();event.stopPropagation();setProjectDropTarget(null);void moveSessionToProject(id,projectId);};
+  const selectProject = async (id: string | null) => {
+    setState((current) => (current ? { ...current, selectedProjectId: id } : current));
+    try {
+      await queueContextSelection('/api/projects/select', { projectId: id });
+      const active = panes.find((pane) => pane.id === focusedPaneId)?.activeTab;
+      if (active && !active.startsWith('new:')) openNewTab();
+    } catch (cause) {
+      setError(String(cause));
+      await refresh();
+    }
+  };
+  const openNewSessionInProject = (projectId: string) => {
+    const activeTab = panes.find((pane) => pane.id === focusedPaneId)?.activeTab;
+    void selectProject(projectId);
+    if (activeTab?.startsWith('new:')) openNewTab();
+  };
+  const toggleProjectExpanded = (id: string) => {
+    const current = projectExpandedRef.current;
+    const expanded = !current.includes(id);
+    const next = expanded ? [...current, id] : current.filter((value) => value !== id);
+    projectExpandedRef.current = next;
+    setState((value) => (value ? { ...value, expandedProjectIds: next } : value));
+    projectExpansionQueue.current = projectExpansionQueue.current
+      .then(() => api(`/api/projects/${id}/expanded`, { expanded }))
+      .then(() => undefined)
+      .catch((cause) => setError(String(cause)));
+  };
+  const moveSessionToProject = async (taskId: string, projectId: string | null) => {
+    try {
+      await api('/api/tasks/' + taskId + '/project', { projectId });
+      setProjectMoveError('');
+      await refresh();
+    } catch (cause) {
+      setProjectMoveError(String(cause));
+    }
+  };
+  const setTaskPinned = async (task: Task, pinned: boolean) => {
+    try {
+      await api(`/api/tasks/${task.id}/pin`, { pinned });
+      await refresh();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+  const setTaskArchived = async (task: Task, archived: boolean) => {
+    try {
+      await api(`/api/tasks/${task.id}/archive`, { archived });
+      await refresh();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+  const dragSession = (event: React.DragEvent<HTMLDivElement>, task: Task) => {
+    event.dataTransfer.setData('application/x-opnex-session-project', task.id);
+    event.dataTransfer.effectAllowed = 'move';
+  };
+  const dropSessionInto = (event: React.DragEvent<HTMLElement>, projectId: string | null) => {
+    const id = event.dataTransfer.getData('application/x-opnex-session-project');
+    if (!id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setProjectDropTarget(null);
+    void moveSessionToProject(id, projectId);
+  };
   const closeSettings = () => setSettingsOpen(false);
   const openSessionDialog = useCallback((kind: 'rename' | 'delete', taskId: string) => {
     setSessionDialog({ kind, taskId });
@@ -177,45 +451,58 @@ export default function App() {
   const closeSessionDialog = () => setSessionDialogOpen(false);
   const makeTabArrival = (id: string) => {
     setSessionArrival(id);
-    window.setTimeout(() => setSessionArrival(current => current === id ? '' : current), 280);
+    window.setTimeout(() => setSessionArrival((current) => (current === id ? '' : current)), 280);
   };
   const activateSessionTab = (id: string) => {
-    const existing = panes.find(pane => pane.tabs.includes(id));
-    const target = existing || panes.find(pane => pane.id === focusedPaneId) || rootPane;
-    if (!existing) setPaneTabs(target.id, current => current.includes(id) ? current : [...current, id]);
+    const existing = panes.find((pane) => pane.tabs.includes(id));
+    const target = existing || panes.find((pane) => pane.id === focusedPaneId) || rootPane;
+    if (!existing)
+      setPaneTabs(target.id, (current) => (current.includes(id) ? current : [...current, id]));
     setPaneActive(target.id, id);
     setFocusedPaneId(target.id);
     if (!id.startsWith('new:')) {
-      void selectSessionContext(id).catch(cause => setTabError(id, String(cause)));
+      void selectSessionContext(id).catch((cause) => setTabError(id, String(cause)));
     }
   };
   const openNewTabInPane = (requestedPaneId: string) => {
-    const paneId = panes.some(pane => pane.id === requestedPaneId) ? requestedPaneId : rootPane.id;
+    const paneId = panes.some((pane) => pane.id === requestedPaneId)
+      ? requestedPaneId
+      : rootPane.id;
     const id = makeFallbackTab();
-    setPaneTabs(paneId, current => [...current, id]);
+    setPaneTabs(paneId, (current) => [...current, id]);
     setPaneActive(paneId, id);
     setFocusedPaneId(paneId);
     clearTabError(id);
     makeTabArrival(id);
     window.setTimeout(() => paneInputRefs.current[id]?.current?.focus(), 0);
   };
-  const openNewTab = () => openNewTabInPane(panes.some(pane => pane.id === focusedPaneId) ? focusedPaneId : rootPane.id);
+  const openNewTab = () =>
+    openNewTabInPane(panes.some((pane) => pane.id === focusedPaneId) ? focusedPaneId : rootPane.id);
   const openWorkspaceTab = (
     kind: Exclude<WorkspaceTabRecord['kind'], 'session'>,
     requestedPaneId: string,
     contextTabId: string | null,
-    initialUrl?: string,
+    initialUrl?: string
   ) => {
-    const paneId = panes.some(pane => pane.id === requestedPaneId) ? requestedPaneId : rootPane.id;
+    const paneId = panes.some((pane) => pane.id === requestedPaneId)
+      ? requestedPaneId
+      : rootPane.id;
     const currentWorkspace = contextTabId ? workspaceTabs[contextTabId] : undefined;
     const originTabId = currentWorkspace
       ? currentWorkspace.originTabId
-      : contextTabId && workspaceTabKind(contextTabId) === 'session' ? contextTabId : null;
+      : contextTabId && workspaceTabKind(contextTabId) === 'session'
+        ? contextTabId
+        : null;
     const originTaskId = originTabId && !originTabId.startsWith('new:') ? originTabId : null;
     const originTask = originTaskId ? taskForTab(originTaskId) : null;
-    const projectId = currentWorkspace?.projectId || originTask?.projectId || selectedProject?.id || '';
-    const projectRoot = currentWorkspace?.projectRoot || originTask?.userRoot || selectedProject?.projectRoot || '';
-    const id = createWorkspaceTabId(kind, Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9));
+    const projectId =
+      currentWorkspace?.projectId || originTask?.projectId || selectedProject?.id || '';
+    const projectRoot =
+      currentWorkspace?.projectRoot || originTask?.userRoot || selectedProject?.projectRoot || '';
+    const id = createWorkspaceTabId(
+      kind,
+      Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9)
+    );
     const record = createWorkspaceTabRecord(kind, id, {
       originTabId,
       projectId,
@@ -223,20 +510,27 @@ export default function App() {
       ...(kind === 'browser' && initialUrl ? { initialUrl } : {}),
       ...(kind === 'git' && initialUrl ? { focusUrl: initialUrl } : {}),
     });
-    setWorkspaceTabs(current => registerWorkspaceTab(current, record));
-    setPaneTabs(paneId, current => [...current, id]);
+    setWorkspaceTabs((current) => registerWorkspaceTab(current, record));
+    setPaneTabs(paneId, (current) => [...current, id]);
     setPaneActive(paneId, id);
     setFocusedPaneId(paneId);
     makeTabArrival(id);
     return id;
   };
-  const openSkillsTab=(requestedPaneId=focusedPaneId)=>{
-    for(const pane of panes){const existing=pane.tabs.find(tab=>workspaceTabKind(tab)==='skills');if(existing){setFocusedPaneId(pane.id);setPaneActive(pane.id,existing);return;}}
-    const pane=panes.find(item=>item.id===requestedPaneId)||rootPane;
-    openWorkspaceTab('skills',pane.id,pane.activeTab);
+  const openSkillsTab = (requestedPaneId = focusedPaneId) => {
+    for (const pane of panes) {
+      const existing = pane.tabs.find((tab) => workspaceTabKind(tab) === 'skills');
+      if (existing) {
+        setFocusedPaneId(pane.id);
+        setPaneActive(pane.id, existing);
+        return;
+      }
+    }
+    const pane = panes.find((item) => item.id === requestedPaneId) || rootPane;
+    openWorkspaceTab('skills', pane.id, pane.activeTab);
   };
   const updateWorkspaceOrigins = (oldTabId: string, taskId: string) => {
-    setWorkspaceTabs(current => {
+    setWorkspaceTabs((current) => {
       let changed = false;
       const next: Record<string, WorkspaceTabRecord> = { ...current };
       for (const [id, tab] of Object.entries(current)) {
@@ -247,20 +541,29 @@ export default function App() {
       return changed ? next : current;
     });
   };
-  const addBrowserAnnotation = (record: WorkspaceTabRecord, annotation: BrowserAnnotation, comment: string) => {
+  const addBrowserAnnotation = (
+    record: WorkspaceTabRecord,
+    annotation: BrowserAnnotation,
+    comment: string
+  ) => {
     const target = record.originTabId;
     if (!target) {
       setError('This Browser tab has no originating session to receive an annotation.');
       return;
     }
     if (record.originTaskId && !taskForTab(record.originTaskId)) {
-      setError('The session that opened this Browser tab was deleted; the annotation was not redirected.');
+      setError(
+        'The session that opened this Browser tab was deleted; the annotation was not redirected.'
+      );
       return;
     }
     const block = formatBrowserAnnotation(annotation, comment);
-    setDrafts(current => {
+    setDrafts((current) => {
       const previous = current[target] || '';
-      return { ...current, [target]: previous.trim() + (previous.trim() ? '\n\n' : '') + block };
+      return {
+        ...current,
+        [target]: previous.trim() + (previous.trim() ? '\n\n' : '') + block,
+      };
     });
     setTabError(target, 'Browser annotation added to this session draft.');
     activateSessionTab(target);
@@ -278,26 +581,46 @@ export default function App() {
     tabDropTargetRef.current = null;
     setTabDropTarget(null);
   };
-  const readDraggedTab = (dataTransfer: DataTransfer) => dataTransfer.getData('application/x-opnex-workspace-tab') || dataTransfer.getData('application/x-opnex-session-tab');
+  const readDraggedTab = (dataTransfer: DataTransfer) =>
+    dataTransfer.getData('application/x-opnex-workspace-tab') ||
+    dataTransfer.getData('application/x-opnex-session-tab');
   const tabUnderPointer = (event: React.DragEvent<HTMLElement>) => {
     const target = event.target as HTMLElement | null;
-    const fromTarget = target?.closest<HTMLElement>('[data-workspace-tab]') || target?.closest<HTMLElement>('[data-session-tab]');
+    const fromTarget =
+      target?.closest<HTMLElement>('[data-workspace-tab]') ||
+      target?.closest<HTMLElement>('[data-session-tab]');
     const point = document.elementFromPoint?.(event.clientX, event.clientY) as HTMLElement | null;
-    const fromPoint = point?.closest<HTMLElement>('[data-workspace-tab]') || point?.closest<HTMLElement>('[data-session-tab]');
-    const direct = fromTarget && event.currentTarget.contains(fromTarget) ? fromTarget : fromPoint && event.currentTarget.contains(fromPoint) ? fromPoint : null;
+    const fromPoint =
+      point?.closest<HTMLElement>('[data-workspace-tab]') ||
+      point?.closest<HTMLElement>('[data-session-tab]');
+    const direct =
+      fromTarget && event.currentTarget.contains(fromTarget)
+        ? fromTarget
+        : fromPoint && event.currentTarget.contains(fromPoint)
+          ? fromPoint
+          : null;
     if (direct) return direct.dataset.workspaceTab || direct.dataset.sessionTab || null;
-    const candidates = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[data-workspace-tab], [data-session-tab]'));
+    const candidates = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('[data-workspace-tab], [data-session-tab]')
+    );
     const nearest = candidates.reduce<HTMLElement | null>((best, item) => {
       if (!best) return item;
-      const distance = Math.abs(item.getBoundingClientRect().left + item.getBoundingClientRect().width / 2 - event.clientX);
-      const bestDistance = Math.abs(best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2 - event.clientX);
+      const distance = Math.abs(
+        item.getBoundingClientRect().left + item.getBoundingClientRect().width / 2 - event.clientX
+      );
+      const bestDistance = Math.abs(
+        best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2 - event.clientX
+      );
       return distance < bestDistance ? item : best;
     }, null);
     return nearest?.dataset.workspaceTab || nearest?.dataset.sessionTab || null;
   };
   const allowTabDrop = (event: React.DragEvent<HTMLElement>) => {
     const types = Array.from(event.dataTransfer.types);
-    if (types.includes('application/x-opnex-workspace-tab') || types.includes('application/x-opnex-session-tab')) {
+    if (
+      types.includes('application/x-opnex-workspace-tab') ||
+      types.includes('application/x-opnex-session-tab')
+    ) {
       event.preventDefault();
       event.dataTransfer.dropEffect = 'move';
       const target = tabUnderPointer(event);
@@ -309,9 +632,9 @@ export default function App() {
     clearTabDrop();
     setDraggedTab(null);
     setDropTarget(null);
-    const pane = panes.find(item => item.tabs.includes(target));
+    const pane = panes.find((item) => item.tabs.includes(target));
     if (pane) setFocusedPaneId(pane.id);
-    setPanes(current => moveTabToTab(current, source, target));
+    setPanes((current) => moveTabToTab(current, source, target));
   };
   const dropTabOnStrip = (event: React.DragEvent<HTMLElement>) => {
     const source = readDraggedTab(event.dataTransfer);
@@ -322,7 +645,7 @@ export default function App() {
     moveTab(source, target);
   };
   const finishTabDrag = (source: string) => {
-    tabDragSuppressUntil.current={tab:source,until:Date.now()+600};
+    tabDragSuppressUntil.current = { tab: source, until: Date.now() + 600 };
     const target = tabDropTargetRef.current;
     clearTabDrop();
     setDraggedTab(null);
@@ -333,21 +656,30 @@ export default function App() {
     clearTabDrop();
     setDraggedTab(null);
     setDropTarget(null);
-    setPanes(current => {
-      const sourceIndex = current.findIndex(pane => pane.tabs.includes(source));
-      const target = current.find(pane => pane.id === targetPaneId);
+    setPanes((current) => {
+      const sourceIndex = current.findIndex((pane) => pane.tabs.includes(source));
+      const target = current.find((pane) => pane.id === targetPaneId);
       if (sourceIndex < 0 || !target) return current;
       const rect = document.querySelector('.workspace-content')?.getBoundingClientRect();
       const total = current.reduce((sum, pane) => sum + pane.weight, 0);
-      const targetWidth = rect ? rect.width * target.weight / total : 0;
+      const targetWidth = rect ? (rect.width * target.weight) / total : 0;
       if (targetWidth < 336) return current;
       const next = [...current];
       const sourcePane = next[sourceIndex];
-      const remaining = sourcePane.tabs.filter(tab => tab !== source);
-      if (remaining.length) next[sourceIndex] = { ...sourcePane, tabs: remaining, activeTab: remaining.includes(sourcePane.activeTab) ? sourcePane.activeTab : remaining[0] };
+      const remaining = sourcePane.tabs.filter((tab) => tab !== source);
+      if (remaining.length)
+        next[sourceIndex] = {
+          ...sourcePane,
+          tabs: remaining,
+          activeTab: remaining.includes(sourcePane.activeTab) ? sourcePane.activeTab : remaining[0],
+        };
       else if (next.length === 1 || sourcePane.id === targetPaneId) {
         const fallback = makeFallbackTab();
-        next[sourceIndex] = { ...sourcePane, tabs: [fallback], activeTab: fallback };
+        next[sourceIndex] = {
+          ...sourcePane,
+          tabs: [fallback],
+          activeTab: fallback,
+        };
       } else next.splice(sourceIndex, 1);
       return splitPane(next, source, targetPaneId, side, makePaneId(), true);
     });
@@ -360,7 +692,7 @@ export default function App() {
       if (kind) {
         event.preventDefault();
         event.stopPropagation();
-        const pane = panes.find(item => item.id === paneId);
+        const pane = panes.find((item) => item.id === paneId);
         openWorkspaceTab(kind, paneId, pane?.activeTab || null);
         return;
       }
@@ -370,41 +702,83 @@ export default function App() {
     event.preventDefault();
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
-    splitTab(tab, paneId, event.nativeEvent.clientX < rect.left + rect.width / 2 ? 'left' : 'right');
+    splitTab(
+      tab,
+      paneId,
+      event.nativeEvent.clientX < rect.left + rect.width / 2 ? 'left' : 'right'
+    );
   };
   const closeTab = (id: string) => {
     if (closeTimers.current[id]) return;
-    setClosingTabs(current => ({ ...current, [id]: true }));
+    setClosingTabs((current) => ({ ...current, [id]: true }));
     closeTimers.current[id] = window.setTimeout(() => {
       delete closeTimers.current[id];
-      const group = panes.find(pane => pane.tabs.includes(id));
+      const currentPanes = panesRef.current;
+      const group = currentPanes.find((pane) => pane.tabs.includes(id));
       const wasActive = group?.activeTab === id;
-      if (wasActive && group) {
+      if (wasActive && group && focusedPaneIdRef.current === group.id) {
         const index = group.tabs.indexOf(id);
         const fallback = group.tabs[index > 0 ? index - 1 : 1];
         if (fallback && workspaceTabKind(fallback) === 'session' && !fallback.startsWith('new:')) {
-          void selectSessionContext(fallback).catch(cause => setTabError(fallback, String(cause)));
-        } else if (!fallback && panes.length > 1) {
-          const groupIndex = panes.findIndex(pane => pane.id === group.id);
-          const neighbor = panes[groupIndex === 0 ? 1 : Math.max(0, groupIndex - 1)];
+          void selectSessionContext(fallback).catch((cause) =>
+            setTabError(fallback, String(cause))
+          );
+        } else if (!fallback && currentPanes.length > 1) {
+          const groupIndex = currentPanes.findIndex((pane) => pane.id === group.id);
+          const neighbor = currentPanes[groupIndex === 0 ? 1 : Math.max(0, groupIndex - 1)];
           const neighborTab = neighbor?.activeTab;
-          if (neighborTab && workspaceTabKind(neighborTab) === 'session' && !neighborTab.startsWith('new:')) {
-            void selectSessionContext(neighborTab).catch(cause => setTabError(neighborTab, String(cause)));
+          if (
+            neighborTab &&
+            workspaceTabKind(neighborTab) === 'session' &&
+            !neighborTab.startsWith('new:')
+          ) {
+            void selectSessionContext(neighborTab).catch((cause) =>
+              setTabError(neighborTab, String(cause))
+            );
           }
         }
       }
-      setPanes(current => closePaneTab(current, id, makeFallbackTab));
-      setWorkspaceTabs(current => removeWorkspaceTab(current, id));
-      setDrafts(current => { const next = { ...current }; delete next[id]; return next; });
-      setPendingAttachments(current => { const next = { ...current }; delete next[id]; return next; });
-      setQualityModes(current=>{const next={...current};delete next[id];return next;});
-      setTabErrors(current => { const next = { ...current }; delete next[id]; return next; });
-      setHeadsUpOpen(current => { const next = { ...current }; delete next[id]; return next; });
+      setPanes((current) => closePaneTab(current, id, makeFallbackTab));
+      setWorkspaceTabs((current) => removeWorkspaceTab(current, id));
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setPendingAttachments((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setQualityModes((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setNewSessionTypes((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setTabErrors((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setHeadsUpOpen((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
       delete paneInputRefs.current[id];
       delete headsUpTriggerRefs.current[id];
-      setClosingTabs(current => { const next = { ...current }; delete next[id]; return next; });
+      setClosingTabs((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
       if (wasActive && group && group.tabs.length === 1 && panes.length > 1) {
-        const groupIndex = panes.findIndex(pane => pane.id === group.id);
+        const groupIndex = panes.findIndex((pane) => pane.id === group.id);
         const neighbor = panes[groupIndex === 0 ? 1 : Math.max(0, groupIndex - 1)];
         if (neighbor) setFocusedPaneId(neighbor.id);
       }
@@ -413,50 +787,113 @@ export default function App() {
   const setFilesFor = async (tab: string, files: FileList | null) => {
     try {
       const added = await encodeAttachments(files, pendingAttachments[tab] || []);
-      setPendingAttachments(current => ({ ...current, [tab]: [...(current[tab] || []), ...added] }));
+      setPendingAttachments((current) => ({
+        ...current,
+        [tab]: [...(current[tab] || []), ...added],
+      }));
       clearTabError(tab);
     } catch (cause) {
       setTabError(tab, String(cause));
     }
   };
-  const removeFileFor = (tab: string, index: number) => setPendingAttachments(current => ({ ...current, [tab]: (current[tab] || []).filter((_, item) => item !== index) }));
+  const removeFileFor = (tab: string, index: number) =>
+    setPendingAttachments((current) => ({
+      ...current,
+      [tab]: (current[tab] || []).filter((_, item) => item !== index),
+    }));
   const submitTab = async (tab: string) => {
     const submitted = prepareMarkdownSubmission(drafts[tab] || '');
     const files = pendingAttachments[tab] || [];
     const task = taskForTab(tab);
-    const qaEnabled=qualityModes[tab]??task?.passes?.find(pass=>pass.id===task.currentPassId)?.qualityLoop?.enabled??false;
+    const qaEnabled =
+      qualityModes[tab] ??
+      task?.passes?.find((pass) => pass.id === task.currentPassId)?.qualityLoop?.enabled ??
+      false;
     if (sendingRef.current.has(tab) || (!files.length && submitted === null)) return;
-    if(!task&&(!selectedProject||selectedProject.needsLocation)){setTabError(tab,'Select a workspace with a working directory before starting a session.');return;}
+    if (!task && (!selectedProject || selectedProject.needsLocation)) {
+      setTabError(tab, 'Select a workspace with a working directory before starting a session.');
+      return;
+    }
     const message = submitted || '';
     sendingRef.current.add(tab);
-    setSendingTabs(current => ({ ...current, [tab]: true }));
+    setSendingTabs((current) => ({ ...current, [tab]: true }));
     clearTabError(tab);
-    setDrafts(current => ({ ...current, [tab]: '' }));
+    setDrafts((current) => ({ ...current, [tab]: '' }));
     try {
-      if (task?.phase === 'escalated') await api('/api/tasks/' + task.id + '/escalation', { message, attachments: files });
-      else if (task) await api('/api/tasks/' + task.id + '/messages', { message, attachments: files, qaEnabled, ...(recruitmentSteerTargets[task.id]?{recruitmentWorkerId:recruitmentSteerTargets[task.id]}:{}) });
+      if (task?.phase === 'escalated')
+        await api('/api/tasks/' + task.id + '/escalation', {
+          message,
+          attachments: files,
+        });
+      else if (task)
+        await api('/api/tasks/' + task.id + '/messages', {
+          message,
+          attachments: files,
+          qaEnabled,
+          ...(recruitmentSteerTargets[task.id]
+            ? { recruitmentWorkerId: recruitmentSteerTargets[task.id] }
+            : {}),
+        });
       else {
         await contextSelectionQueue.current;
-        const created = await api('/api/tasks', { message, attachments: files, qaEnabled, projectId:selectedProject!.id });
+        const created = await api('/api/tasks', {
+          message,
+          attachments: files,
+          qaEnabled,
+          projectId: selectedProject!.id,
+        });
         if (created?.id) {
-          setPanes(current => current.map(pane => pane.tabs.includes(tab)
-            ? { ...pane, tabs: pane.tabs.map(item => item === tab ? created.id : item), activeTab: pane.activeTab === tab ? created.id : pane.activeTab }
-            : pane));
+          setPanes((current) =>
+            current.map((pane) =>
+              pane.tabs.includes(tab)
+                ? {
+                    ...pane,
+                    tabs: pane.tabs.map((item) => (item === tab ? created.id : item)),
+                    activeTab: pane.activeTab === tab ? created.id : pane.activeTab,
+                  }
+                : pane
+            )
+          );
           updateWorkspaceOrigins(tab, created.id);
-          setState(current => current ? { ...current, tasks: [created, ...current.tasks.filter(item => item.id !== created.id)] } : current);
+          setState((current) =>
+            current
+              ? {
+                  ...current,
+                  tasks: [created, ...current.tasks.filter((item) => item.id !== created.id)],
+                }
+              : current
+          );
           makeTabArrival(created.id);
         }
       }
-      setPendingAttachments(current => { const next = { ...current }; delete next[tab]; return next; });
-      if(task)setRecruitmentSteerTargets(current=>{if(!current[task.id])return current;const next={...current};delete next[task.id];return next;});
-      setDrafts(current => { const next = { ...current }; delete next[tab]; return next; });
+      setPendingAttachments((current) => {
+        const next = { ...current };
+        delete next[tab];
+        return next;
+      });
+      if (task)
+        setRecruitmentSteerTargets((current) => {
+          if (!current[task.id]) return current;
+          const next = { ...current };
+          delete next[task.id];
+          return next;
+        });
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[tab];
+        return next;
+      });
       await refresh();
     } catch (cause) {
       setTabError(tab, String(cause));
-      setDrafts(current => ({ ...current, [tab]: message }));
+      setDrafts((current) => ({ ...current, [tab]: message }));
     } finally {
       sendingRef.current.delete(tab);
-      setSendingTabs(current => { const next = { ...current }; delete next[tab]; return next; });
+      setSendingTabs((current) => {
+        const next = { ...current };
+        delete next[tab];
+        return next;
+      });
     }
   };
   const stopTask = async (taskId: string) => {
@@ -467,18 +904,43 @@ export default function App() {
       setTabError(taskId, String(cause));
     }
   };
-  const qualityAction=async(taskId:string,action:'accept'|'pause'|'resume')=>{
-    try{await api(`/api/tasks/${taskId}/qa/${action}`,{});await refresh();}
-    catch(cause){setTabError(taskId,String(cause));}
-  };
-  const approveTask = async (taskId: string, requestId: string | number, decision: 'accept' | 'decline' | 'cancel', content?:Record<string,unknown>) => {
+  const qualityAction = async (taskId: string, action: 'accept' | 'pause' | 'resume') => {
     try {
-      const task=state?.tasks.find(row=>row.id===taskId);
-      if(task?.sessionType==='forge'&&task.forge){
-        const ticket=await respondForgeApproval(taskId,requestId,{decision,...(content?{content}:{})});
-        setState(current=>current?{...current,tasks:current.tasks.map(row=>row.id===taskId?{...row,forge:ticket}:row)}:current);
-      }else{
-        await api('/api/tasks/' + taskId + '/approval', { requestId, decision, ...(content?{content}:{}) });
+      await api(`/api/tasks/${taskId}/qa/${action}`, {});
+      await refresh();
+    } catch (cause) {
+      setTabError(taskId, String(cause));
+    }
+  };
+  const approveTask = async (
+    taskId: string,
+    requestId: string | number,
+    decision: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, unknown>
+  ) => {
+    try {
+      const task = state?.tasks.find((row) => row.id === taskId);
+      if (task?.sessionType === 'forge' && task.forge) {
+        const ticket = await respondForgeApproval(taskId, requestId, {
+          decision,
+          ...(content ? { content } : {}),
+        });
+        setState((current) =>
+          current
+            ? {
+                ...current,
+                tasks: current.tasks.map((row) =>
+                  row.id === taskId ? { ...row, forge: ticket } : row
+                ),
+              }
+            : current
+        );
+      } else {
+        await api('/api/tasks/' + taskId + '/approval', {
+          requestId,
+          decision,
+          ...(content ? { content } : {}),
+        });
         await refresh();
       }
     } catch (cause) {
@@ -501,11 +963,20 @@ export default function App() {
         if (settingsDraft.current === next) settingsDraft.current = null;
       }
     });
-    settingsQueue.current = operation.then(() => undefined, () => undefined);
+    settingsQueue.current = operation.then(
+      () => undefined,
+      () => undefined
+    );
     return operation;
   };
-  const saveMcpServers=(servers:Settings['mcpServers'])=>updateSettings({mcpServers:servers});
-  const updateOrchestratorProfile=(profile:ExecutionProfile)=>void updateSettings({orchestratorModel:profile.model,orchestratorEffort:profile.effort,orchestratorServiceTier:profile.serviceTier});
+  const saveMcpServers = (servers: Settings['mcpServers']) =>
+    updateSettings({ mcpServers: servers });
+  const updateOrchestratorProfile = (profile: ExecutionProfile) =>
+    void updateSettings({
+      orchestratorModel: profile.model,
+      orchestratorEffort: profile.effort,
+      orchestratorServiceTier: profile.serviceTier,
+    });
   const renameSession = async (taskId: string, title: string) => {
     try {
       await api('/api/tasks/' + taskId + '/rename', { title });
@@ -518,13 +989,44 @@ export default function App() {
   const deleteSession = async (taskId: string) => {
     try {
       await api('/api/tasks/' + taskId + '/delete', {});
-      setPanes(current => normalizePanes(current.map(pane => {
-        const next = pane.tabs.filter(tab => tab !== taskId);
-        return { ...pane, tabs: next, activeTab: next.includes(pane.activeTab) ? pane.activeTab : next[0] || pane.activeTab };
-      }), makeFallbackTab));
-      setDrafts(current => { const next = { ...current }; delete next[taskId]; return next; });
-      setPendingAttachments(current => { const next = { ...current }; delete next[taskId]; return next; });
-      setTabErrors(current => { const next = { ...current }; delete next[taskId]; return next; });
+      setPanes((current) =>
+        normalizePanes(
+          current.map((pane) => {
+            const next = pane.tabs.filter((tab) => tab !== taskId);
+            return {
+              ...pane,
+              tabs: next,
+              activeTab: next.includes(pane.activeTab) ? pane.activeTab : next[0] || pane.activeTab,
+            };
+          }),
+          makeFallbackTab
+        )
+      );
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+      setPendingAttachments((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+      setNewSessionTypes((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+      setRecruitmentSteerTargets((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+      setTabErrors((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
       await refresh();
       closeSessionDialog();
     } catch (cause) {
@@ -535,30 +1037,33 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-    bootstrap().then(value => {
-      if (!alive) return;
-      applyKernelSnapshot(value);
-      if (value.state.activeTaskId) {
-        const id = value.state.activeTaskId;
-        setPanes([{ id: 'pane:root', tabs: [id], activeTab: id, weight: 1 }]);
-      }
-      if(!value.state.projects.length)openProjectEditor('new');
-      setLoading(false);
-    }).catch(cause => {
-      if (alive) {
-        setError(String(cause));
+    bootstrap()
+      .then((value) => {
+        if (!alive) return;
+        applyKernelSnapshot(value);
+        if (value.state.activeTaskId) {
+          const id = value.state.activeTaskId;
+          setPanes([{ id: 'pane:root', tabs: [id], activeTab: id, weight: 1 }]);
+        }
+        if (!value.state.projects.length) openProjectEditor('new');
         setLoading(false);
-      }
-    });
+      })
+      .catch((cause) => {
+        if (alive) {
+          setError(String(cause));
+          setLoading(false);
+        }
+      });
     const source = new EventSource(`/api/v1/events?protocol=${KERNEL_PROTOCOL_VERSION}`);
-    source.onmessage = event => {
+    source.onmessage = (event) => {
       try {
         const value = JSON.parse(event.data);
         if (value.state && alive) applyKernelSnapshot(value);
-      } catch {
-      }
+      } catch {}
     };
-    source.onerror = () => { if (alive) void refresh(); };
+    source.onerror = () => {
+      if (alive) void refresh();
+    };
     const timer = setInterval(() => void refresh(), 10_000);
     return () => {
       alive = false;
@@ -587,18 +1092,26 @@ export default function App() {
         const element = sessionScrollRefs.current[id];
         if (!task || !element) continue;
         const messages = task.messages.length + (task.passes?.length || 0);
-        const reasoning = (task.reasoningSummaries || []).reduce((total, item) => total + item.text.length, 0)
-          + (task.liveActivity || []).reduce((total, item) => total + (item.text?.length||0) + (item.output?.length||0), 0);
+        const reasoning =
+          (task.reasoningSummaries || []).reduce((total, item) => total + item.text.length, 0) +
+          (task.liveActivity || []).reduce(
+            (total, item) => total + (item.text?.length || 0) + (item.output?.length || 0),
+            0
+          );
         const previous = scrollMemory.current[id];
         const selected = pane.activeTab === id;
-        if (!previous || selected && (messages !== previous.messages || reasoning !== previous.reasoning) && nearBottom.current[id] !== false) {
+        if (
+          nearBottom.current[id] !== false &&
+          (!previous ||
+            (selected && (messages !== previous.messages || reasoning !== previous.reasoning)))
+        ) {
           element.scrollTop = element.scrollHeight;
           nearBottom.current[id] = true;
         }
         scrollMemory.current[id] = { messages, reasoning };
       }
     }
-    const openIds = new Set(panes.flatMap(pane => pane.tabs));
+    const openIds = new Set(panes.flatMap((pane) => pane.tabs));
     for (const id of Object.keys(scrollMemory.current)) {
       if (openIds.has(id)) continue;
       delete scrollMemory.current[id];
@@ -617,144 +1130,475 @@ export default function App() {
       const kind = workspaceKindForMode(String(command.mode || ''));
       if (!kind) continue;
       handledWorkspaceCommand.current.add(key);
-      const requestedUrl = typeof (command as { url?: unknown }).url === 'string' ? (command as { url: string }).url : undefined;
+      const requestedUrl =
+        typeof (command as { url?: unknown }).url === 'string'
+          ? (command as { url: string }).url
+          : undefined;
       openWorkspaceTab(kind, pane.id, pane.activeTab, requestedUrl);
     }
   }, [panes, state?.tasks]);
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
-      if(event.isComposing||event.keyCode===229||event.getModifierState('AltGraph'))return;
-      if(event.key==='Escape'){if(projectEditor){event.preventDefault();setProjectEditor(null);return;}if(shortcutsOpen){event.preventDefault();setShortcutsOpen(false);return;}if(settingsOpen){event.preventDefault();closeSettings();return;}if(sessionDialogOpen){event.preventDefault();closeSessionDialog();return;}return;}
-      if(projectEditor||shortcutsOpen||settingsOpen||sessionDialogOpen)return;
-      const isMac=desktopBridge?.platform==='darwin'||navigator.platform.toLocaleLowerCase().includes('mac');const mod=isMac?event.metaKey:event.ctrlKey;if(!mod||isMac&&event.ctrlKey||!isMac&&event.metaKey)return;
-      const key=event.key.toLowerCase();if(event.altKey)return;const target=event.target instanceof HTMLElement?event.target:null;const formControl=!!target&&/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);const editable=!!target?.isContentEditable;const composerEditor=!!target?.closest('.cm-editor');
-      if((formControl||editable)&&!composerEditor)return;
-      if(composerEditor&&(key==='b'||event.shiftKey&&(event.key==='ArrowUp'||event.key==='ArrowDown')))return;
-      if(key==='n'&&!event.shiftKey){event.preventDefault();openNewTab();return;}
-      if(key===','&&!event.shiftKey){event.preventDefault();openSettings();return;}
-      if(key==='b'&&!event.shiftKey){event.preventDefault();setSidebarCollapsed(value=>!value);return;}
-      if(key==='g'&&event.shiftKey){event.preventDefault();const pane=panes.find(item=>item.id===focusedPaneId)||rootPane;openWorkspaceTab('git',pane.id,pane.activeTab);return;}
-      if(key==='l'&&event.shiftKey){event.preventDefault();openSkillsTab();return;}
-      if((event.key==='ArrowUp'||event.key==='ArrowDown')&&event.shiftKey){const tasks=state?.tasks||[];if(!tasks.length)return;const active=panes.find(pane=>pane.id===focusedPaneId)?.activeTab||null;let navigation=recentSessionNavigation.current;const ids=tasks.map(task=>task.id);if(!navigation||navigation.activeId!==active||navigation.ids.length!==ids.length||navigation.ids.some(id=>!ids.includes(id))){navigation={ids:[...tasks].sort((a,b)=>(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0)).map(task=>task.id),activeId:active};}const index=navigation.ids.indexOf(active||'');const next=index<0?(event.key==='ArrowDown'?0:navigation.ids.length-1):(index+(event.key==='ArrowDown'?1:-1)+navigation.ids.length)%navigation.ids.length;const nextId=navigation.ids[next];if(!nextId)return;event.preventDefault();navigation.activeId=nextId;recentSessionNavigation.current=navigation;selectTask(nextId);return;}
+      if (event.isComposing || event.keyCode === 229 || event.getModifierState('AltGraph')) return;
+      if (event.key === 'Escape') {
+        if (projectEditor) {
+          event.preventDefault();
+          setProjectEditor(null);
+          return;
+        }
+        if (shortcutsOpen) {
+          event.preventDefault();
+          closeShortcuts();
+          return;
+        }
+        if (settingsOpen) {
+          event.preventDefault();
+          closeSettings();
+          return;
+        }
+        if (sessionDialogOpen) {
+          event.preventDefault();
+          closeSessionDialog();
+          return;
+        }
+        return;
+      }
+      if (projectEditor || shortcutsOpen || settingsOpen || sessionDialogOpen) return;
+      const isMac =
+        desktopBridge?.platform === 'darwin' ||
+        navigator.platform.toLocaleLowerCase().includes('mac');
+      const mod = isMac ? event.metaKey : event.ctrlKey;
+      if (!mod || (isMac && event.ctrlKey) || (!isMac && event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (event.altKey) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const formControl = !!target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+      const editable = !!target?.isContentEditable;
+      const composerEditor = !!target?.closest('.cm-editor');
+      if ((formControl || editable) && !composerEditor) return;
+      if (
+        composerEditor &&
+        (key === 'b' || (event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')))
+      )
+        return;
+      if (key === 'n' && !event.shiftKey) {
+        event.preventDefault();
+        openNewTab();
+        return;
+      }
+      if (key === ',' && !event.shiftKey) {
+        event.preventDefault();
+        openSettings();
+        return;
+      }
+      if (key === 'b' && !event.shiftKey) {
+        event.preventDefault();
+        setSidebarCollapsed((value) => !value);
+        return;
+      }
+      if (key === 'g' && event.shiftKey) {
+        event.preventDefault();
+        const pane = panes.find((item) => item.id === focusedPaneId) || rootPane;
+        openWorkspaceTab('git', pane.id, pane.activeTab);
+        return;
+      }
+      if (key === 'l' && event.shiftKey) {
+        event.preventDefault();
+        openSkillsTab();
+        return;
+      }
+      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && event.shiftKey) {
+        const tasks = state?.tasks || [];
+        if (!tasks.length) return;
+        const active = panes.find((pane) => pane.id === focusedPaneId)?.activeTab || null;
+        let navigation = recentSessionNavigation.current;
+        const ids = tasks.map((task) => task.id);
+        if (
+          !navigation ||
+          navigation.activeId !== active ||
+          navigation.ids.length !== ids.length ||
+          navigation.ids.some((id) => !ids.includes(id))
+        ) {
+          navigation = {
+            ids: [...tasks]
+              .sort(
+                (a, b) =>
+                  (Date.parse(b.lastInteractedAt || b.createdAt) || 0) -
+                  (Date.parse(a.lastInteractedAt || a.createdAt) || 0)
+              )
+              .map((task) => task.id),
+            activeId: active,
+          };
+        }
+        const index = navigation.ids.indexOf(active || '');
+        const next =
+          index < 0
+            ? event.key === 'ArrowDown'
+              ? 0
+              : navigation.ids.length - 1
+            : (index + (event.key === 'ArrowDown' ? 1 : -1) + navigation.ids.length) %
+              navigation.ids.length;
+        const nextId = navigation.ids[next];
+        if (!nextId) return;
+        event.preventDefault();
+        navigation.activeId = nextId;
+        recentSessionNavigation.current = navigation;
+        selectTask(nextId);
+        return;
+      }
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
-  }, [projectEditor,shortcutsOpen,settingsOpen,sessionDialogOpen,panes,focusedPaneId,state?.tasks]);
+  }, [
+    projectEditor,
+    shortcutsOpen,
+    settingsOpen,
+    sessionDialogOpen,
+    panes,
+    focusedPaneId,
+    state?.tasks,
+  ]);
 
-  if (loading) return <div className="boot"><img className="boot-brand" src="/opnex-icon-grid-1_5-margin.svg" alt="Opnex"/><span>Starting Opnex</span></div>;
-  const sessionMatches=(task:Task)=>!query.trim()||task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase());
-  const sortSessions=(a:Task,b:Task)=>Number(!!b.pinned)-Number(!!a.pinned)||(Date.parse(b.lastInteractedAt||b.createdAt)||0)-(Date.parse(a.lastInteractedAt||a.createdAt)||0);
-  const matchingTasks=(state?.tasks||[]).filter(task=>!task.archived&&sessionMatches(task)).sort(sortSessions);
-  const archivedTasks=(state?.tasks||[]).filter(task=>task.archived&&sessionMatches(task)).sort(sortSessions);
-  const setTaskPinned=async(task:Task,pinned:boolean)=>{try{await api(`/api/tasks/${task.id}/pin`,{pinned});await refresh();}catch(cause){setError(String(cause));}};
-  const setTaskArchived=async(task:Task,archived:boolean)=>{try{await api(`/api/tasks/${task.id}/archive`,{archived});await refresh();}catch(cause){setError(String(cause));}};
-  const renderSessionRows=(tasks:Task[],archived=false)=>tasks.map(task=><SessionRow key={task.id} task={task} archived={archived} selected={panes.some(pane=>pane.activeTab===task.id)} onSelect={selectTask} onSessionAction={openSessionDialog} onPin={setTaskPinned} onArchive={setTaskArchived} onMoveStart={task.sessionType==='forge'?undefined:dragSession} projects={state?.projects||[]} onMove={task.sessionType==='forge'?undefined:moveSessionToProject}/>);
-  const orderedProjects=[...(state?.projects||[])].sort((a,b)=>Number(b.pinned)-Number(a.pinned)||a.name.localeCompare(b.name));
-  const unclassifiedTasks=matchingTasks.filter(task=>!task.projectId||!(state?.projects||[]).some(project=>project.id===task.projectId));
-  const projectSessionSection=(project:Project)=>{const tasks=matchingTasks.filter(task=>task.projectId===project.id);const expanded=(state?.expandedProjectIds||[]).includes(project.id);const shown=showAllProjects[project.id]?tasks:tasks.slice(0,5);const label=workspaceOptionLabel(project,state?.projects||[]);return <section className={`project-session-group ${expanded?'expanded':''} ${projectDropTarget===project.id?'is-drop-target':''}`} key={project.id} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget(project.id);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,project.id)}><div className="project-group-heading"><button className="project-expand" aria-label={`${expanded?'Collapse':'Expand'} workspace ${label}`} title={project.projectRoot} aria-expanded={expanded} onClick={()=>toggleProjectExpanded(project.id)}>{expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>{label}</span><small>{tasks.length}</small></button><button className="project-group-new" aria-label={`New session in ${label}`} title="New session in this workspace" onClick={()=>{void selectProject(project.id);openNewTab();}}><Plus size={13}/></button><button className="project-group-pin" aria-pressed={project.pinned} aria-label={`${project.pinned?'Unpin':'Pin'} workspace ${label}`} title={project.pinned?'Unpin workspace':'Pin workspace'} onClick={()=>void api(`/api/projects/${project.id}/pin`,{pinned:!project.pinned}).then(refresh).catch(cause=>setError(String(cause)))}><Pin size={12}/></button><button className="project-group-edit" aria-label={`Configure workspace ${label}`} title={project.projectRoot} onClick={()=>openProjectEditor(project)}><Settings2 size={13}/></button></div><ExpandableSessionRows expanded={expanded}>{renderSessionRows(shown)}{tasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,[project.id]:!current[project.id]}))}>{showAllProjects[project.id]?'Show recent five':`Show all ${tasks.length} sessions`}</button>}{!tasks.length&&<span className="project-empty">Drop a session here</span>}</ExpandableSessionRows></section>;};
-  const unclassifiedExpanded=(state?.expandedProjectIds??['unclassified']).includes('unclassified');
-
-  const paneComposer = (tab: string, task: Task | null, paneId:string) => {
+  if (loading)
+    return (
+      <div className='boot'>
+        <img className='boot-brand' src='/opnex-icon-grid-1_5-margin.svg' alt='Opnex' />
+        <span>Starting Opnex</span>
+      </div>
+    );
+  const paneComposer = (tab: string, task: Task | null, paneId: string) => {
     const value = drafts[tab] || '';
     const files = pendingAttachments[tab] || [];
-    const busy = !!task && ['intake', 'routing', 'direct_running', 'simple_running', 'planning', 'worker_running', 'reviewing'].includes(task.phase);
-    const disabled = (!value.trim() && !files.length) || !!sendingTabs[tab] || !runtime || (!task&&(!selectedProject||selectedProject.needsLocation));
-    const selectedOrchestrator:ExecutionProfile={provider:'codex',model:state?.settings.orchestratorModel||fallbackSettings.orchestratorModel,effort:(state?.settings.orchestratorEffort||fallbackSettings.orchestratorEffort) as ExecutionProfile['effort'],...(state?.settings.orchestratorServiceTier?{serviceTier:state.settings.orchestratorServiceTier}:{})};
-    return <Composer
-      value={value}
-      setValue={next => setDrafts(current => ({ ...current, [tab]: next }))}
-      submit={() => void submitTab(tab)}
-      disabled={disabled}
-      hint={task?.phase === 'escalated' ? 'A decision will be sent to this session’s orchestrator…' : !task&&!selectedProject ? 'Choose or create a workspace before starting a session.' : !task&&selectedProject?.needsLocation ? 'Choose a working directory for this workspace before starting a session.' : 'Ask a question or describe work for the router to classify.'}
-      inputRef={tabInputRef(tab)}
-      executionProfile={selectedOrchestrator}
-      projectId={task?.projectId||selectedProject?.id}
-      connectionState={runtime?.codex.state==='connected'?'connected':'offline'}
-      accessMode={state?.settings.accessMode || accessModeFromApproval(state?.settings.approvalPolicy || 'on-request')}
-      models={models}
-      configDisabled={busy || !!sendingTabs[tab] || task?.phase==='escalated'}
-      onStop={task?()=>void stopTask(task.id):undefined}
-      onExecutionProfileChange={updateOrchestratorProfile}
-      onAccessModeChange={value => void updateSettings({ accessMode: value, approvalPolicy: runtimeApprovalForAccess(value) })}
-      qaEnabled={qualityModes[tab]??task?.passes?.find(pass=>pass.id===task.currentPassId)?.qualityLoop?.enabled??false}
-      onQaChange={enabled=>setQualityModes(current=>({...current,[tab]:enabled}))}
-      busy={busy}
-      attachments={files}
-      onFiles={selected => void setFilesFor(tab, selected)}
-      onRemoveFile={index => removeFileFor(tab, index)}
-      onOpenSkills={()=>openSkillsTab(paneId)}
-    />;
+    const busy =
+      !!task &&
+      [
+        'intake',
+        'routing',
+        'direct_running',
+        'simple_running',
+        'planning',
+        'worker_running',
+        'reviewing',
+      ].includes(task.phase);
+    const disabled =
+      (!value.trim() && !files.length) ||
+      !!sendingTabs[tab] ||
+      !runtime ||
+      (!task && (!selectedProject || selectedProject.needsLocation));
+    const selectedOrchestrator: ExecutionProfile = {
+      provider: 'codex',
+      model: state?.settings.orchestratorModel || fallbackSettings.orchestratorModel,
+      effort: (state?.settings.orchestratorEffort ||
+        fallbackSettings.orchestratorEffort) as ExecutionProfile['effort'],
+      ...(state?.settings.orchestratorServiceTier
+        ? { serviceTier: state.settings.orchestratorServiceTier }
+        : {}),
+    };
+    return (
+      <Composer
+        value={value}
+        setValue={(next) => setDrafts((current) => ({ ...current, [tab]: next }))}
+        submit={() => void submitTab(tab)}
+        disabled={disabled}
+        hint={
+          task?.phase === 'escalated'
+            ? 'A decision will be sent to this session’s orchestrator…'
+            : !task && !selectedProject
+              ? 'Choose or create a workspace before starting a session.'
+              : !task && selectedProject?.needsLocation
+                ? 'Choose a working directory for this workspace before starting a session.'
+                : 'Ask a question or describe work for the router to classify.'
+        }
+        inputRef={tabInputRef(tab)}
+        executionProfile={selectedOrchestrator}
+        projectId={task?.projectId || selectedProject?.id}
+        connectionState={runtime?.codex.state === 'connected' ? 'connected' : 'offline'}
+        accessMode={
+          state?.settings.accessMode ||
+          accessModeFromApproval(state?.settings.approvalPolicy || 'on-request')
+        }
+        models={models}
+        configDisabled={busy || !!sendingTabs[tab] || task?.phase === 'escalated'}
+        onStop={task ? () => void stopTask(task.id) : undefined}
+        onExecutionProfileChange={updateOrchestratorProfile}
+        onAccessModeChange={(value) =>
+          void updateSettings({
+            accessMode: value,
+            approvalPolicy: runtimeApprovalForAccess(value),
+          })
+        }
+        qaEnabled={
+          qualityModes[tab] ??
+          task?.passes?.find((pass) => pass.id === task.currentPassId)?.qualityLoop?.enabled ??
+          false
+        }
+        onQaChange={(enabled) => setQualityModes((current) => ({ ...current, [tab]: enabled }))}
+        busy={busy}
+        attachments={files}
+        onFiles={(selected) => void setFilesFor(tab, selected)}
+        onRemoveFile={(index) => removeFileFor(tab, index)}
+        onOpenSkills={() => openSkillsTab(paneId)}
+      />
+    );
   };
-  const renderNewSessionType = (tab:string) => {
-    const selectedType=newSessionTypes[tab]||'conversation';
-    return <div className="new-session-type" role="group" aria-label="New session type">
-      <button type="button" aria-pressed={selectedType==='conversation'} onClick={()=>setNewSessionTypes(current=>({...current,[tab]:'conversation'}))}>Conversation</button>
-      <button type="button" aria-pressed={selectedType==='forge'} onClick={()=>setNewSessionTypes(current=>({...current,[tab]:'forge'}))}>Forge</button>
-    </div>;
+  const renderNewSessionType = (tab: string) => {
+    const selectedType = newSessionTypes[tab] || 'conversation';
+    return (
+      <div className='new-session-type' role='group' aria-label='New session type'>
+        <button
+          type='button'
+          aria-pressed={selectedType === 'conversation'}
+          onClick={() =>
+            setNewSessionTypes((current) => ({
+              ...current,
+              [tab]: 'conversation',
+            }))
+          }
+        >
+          Conversation
+        </button>
+        <button
+          type='button'
+          aria-pressed={selectedType === 'forge'}
+          onClick={() => setNewSessionTypes((current) => ({ ...current, [tab]: 'forge' }))}
+        >
+          Forge
+        </button>
+      </div>
+    );
   };
   const renderNewTabActions = (pane: SessionPane, tab: string) => (
-    <div className="new-tab-actions">
-      <button onClick={() => openNewTabInPane(pane.id)}><MessageSquarePlus size={14} />SESSION</button>
-      <button onClick={() => openWorkspaceTab('browser', pane.id, tab)}><Globe size={14} />BROWSER</button>
-      <button onClick={() => openWorkspaceTab('git', pane.id, tab)}><GitBranch size={14} />GIT</button>
-      <div className="new-tab-context"><Folder size={12}/><span>{selectedProject?workspaceOptionLabel(selectedProject,state?.projects||[]):'Choose a workspace'}</span></div>
+    <div className='new-tab-actions'>
+      <button onClick={() => openNewTabInPane(pane.id)}>
+        <MessageSquarePlus size={14} />
+        SESSION
+      </button>
+      <button onClick={() => openWorkspaceTab('browser', pane.id, tab)}>
+        <Globe size={14} />
+        BROWSER
+      </button>
+      <button onClick={() => openWorkspaceTab('git', pane.id, tab)}>
+        <GitBranch size={14} />
+        GIT
+      </button>
+      <div className='new-tab-context'>
+        <Folder size={12} />
+        <span>
+          {selectedProject
+            ? workspaceOptionLabel(selectedProject, state?.projects || [])
+            : 'Choose a workspace'}
+        </span>
+      </div>
     </div>
   );
+  const openCreatedForgeSession = async (tab: string, ticket: ForgeTicket) => {
+    const snapshot = await refresh();
+    const created = snapshot?.tasks.find((row) => row.id === ticket.id);
+    if (!created) {
+      setTabError(
+        tab,
+        'The Forge draft was saved, but the session snapshot does not include it yet. Refresh the session to open its board.'
+      );
+      return;
+    }
+    setPanes((current) =>
+      current.map((group) =>
+        group.tabs.includes(tab)
+          ? {
+              ...group,
+              tabs: group.tabs.map((item) => (item === tab ? created.id : item)),
+              activeTab: group.activeTab === tab ? created.id : group.activeTab,
+            }
+          : group
+      )
+    );
+    updateWorkspaceOrigins(tab, created.id);
+    makeTabArrival(created.id);
+    setNewSessionTypes((current) => ({ ...current, [created.id]: 'forge' }));
+    try {
+      await queueContextSelection('/api/tasks/' + created.id + '/select', {});
+    } catch (cause) {
+      setTabError(created.id, String(cause));
+    }
+  };
   const renderSessionPaneActions = (tab: string, task: Task | null) => {
-    return <div className="session-pane-actions" data-session-actions-for={tab} role="group" aria-label={(task?.title || 'New session') + ' controls'}>
-      <button ref={headsUpTriggerRef(tab)} className="session-pane-action details-toggle heads-up-toggle" aria-label="Heads-up" title="Heads-up"
-        aria-expanded={!!headsUpOpen[tab]} onClick={() => setHeadsUpOpen(current => ({ ...current, [tab]: !current[tab] }))}><PanelRight size={16} /></button>
-    </div>;
+    return (
+      <div
+        className='session-pane-actions'
+        data-session-actions-for={tab}
+        role='group'
+        aria-label={(task?.title || 'New session') + ' controls'}
+      >
+        <button
+          ref={headsUpTriggerRef(tab)}
+          className='session-pane-action details-toggle heads-up-toggle'
+          aria-label='Heads-up'
+          title='Heads-up'
+          aria-expanded={!!headsUpOpen[tab]}
+          onClick={() => setHeadsUpOpen((current) => ({ ...current, [tab]: !current[tab] }))}
+        >
+          <PanelRight size={16} />
+        </button>
+      </div>
+    );
   };
   const renderPaneTabs = (pane: SessionPane, index: number, split: boolean) => {
-    const listLabel = split ? index === 1 ? 'Side pane workspaces' : 'Pane ' + (index + 1) + ' workspaces' : 'Open workspaces';
-    return <div className={'document-tabs ' + (split ? 'split-pane-tabbar' : '')} role="tablist" aria-label={listLabel}
-      style={split ? { gridColumn: index * 2 + 1, gridRow: 1 } : undefined} onDragOver={allowTabDrop} onDrop={dropTabOnStrip}>
-      {pane.tabs.map(tab => {
-        const kind = workspaceTabKind(tab);
-        const task = kind === 'session' ? taskForTab(tab) : null;
-        const title = workspaceTabTitle(tab, task?.title);
-        const selected = pane.activeTab === tab;
-        const symbol = kind === 'browser' ? <Globe size={13} /> : kind === 'git' ? <GitBranch size={13} /> : kind==='skills'?<BookOpen size={13}/>: index === 0 && !split ? <MessageSquarePlus size={13} /> : null;
-        const activate=()=>{setPaneActive(pane.id,tab);setFocusedPaneId(pane.id);if(kind==='session'&&!tab.startsWith('new:'))void selectSessionContext(tab).catch(cause=>setTabError(tab,String(cause)));};
-        const activateFromClick=(event:React.MouseEvent<HTMLElement>)=>{if(tabDragSuppressUntil.current?.tab===tab&&Date.now()<tabDragSuppressUntil.current.until||event.target instanceof Element&&event.target.closest('.tab-close')){event.preventDefault();event.stopPropagation();return;}activate();};
-        return <div className={'document-tab ' + (selected ? 'active ' : '') + (tabDropTarget === tab ? 'tab-drop-target ' : '') + (sessionArrival === tab ? 'session-arrived tab-arrived ' : '') + (closingTabs[tab] ? 'tab-closing' : '')}
-          key={tab} data-workspace-tab={tab} data-session-tab={tab} draggable={!closingTabs[tab]}
-          onClick={activateFromClick}
-          onPointerDown={event=>{if(event.button===0&&tabDragSuppressUntil.current?.tab===tab)tabDragSuppressUntil.current=null;}}
-          onMouseDown={event=>{if(event.button===1)event.preventDefault();}}
-          onAuxClick={event=>{if(event.button===1){event.preventDefault();closeTab(tab);}}}
-          onDragStart={event => {
-            if(event.target instanceof Element&&event.target.closest('.tab-close')){event.preventDefault();return;}
-            tabDragSuppressUntil.current={tab,until:Date.now()+600};
-            clearTabDrop();
-            setDraggedTab(tab);
-            event.dataTransfer.setData('application/x-opnex-workspace-tab', tab);
-            event.dataTransfer.setData('application/x-opnex-session-tab', tab);
-            event.dataTransfer.effectAllowed = 'move';
-          }}
-          onDragEnd={() => finishTabDrag(tab)}
-          onPointerCancel={()=>{clearTabDrop();setDraggedTab(null);setDropTarget(null);tabDragSuppressUntil.current=null;}}
-          onDragOver={event => {
-            if (Array.from(event.dataTransfer.types).some(type => type === 'application/x-opnex-workspace-tab' || type === 'application/x-opnex-session-tab')) {
+    const listLabel = split
+      ? index === 1
+        ? 'Side pane workspaces'
+        : 'Pane ' + (index + 1) + ' workspaces'
+      : 'Open workspaces';
+    return (
+      <div
+        className={'document-tabs ' + (split ? 'split-pane-tabbar' : '')}
+        role='tablist'
+        aria-label={listLabel}
+        style={split ? { gridColumn: index * 2 + 1, gridRow: 1 } : undefined}
+        onDragOver={allowTabDrop}
+        onDrop={dropTabOnStrip}
+      >
+        {pane.tabs.map((tab) => {
+          const kind = workspaceTabKind(tab);
+          const task = kind === 'session' ? taskForTab(tab) : null;
+          const title = workspaceTabTitle(tab, task?.title);
+          const selected = pane.activeTab === tab;
+          const symbol =
+            kind === 'browser' ? (
+              <Globe size={13} />
+            ) : kind === 'git' ? (
+              <GitBranch size={13} />
+            ) : kind === 'skills' ? (
+              <BookOpen size={13} />
+            ) : index === 0 && !split ? (
+              <MessageSquarePlus size={13} />
+            ) : null;
+          const activate = () => {
+            setPaneActive(pane.id, tab);
+            setFocusedPaneId(pane.id);
+            if (kind === 'session' && !tab.startsWith('new:'))
+              void selectSessionContext(tab).catch((cause) => setTabError(tab, String(cause)));
+          };
+          const activateFromClick = (event: React.MouseEvent<HTMLElement>) => {
+            if (
+              (tabDragSuppressUntil.current?.tab === tab &&
+                Date.now() < tabDragSuppressUntil.current.until) ||
+              (event.target instanceof Element && event.target.closest('.tab-close'))
+            ) {
               event.preventDefault();
-              tabDropTargetRef.current = tab;
-              setTabDropTarget(tab);
+              event.stopPropagation();
+              return;
             }
-          }}
-          onDrop={event => {
-            const source = readDraggedTab(event.dataTransfer);
-            if (!source) return;
-            event.preventDefault();
-            event.stopPropagation();
-            moveTab(source, tab);
-          }}>
-          <button role="tab" aria-label={title} aria-selected={selected} onClick={event=>{event.stopPropagation();activateFromClick(event);}}>{symbol}<span>{title}</span></button>
-          <button className="tab-close" aria-label={'Close ' + title + ' tab'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();closeTab(tab);}} disabled={!!closingTabs[tab]}><X size={13} /></button>
-        </div>;
-      })}
-      <button className="new-tab" aria-label={split ? index === 1 ? 'New session in side pane' : 'New session in pane ' + (index + 1) : 'Open new session tab'} onClick={() => openNewTabInPane(pane.id)}><Plus size={15} /></button>
-    </div>;
+            activate();
+          };
+          return (
+            <div
+              className={
+                'document-tab ' +
+                (selected ? 'active ' : '') +
+                (tabDropTarget === tab ? 'tab-drop-target ' : '') +
+                (sessionArrival === tab ? 'session-arrived tab-arrived ' : '') +
+                (closingTabs[tab] ? 'tab-closing' : '')
+              }
+              key={tab}
+              data-workspace-tab={tab}
+              data-session-tab={tab}
+              draggable={!closingTabs[tab]}
+              onClick={activateFromClick}
+              onPointerDown={(event) => {
+                if (event.button === 0 && tabDragSuppressUntil.current?.tab === tab)
+                  tabDragSuppressUntil.current = null;
+              }}
+              onMouseDown={(event) => {
+                if (event.button === 1) event.preventDefault();
+              }}
+              onAuxClick={(event) => {
+                if (event.button === 1) {
+                  event.preventDefault();
+                  closeTab(tab);
+                }
+              }}
+              onDragStart={(event) => {
+                if (event.target instanceof Element && event.target.closest('.tab-close')) {
+                  event.preventDefault();
+                  return;
+                }
+                tabDragSuppressUntil.current = { tab, until: Date.now() + 600 };
+                clearTabDrop();
+                setDraggedTab(tab);
+                event.dataTransfer.setData('application/x-opnex-workspace-tab', tab);
+                event.dataTransfer.setData('application/x-opnex-session-tab', tab);
+                event.dataTransfer.effectAllowed = 'move';
+              }}
+              onDragEnd={() => finishTabDrag(tab)}
+              onPointerCancel={() => {
+                clearTabDrop();
+                setDraggedTab(null);
+                setDropTarget(null);
+                tabDragSuppressUntil.current = null;
+              }}
+              onDragOver={(event) => {
+                if (
+                  Array.from(event.dataTransfer.types).some(
+                    (type) =>
+                      type === 'application/x-opnex-workspace-tab' ||
+                      type === 'application/x-opnex-session-tab'
+                  )
+                ) {
+                  event.preventDefault();
+                  tabDropTargetRef.current = tab;
+                  setTabDropTarget(tab);
+                }
+              }}
+              onDrop={(event) => {
+                const source = readDraggedTab(event.dataTransfer);
+                if (!source) return;
+                event.preventDefault();
+                event.stopPropagation();
+                moveTab(source, tab);
+              }}
+            >
+              <button
+                role='tab'
+                aria-label={title}
+                aria-selected={selected}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  activateFromClick(event);
+                }}
+              >
+                {symbol}
+                <span>{title}</span>
+              </button>
+              <button
+                className='tab-close'
+                aria-label={'Close ' + title + ' tab'}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  closeTab(tab);
+                }}
+                disabled={!!closingTabs[tab]}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          );
+        })}
+        <button
+          className='new-tab'
+          aria-label={
+            split
+              ? index === 1
+                ? 'New session in side pane'
+                : 'New session in pane ' + (index + 1)
+              : 'Open new session tab'
+          }
+          onClick={() => openNewTabInPane(pane.id)}
+        >
+          <Plus size={15} />
+        </button>
+      </div>
+    );
   };
   const renderWorkspaceTab = (tab: string, pane: SessionPane, index: number) => {
     const kind = workspaceTabKind(tab);
@@ -762,457 +1606,687 @@ export default function App() {
     const task = kind === 'session' ? taskForTab(tab) : null;
     const record = workspaceTabs[tab];
     const contextTask = record?.originTaskId ? taskForTab(record.originTaskId) : null;
-    const workspaceRoot = record?.originTaskId ? (contextTask?.userRoot || record.projectRoot) : (record?.projectRoot || selectedProject?.projectRoot || '');
-    const workspaceProjectId = record?.originTaskId ? (contextTask?.projectId || record.projectId) : (record?.projectId || selectedProject?.id || '');
+    const workspaceRoot = record?.originTaskId
+      ? contextTask?.userRoot || record.projectRoot
+      : record?.projectRoot || selectedProject?.projectRoot || '';
+    const workspaceProjectId = record?.originTaskId
+      ? contextTask?.projectId || record.projectId
+      : record?.projectId || selectedProject?.id || '';
     const isSession = kind === 'session';
-    const baseClass = (index > 0 ? 'session-pane side-session-view ' : 'task-view ') + 'pane-body ' + (!task && isSession ? 'new-tab-view ' : '') + (sessionArrival === tab ? 'session-entering ' : '') + (selected ? 'workspace-tab-active ' : '') + (dropTarget?.paneId === pane.id ? 'drop-half-' + dropTarget.half : '');
+    const baseClass =
+      (index > 0 ? 'session-pane side-session-view ' : 'task-view ') +
+      'pane-body ' +
+      (!task && isSession ? 'new-tab-view ' : '') +
+      (sessionArrival === tab ? 'session-entering ' : '') +
+      (selected ? 'workspace-tab-active ' : '') +
+      (dropTarget?.paneId === pane.id ? 'drop-half-' + dropTarget.half : '');
     const row = panes.length > 1 ? 2 : 1;
     const column = index * 2 + 1;
     const onDragOver = (event: React.DragEvent<HTMLElement>) => {
       const types = Array.from(event.dataTransfer.types);
-      if (types.includes('application/x-opnex-workspace-tab') || types.includes('application/x-opnex-session-tab')) {
+      if (
+        types.includes('application/x-opnex-workspace-tab') ||
+        types.includes('application/x-opnex-session-tab')
+      ) {
         event.preventDefault();
         clearTabDrop();
         const rect = event.currentTarget.getBoundingClientRect();
-        setDropTarget({ paneId: pane.id, half: event.clientX < rect.left + rect.width / 2 ? 'left' : 'right' });
+        setDropTarget({
+          paneId: pane.id,
+          half: event.clientX < rect.left + rect.width / 2 ? 'left' : 'right',
+        });
       }
     };
-    if(kind==='skills')return <div key={tab} data-workspace-tab={tab} data-tab-kind="skills" className={baseClass+' skill-library-tab'} style={{gridColumn:column,gridRow:row}} hidden={!selected} aria-hidden={!selected} inert={!selected} onClick={()=>setFocusedPaneId(pane.id)}><Suspense fallback={<div className="skill-library-loading" role="status">Loading library…</div>}><SkillsLibraryPage active={selected} settings={state?.settings||fallbackSettings} saveMcpServers={saveMcpServers}/></Suspense></div>;
+    if (kind === 'skills')
+      return (
+        <div
+          key={tab}
+          data-workspace-tab={tab}
+          data-tab-kind='skills'
+          className={baseClass + ' skill-library-tab'}
+          style={{ gridColumn: column, gridRow: row }}
+          hidden={!selected}
+          aria-hidden={!selected}
+          inert={!selected}
+          onClick={() => setFocusedPaneId(pane.id)}
+        >
+          <Suspense
+            fallback={
+              <div className='skill-library-loading' role='status'>
+                Loading library…
+              </div>
+            }
+          >
+            <SkillsLibraryPage
+              active={selected}
+              settings={state?.settings || fallbackSettings}
+              saveMcpServers={saveMcpServers}
+            />
+          </Suspense>
+        </div>
+      );
     if (kind === 'browser' || kind === 'git') {
-      return <div key={tab} data-workspace-tab={tab} data-tab-kind={kind} className={baseClass + ' peer-workspace-pane ' + (kind === 'browser' ? 'browser-peer-tab' : 'git-peer-tab')}
-        style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
-        onClick={() => setFocusedPaneId(pane.id)} onDragOver={onDragOver}
-        onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
-        onDrop={event => dropPane(event, pane.id)}>
-        <EmbeddedWorkspace mode={kind === 'browser' ? 'browser' : 'github'} task={contextTask} placement="full" docked={false}
-          workspaceId={tab} active={selected} sidebarCollapsed={sidebarCollapsed} sidebarWidth={sidebarWidth} initialUrl={record?.initialUrl || record?.focusUrl} projectRoot={workspaceRoot} projectId={workspaceProjectId} workspaces={state?.projects||[]}
-          onOpenBrowserTab={url => openWorkspaceTab('browser', pane.id, tab, url)}
-          onSummary={() => returnToOrigin(record)}
-          onAnnotation={(annotation, comment) => record && addBrowserAnnotation(record, annotation, comment)} />
-      </div>;
+      return (
+        <div
+          key={tab}
+          data-workspace-tab={tab}
+          data-tab-kind={kind}
+          className={
+            baseClass +
+            ' peer-workspace-pane ' +
+            (kind === 'browser' ? 'browser-peer-tab' : 'git-peer-tab')
+          }
+          style={{ gridColumn: column, gridRow: row }}
+          hidden={!selected}
+          aria-hidden={!selected}
+          inert={!selected}
+          onClick={() => setFocusedPaneId(pane.id)}
+          onDragOver={onDragOver}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+              setDropTarget(null);
+          }}
+          onDrop={(event) => dropPane(event, pane.id)}
+        >
+          <EmbeddedWorkspace
+            mode={kind === 'browser' ? 'browser' : 'github'}
+            task={contextTask}
+            placement='full'
+            docked={false}
+            workspaceId={tab}
+            active={selected}
+            sidebarCollapsed={sidebarCollapsed}
+            sidebarWidth={sidebarWidth}
+            initialUrl={record?.initialUrl || record?.focusUrl}
+            projectRoot={workspaceRoot}
+            projectId={workspaceProjectId}
+            workspaces={state?.projects || []}
+            onOpenBrowserTab={(url) => openWorkspaceTab('browser', pane.id, tab, url)}
+            onSummary={() => returnToOrigin(record)}
+            onAnnotation={(annotation, comment) =>
+              record && addBrowserAnnotation(record, annotation, comment)
+            }
+          />
+        </div>
+      );
     }
-    const taskView = task?.sessionType==='forge' ? <div className="conversation forge-session-view" aria-label="Forge session" ref={element => { sessionScrollRefs.current[tab] = element; }}
-      onScroll={event => {
-        const element = event.currentTarget;
-        nearBottom.current[tab] = element.scrollHeight - element.scrollTop - element.clientHeight < 180;
-      }}>
-      {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
-      {task.approvalRequests?.map(request => <ForgeApprovalCard key={String(request.requestId)} ticket={task.forge} request={request} onDecision={(decision,content) => void approveTask(task.id, request.requestId, decision,content)} />)}
-      {task.forge?<ForgeBoard ticket={task.forge} task={task} onTicketChange={ticket=>setState(current=>current?{...current,tasks:current.tasks.map(row=>row.id===task.id?{...row,forge:ticket}:row)}:current)}/>:<div role="status" className="forge-empty-state">Forge ticket details are not present in this saved session snapshot. Refresh the session or restart the local service before continuing.</div>}
-    </div> : task ? <div className="conversation" ref={element => { sessionScrollRefs.current[tab] = element; }}
-      onScroll={event => {
-        const element = event.currentTarget;
-        nearBottom.current[tab] = element.scrollHeight - element.scrollTop - element.clientHeight < 180;
-      }}>
-      {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
-      {task.messages.filter(message => !message.passId).map(message => <ConversationMessage key={message.id} message={message} />)}
-      {task.passes?.map(pass => <PassPanel key={pass.id} pass={pass} messages={task.messages.filter(message => message.passId === pass.id)}
-        active={pass.id === task.currentPassId} task={task}
-        onQualityAction={action=>void qualityAction(task.id,action)}
-        selectedSteerWorkerId={pass.recruitmentTeam?recruitmentSteerTargets[task.id]:undefined} onSelectSteerWorker={workerId=>setRecruitmentSteerTargets(current=>({...current,[task.id]:workerId}))}
-        receiptExpanded={expanded['receipt:' + pass.id] ?? false} recruitmentTeamExpanded={expanded['recruitmentTeam:' + pass.id] ?? false}
-        toolCallsExpanded={expanded['toolCalls:' + pass.id] ?? false} agentmemAuditExpanded={expanded['agentmemAudit:' + pass.id] ?? false}
-        toggleReceipt={() => setExpanded(current => ({ ...current, ['receipt:' + pass.id]: !current['receipt:' + pass.id] }))}
-        toggleRecruitmentTeam={() => setExpanded(current => ({ ...current, ['recruitmentTeam:' + pass.id]: !current['recruitmentTeam:' + pass.id] }))}
-        toggleToolCalls={() => setExpanded(current => ({ ...current, ['toolCalls:' + pass.id]: !current['toolCalls:' + pass.id] }))}
-        toggleAgentMemAudit={() => setExpanded(current => ({ ...current, ['agentmemAudit:' + pass.id]: !current['agentmemAudit:' + pass.id] }))} />)}
-      {task.approvalRequests?.map(request => <ApprovalCard key={String(request.requestId)} request={request} onDecision={(decision,content) => void approveTask(task.id, request.requestId, decision,content)} />)}
-    </div> : <div className={`new-tab-center ${newSessionTypes[tab]==='forge'?'forge-new-tab-center':''}`}>
-      {tabErrors[tab] && <div className="tab-error" role="alert"><AlertCircle size={15} /><span>{tabErrors[tab]}</span><button className="icon-btn" aria-label="Dismiss session error" onClick={() => clearTabError(tab)}><X size={13} /></button></div>}
-      {renderNewSessionType(tab)}
-      {newSessionTypes[tab]==='forge'?<ForgeSessionCreate project={selectedProject} settings={state?.settings||fallbackSettings} models={models} onOpenSkills={()=>openSkillsTab(pane.id)} onOpenWorkspace={()=>openProjectEditor(selectedProject||'new')} onCreated={async ticket=>{
-        const snapshot=await refresh();
-        const created=snapshot?.tasks.find(row=>row.id===ticket.id);
-        if(!created){setTabError(tab,'The Forge draft was saved, but the session snapshot does not include it yet. Refresh the session to open its board.');return;}
-        setPanes(current=>current.map(group=>group.tabs.includes(tab)?{...group,tabs:group.tabs.map(item=>item===tab?created.id:item),activeTab:group.activeTab===tab?created.id:group.activeTab}:group));
-        updateWorkspaceOrigins(tab,created.id);makeTabArrival(created.id);
-        setNewSessionTypes(current=>({...current,[created.id]:'forge'}));
-        try{await queueContextSelection('/api/tasks/'+created.id+'/select',{});}catch(cause){setTabError(created.id,String(cause));}
-      }}/>:<div className="composer-dock">{paneComposer(tab, null, pane.id)}</div>}
-      {renderNewTabActions(pane, tab)}
-    </div>;
-    return <div key={tab} data-workspace-tab={tab} data-tab-kind="session" className={baseClass} style={{ gridColumn: column, gridRow: row }} hidden={!selected} aria-hidden={!selected} inert={!selected}
-      onClick={() => setFocusedPaneId(pane.id)} onDragOver={onDragOver}
-      onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
-      onDrop={event => dropPane(event, pane.id)}>
-      {renderSessionPaneActions(tab, task)}
-      {task?.sessionType==='forge'?taskView:task?<>{taskView}<div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>{paneComposer(tab, task, pane.id)}</div></>:null}
-      {!task && taskView}
-      <HeadsUpPanel task={task} project={task?state?.projects.find(project=>project.id===task.projectId)||null:selectedProject} projects={state?.projects||[]} settings={state?.settings||fallbackSettings} runtime={runtime} open={selected && !!headsUpOpen[tab]}
-        onClose={() => setHeadsUpOpen(current => ({ ...current, [tab]: false }))}
-        onOpenSettings={openSettings} triggerRef={headsUpTriggerRef(tab)} />
-    </div>;
+    const taskView = task ? (
+      <SessionConversation
+        tab={tab}
+        task={task}
+        tabError={tabErrors[tab]}
+        expandedSections={expanded}
+        selectedSteerWorkerId={recruitmentSteerTargets[task.id]}
+        setConversationElement={(element) => {
+          sessionScrollRefs.current[tab] = element;
+        }}
+        onScroll={(scrollTab, element) => {
+          nearBottom.current[scrollTab] =
+            element.scrollHeight - element.scrollTop - element.clientHeight < 180;
+        }}
+        onDismissError={() => clearTabError(tab)}
+        onApprovalDecision={(requestId, decision, content) =>
+          void approveTask(task.id, requestId, decision, content)
+        }
+        onForgeTicketChange={(ticket) =>
+          setState((current) =>
+            current
+              ? {
+                  ...current,
+                  tasks: current.tasks.map((row) =>
+                    row.id === task.id ? { ...row, forge: ticket } : row
+                  ),
+                }
+              : current
+          )
+        }
+        onQualityAction={(action) => void qualityAction(task.id, action)}
+        onSelectSteerWorker={(workerId) =>
+          setRecruitmentSteerTargets((current) => ({
+            ...current,
+            [task.id]: workerId,
+          }))
+        }
+        onToggleDisclosure={(passId, disclosure) =>
+          setExpanded((current) => {
+            const key = `${disclosure}:${passId}`;
+            return { ...current, [key]: !current[key] };
+          })
+        }
+      />
+    ) : null;
+    const newSessionView = !task ? (
+      <div
+        className={`new-tab-center ${newSessionTypes[tab] === 'forge' ? 'forge-new-tab-center' : ''}`}
+      >
+        {tabErrors[tab] && (
+          <div className='tab-error' role='alert'>
+            <AlertCircle size={15} />
+            <span>{tabErrors[tab]}</span>
+            <button
+              className='icon-btn'
+              aria-label='Dismiss session error'
+              onClick={() => clearTabError(tab)}
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
+        {renderNewSessionType(tab)}
+        {newSessionTypes[tab] === 'forge' ? (
+          <ForgeSessionCreate
+            project={selectedProject}
+            settings={state?.settings || fallbackSettings}
+            models={models}
+            onOpenSkills={() => openSkillsTab(pane.id)}
+            onOpenWorkspace={() => openProjectEditor(selectedProject || 'new')}
+            onCreated={(ticket) => void openCreatedForgeSession(tab, ticket)}
+          />
+        ) : (
+          <div className='composer-dock'>{paneComposer(tab, null, pane.id)}</div>
+        )}
+        {renderNewTabActions(pane, tab)}
+      </div>
+    ) : null;
+    return (
+      <div
+        key={tab}
+        data-workspace-tab={tab}
+        data-tab-kind='session'
+        className={baseClass}
+        style={{ gridColumn: column, gridRow: row }}
+        hidden={!selected}
+        aria-hidden={!selected}
+        inert={!selected}
+        onClick={() => setFocusedPaneId(pane.id)}
+        onDragOver={onDragOver}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setDropTarget(null);
+        }}
+        onDrop={(event) => dropPane(event, pane.id)}
+      >
+        {renderSessionPaneActions(tab, task)}
+        {task?.sessionType === 'forge' ? (
+          taskView
+        ) : task ? (
+          <>
+            {taskView}
+            <div className={'composer-dock ' + (index > 0 ? 'side-composer-dock' : '')}>
+              {paneComposer(tab, task, pane.id)}
+            </div>
+          </>
+        ) : (
+          newSessionView
+        )}
+        <HeadsUpPanel
+          task={task}
+          project={
+            task
+              ? state?.projects.find((project) => project.id === task.projectId) || null
+              : selectedProject
+          }
+          projects={state?.projects || []}
+          settings={state?.settings || fallbackSettings}
+          runtime={runtime}
+          open={selected && !!headsUpOpen[tab]}
+          onClose={() => setHeadsUpOpen((current) => ({ ...current, [tab]: false }))}
+          onOpenSettings={openSettings}
+          triggerRef={headsUpTriggerRef(tab)}
+        />
+      </div>
+    );
   };
 
-  return <div className={'app-shell ' + (windowControls ? 'has-custom-chrome ' : '') + (sidebarCollapsed ? 'sidebar-collapsed ' : '') + (sidebarResizing ? 'sidebar-resizing' : '')} style={{ '--sidebar-width': sidebarCollapsed ? '0px' : sidebarWidth + 'px' } as React.CSSProperties}>
-    <nav className="activity-rail" aria-label="App navigation">
-      <button className="rail-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title="Toggle sidebar (Ctrl/Cmd+B)" aria-keyshortcuts="Control+B Meta+B" aria-expanded={!sidebarCollapsed} aria-controls="primary-sidebar" onClick={() => setSidebarCollapsed(value => !value)}><PanelLeft size={17} /></button>
-      <button role="tab" aria-label="Sessions" onClick={() => {
-        const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
-        if (workspaceTabKind(pane.activeTab) !== 'session') activateSessionTab(pane.tabs.find(tab => workspaceTabKind(tab) === 'session') || 'new:0');
-      }}><FileText size={17} /></button>
-      <button role="tab" draggable aria-label="Browser" aria-current={panes.some(pane => workspaceTabKind(pane.activeTab) === 'browser') ? 'page' : undefined}
-        onDragStart={event => { event.dataTransfer.setData('application/x-opnex-workspace', 'browser'); event.dataTransfer.effectAllowed = 'move'; }}
-        onClick={() => {
-          const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
-          openWorkspaceTab('browser', pane.id, pane.activeTab);
-        }}><Globe size={17} /></button>
-      <button role="tab" draggable aria-label="Git" title="Git (Ctrl/Cmd+Shift+G)" aria-keyshortcuts="Control+Shift+G Meta+Shift+G" aria-current={panes.some(pane => workspaceTabKind(pane.activeTab) === 'git') ? 'page' : undefined}
-        onDragStart={event => { event.dataTransfer.setData('application/x-opnex-workspace', 'git'); event.dataTransfer.effectAllowed = 'move'; }}
-        onClick={() => {
-          const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
-          openWorkspaceTab('git', pane.id, pane.activeTab);
-        }}><GitBranch size={17} /></button>
-          <button role="tab" aria-label="Library" title="Library (Ctrl/Cmd+Shift+L)" aria-keyshortcuts="Control+Shift+L Meta+Shift+L" aria-current={panes.some(pane=>workspaceTabKind(pane.activeTab)==='skills')?'page':undefined} onClick={()=>openSkillsTab()}><BookOpen size={17}/></button>
-      <div className="rail-spacer" />
-      <button aria-label="Settings" title="Settings (Ctrl/Cmd+,)" aria-keyshortcuts="Control+, Meta+," onClick={openSettings}><Settings2 size={17} /></button>
-    </nav>
-    <aside id="primary-sidebar" aria-label="Session explorer" className="sidebar" aria-hidden={sidebarCollapsed} inert={sidebarCollapsed}>
-      <div className="sidebar-tools">
-        <span className="sidebar-title">Sessions</span>
-        <button className="icon-btn" aria-label="New session" title="New session (Ctrl/Cmd+N)" aria-keyshortcuts="Control+N Meta+N" onClick={openNewTab}><Plus size={16} /></button>
-        <button className="icon-btn" aria-label="Create workspace" title="Create workspace" onClick={()=>openProjectEditor('new')}><FolderPlus size={15}/></button>
-        <button className="icon-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={()=>setShortcutsOpen(true)}><Keyboard size={15}/></button>
-        <button className="icon-btn" aria-label="Search sessions" onClick={() => document.querySelector<HTMLInputElement>('.session-search')?.focus()}><Search size={15} /></button>
-      </div>
-      <input className="session-search" type="search" aria-label="Search sessions" placeholder="Filter sessions" value={query} onChange={event => setQuery(event.target.value)} />
-      <nav className="task-list project-task-list" aria-label="Sessions" onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}}>
-        {orderedProjects.filter(project=>project.pinned).map(projectSessionSection)}
-        {orderedProjects.filter(project=>!project.pinned).map(projectSessionSection)}
-        <section className={`project-session-group unclassified-group ${projectDropTarget==='unclassified'?'is-drop-target':''}`} onDragEnter={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))setProjectDropTarget('unclassified');}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setProjectDropTarget(null);}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-opnex-session-project'))event.preventDefault();}} onDrop={event=>dropSessionInto(event,null)}><div className="project-group-heading"><button className="project-expand" aria-label={`${unclassifiedExpanded?'Collapse':'Expand'} Unclassified`} aria-expanded={unclassifiedExpanded} onClick={()=>toggleProjectExpanded('unclassified')}>{unclassifiedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Folder size={14}/><span>Unclassified</span><small>{unclassifiedTasks.length}</small></button></div><ExpandableSessionRows expanded={unclassifiedExpanded}>{renderSessionRows(showAllProjects.unclassified?unclassifiedTasks:unclassifiedTasks.slice(0,5))}{unclassifiedTasks.length>5&&<button className="session-history-more" onClick={()=>setShowAllProjects(current=>({...current,unclassified:!current.unclassified}))}>{showAllProjects.unclassified?'Show recent five':`Show all ${unclassifiedTasks.length} sessions`}</button>}</ExpandableSessionRows></section>
-        {archivedTasks.length>0&&<section className="project-session-group archived-session-group"><div className="project-group-heading"><button className="project-expand" aria-label={`${archivedExpanded?'Collapse':'Expand'} Archived sessions`} aria-expanded={archivedExpanded} onClick={()=>setArchivedExpanded(value=>!value)}>{archivedExpanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}<Archive size={13}/><span>Archived</span><small>{archivedTasks.length}</small></button></div><ExpandableSessionRows expanded={archivedExpanded}>{renderSessionRows(archivedTasks,true)}</ExpandableSessionRows></section>}
-      </nav>
-      {projectMoveError&&<div className="project-move-error" role="alert">{projectMoveError}<button className="icon-btn" aria-label="Dismiss move error" onClick={()=>setProjectMoveError('')}><X size={13}/></button></div>}
-      <div className="sidebar-bottom"><button className="project-mini" aria-label={selectedProject?workspaceOptionLabel(selectedProject,state?.projects||[]):'Create or select workspace'} title={selectedProject?.projectRoot} onClick={()=>selectedProject?openProjectEditor(selectedProject):openProjectEditor('new')}><Folder size={15} /><span className="project-mini-text">{selectedProject?workspaceOptionLabel(selectedProject,state?.projects||[]):'Choose workspace'}</span></button></div>
-    </aside>
-    <div className="sidebar-resizer" role="separator" aria-label="Resize session explorer" aria-orientation="vertical" aria-valuemin={112} aria-valuenow={sidebarCollapsed ? 0 : sidebarWidth} tabIndex={0}
-      onPointerDown={event => {
-        event.preventDefault();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        setSidebarResizing(true);
-        resizeRef.current = { kind: 'sidebar', x: event.clientX, width: sidebarCollapsed ? 0 : sidebarWidth, pointerId: event.pointerId };
-      }}
-      onPointerMove={event => {
-        const drag = resizeRef.current;
-        if (!drag || drag.pointerId !== event.pointerId || drag.kind !== 'sidebar') return;
-        const width = drag.width + event.clientX - drag.x;
-        drag.x = event.clientX;
-        drag.width = width;
-        if (width < 112) setSidebarCollapsed(true);
-        else {
-          setSidebarCollapsed(false);
-          setSidebarWidth(Math.max(112, Math.min(420, width)));
-        }
-      }}
-      onPointerUp={event => { if (resizeRef.current?.pointerId === event.pointerId) { resizeRef.current = null; setSidebarResizing(false); } }}
-      onPointerCancel={() => { resizeRef.current = null; setSidebarResizing(false); }}
-      onLostPointerCapture={() => { resizeRef.current = null; setSidebarResizing(false); }}
-      onKeyDown={event => {
-        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-        event.preventDefault();
-        const width = sidebarWidth + (event.key === 'ArrowRight' ? 16 : -16);
-        if (width < 112) setSidebarCollapsed(true);
-        else {
-          setSidebarCollapsed(false);
-          setSidebarWidth(Math.min(420, width));
-        }
-      }}
-    />
-    <div className="workspace-area">
-      <main className="main-column">
-        <header className="topbar">{panes.length===1&&renderPaneTabs(rootPane,0,false)}{windowControls&&<div className="window-controls" role="group" aria-label="Window controls"><button aria-label="Minimize window" title="Minimize" onClick={()=>void windowControls.minimize()}><Minus size={14}/></button><button aria-label={windowMaximized?'Restore window':'Maximize window'} title={windowMaximized?'Restore':'Maximize'} onClick={()=>void windowControls.toggleMaximize()}>{windowMaximized?<Copy size={12}/>:<Maximize2 size={12}/>}</button><button className="window-close" aria-label="Close window" title="Close" onClick={()=>void windowControls.close()}><X size={15}/></button></div>}</header>
-        <div className={'workspace-content mode-tasks ' + (panes.length > 1 ? 'has-session-panes has-side-session ' : '') + (draggedTab ? 'dragging-session' : '')}
-          style={{ gridTemplateColumns: panes.flatMap((pane, index) => index < panes.length - 1 ? ['minmax(0,' + pane.weight + 'fr)', '5px'] : ['minmax(0,' + pane.weight + 'fr)']).join(' '), transition: 'grid-template-columns 180ms cubic-bezier(.2,.75,.25,1)' }}
-          onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('application/x-opnex-workspace')) event.preventDefault(); }}
-          onDrop={event => {
-            const mode = event.dataTransfer.getData('application/x-opnex-workspace');
-            const kind = workspaceKindForMode(mode);
-            if (kind) {
-              event.preventDefault();
-              const pane = panes.find(item => item.id === focusedPaneId) || rootPane;
-              openWorkspaceTab(kind, pane.id, pane.activeTab);
-              return;
-            }
-            const tab = readDraggedTab(event.dataTransfer);
-            if (!tab) return;
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            splitTab(tab, panes[0].id, event.clientX < rect.left + rect.width / 2 ? 'left' : 'right');
-          }}>
-          {panes.map((pane, index) => <div className="pane-grid-group" key={pane.id}>
-            {panes.length > 1 && renderPaneTabs(pane, index, true)}
-            {index > 0 && <div className="workspace-resizer" role="separator" aria-label={'Resize pane ' + index} aria-orientation="vertical"
-              aria-valuemin={168} aria-valuenow={Math.round(pane.weight / (pane.weight + panes[index - 1].weight) * 100)} tabIndex={0}
-              style={{ gridColumn: index * 2, gridRow: '1 / -1' }}
-              onPointerDown={event => {
-                event.preventDefault();
-                event.currentTarget.setPointerCapture(event.pointerId);
-                resizeRef.current = { kind: 'pane', x: event.clientX, left: panes[index - 1].id, right: pane.id, pointerId: event.pointerId };
-              }}
-              onPointerMove={event => {
-                const drag = resizeRef.current;
-                if (!drag || drag.pointerId !== event.pointerId || drag.kind !== 'pane') return;
-                const delta = event.clientX - drag.x;
-                drag.x = event.clientX;
-                const rect = document.querySelector('.workspace-content')?.getBoundingClientRect();
-                if (rect && drag.left && drag.right) setPanes(current => resizeAdjacentPanes(current, drag.left, drag.right, delta, rect.width, 168).panes);
-              }}
-              onPointerUp={event => { if (resizeRef.current?.pointerId === event.pointerId) resizeRef.current = null; }}
-              onLostPointerCapture={() => { resizeRef.current = null; }}
-              onKeyDown={event => {
-                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-                event.preventDefault();
-                const rect = document.querySelector('.workspace-content')?.getBoundingClientRect();
-                if (rect) setPanes(current => resizeAdjacentPanes(current, panes[index - 1].id, pane.id, (event.key === 'ArrowRight' ? 1 : -1) * 24, rect.width, 168).panes);
-              }} />}
-            {pane.tabs.map(tab => renderWorkspaceTab(tab, pane, index))}
-          </div>)}
-        </div>
-      </main>
-    </div>
-    {error && <div className="toast-error" role="alert"><AlertCircle size={15} />{error}<button className="icon-btn" aria-label="Dismiss app error" onClick={() => setError('')}><X size={14} /></button></div>}
-    {projectEditor&&<ProjectEditorDialog project={projectEditor} initialRoot={selectedProject?.projectRoot||''} close={()=>setProjectEditor(null)} saved={(project,duplicate)=>void projectSaved(project,duplicate)}/>}
-    {shortcutsOpen&&<div className="dialog-backdrop" data-open="true" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&setShortcutsOpen(false)}><section className="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title"><header><div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p>Use Ctrl on Windows/Linux or Command on macOS.</p></div><button type="button" className="icon-btn" aria-label="Close shortcuts" onClick={()=>setShortcutsOpen(false)}><X size={16}/></button></header><dl><dt>New session</dt><dd>Ctrl/⌘ + N</dd><dt>Previous / next session</dt><dd>Ctrl/⌘ + Shift + ↑ / ↓</dd><dt>Settings</dt><dd>Ctrl/⌘ + ,</dd><dt>Git</dt><dd>Ctrl/⌘ + Shift + G</dd><dt>Library</dt><dd>Ctrl/⌘ + Shift + L</dd><dt>Toggle sidebar</dt><dd>Ctrl/⌘ + B</dd><dt>Dismiss dialog</dt><dd>Escape</dd></dl></section></div>}
-    {settingsMounted && state && <SettingsDialog open={settingsOpen} settings={state.settings} models={models} runtime={runtime} close={closeSettings} reconnect={async()=>{await refresh();}} saved={async settings => {
-      try {
-        await api('/api/settings',settings);
-        await refresh();
-        return true;
-      } catch (cause) {
-        setError(String(cause));
-        return false;
+  return (
+    <div
+      className={
+        'app-shell ' +
+        (windowControls ? 'has-custom-chrome ' : '') +
+        (sidebarCollapsed ? 'sidebar-collapsed ' : '') +
+        (sidebarResizing ? 'sidebar-resizing' : '')
       }
-    }} />}
-    {sessionDialogMounted && sessionDialog && <SessionDialog open={sessionDialogOpen} kind={sessionDialog.kind} task={state?.tasks.find(task => task.id === sessionDialog.taskId)} close={closeSessionDialog} rename={renameSession} remove={deleteSession} />}
-  </div>;
+      style={
+        {
+          '--sidebar-width': sidebarCollapsed ? '0px' : sidebarWidth + 'px',
+        } as React.CSSProperties
+      }
+    >
+      <nav className='activity-rail' aria-label='App navigation'>
+        <button
+          className='rail-toggle'
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title='Toggle sidebar (Ctrl/Cmd+B)'
+          aria-keyshortcuts='Control+B Meta+B'
+          aria-expanded={!sidebarCollapsed}
+          aria-controls='primary-sidebar'
+          onClick={() => setSidebarCollapsed((value) => !value)}
+        >
+          <PanelLeft size={17} />
+        </button>
+        <button
+          role='tab'
+          aria-label='Sessions'
+          onClick={() => {
+            const pane = panes.find((item) => item.id === focusedPaneId) || rootPane;
+            if (workspaceTabKind(pane.activeTab) !== 'session')
+              activateSessionTab(
+                pane.tabs.find((tab) => workspaceTabKind(tab) === 'session') || 'new:0'
+              );
+          }}
+        >
+          <FileText size={17} />
+        </button>
+        <button
+          role='tab'
+          draggable
+          aria-label='Browser'
+          aria-current={
+            panes.some((pane) => workspaceTabKind(pane.activeTab) === 'browser')
+              ? 'page'
+              : undefined
+          }
+          onDragStart={(event) => {
+            event.dataTransfer.setData('application/x-opnex-workspace', 'browser');
+            event.dataTransfer.effectAllowed = 'move';
+          }}
+          onClick={() => {
+            const pane = panes.find((item) => item.id === focusedPaneId) || rootPane;
+            openWorkspaceTab('browser', pane.id, pane.activeTab);
+          }}
+        >
+          <Globe size={17} />
+        </button>
+        <button
+          role='tab'
+          draggable
+          aria-label='Git'
+          title='Git (Ctrl/Cmd+Shift+G)'
+          aria-keyshortcuts='Control+Shift+G Meta+Shift+G'
+          aria-current={
+            panes.some((pane) => workspaceTabKind(pane.activeTab) === 'git') ? 'page' : undefined
+          }
+          onDragStart={(event) => {
+            event.dataTransfer.setData('application/x-opnex-workspace', 'git');
+            event.dataTransfer.effectAllowed = 'move';
+          }}
+          onClick={() => {
+            const pane = panes.find((item) => item.id === focusedPaneId) || rootPane;
+            openWorkspaceTab('git', pane.id, pane.activeTab);
+          }}
+        >
+          <GitBranch size={17} />
+        </button>
+        <button
+          role='tab'
+          aria-label='Library'
+          title='Library (Ctrl/Cmd+Shift+L)'
+          aria-keyshortcuts='Control+Shift+L Meta+Shift+L'
+          aria-current={
+            panes.some((pane) => workspaceTabKind(pane.activeTab) === 'skills') ? 'page' : undefined
+          }
+          onClick={() => openSkillsTab()}
+        >
+          <BookOpen size={17} />
+        </button>
+        <div className='rail-spacer' />
+        <button
+          aria-label='Settings'
+          title='Settings (Ctrl/Cmd+,)'
+          aria-keyshortcuts='Control+, Meta+,'
+          onClick={openSettings}
+        >
+          <Settings2 size={17} />
+        </button>
+      </nav>
+      <SessionExplorer
+        tasks={state?.tasks || []}
+        projects={state?.projects || []}
+        selectedProject={selectedProject}
+        expandedProjectIds={state?.expandedProjectIds ?? ['unclassified']}
+        activeTaskIds={panes.map((pane) => pane.activeTab)}
+        sidebarCollapsed={sidebarCollapsed}
+        query={query}
+        setQuery={setQuery}
+        showAllProjects={showAllProjects}
+        setShowAllProjects={setShowAllProjects}
+        projectMoveError={projectMoveError}
+        onClearProjectMoveError={() => setProjectMoveError('')}
+        projectDropTarget={projectDropTarget}
+        setProjectDropTarget={setProjectDropTarget}
+        archivedExpanded={archivedExpanded}
+        setArchivedExpanded={setArchivedExpanded}
+        onSelectTask={selectTask}
+        onOpenSessionDialog={openSessionDialog}
+        onPinTask={setTaskPinned}
+        onArchiveTask={setTaskArchived}
+        onMoveSessionToProject={moveSessionToProject}
+        onDragSession={dragSession}
+        onDropSessionInto={dropSessionInto}
+        onToggleProjectExpanded={toggleProjectExpanded}
+        onStartNewSessionInProject={openNewSessionInProject}
+        onOpenNewTab={openNewTab}
+        onOpenProjectEditor={openProjectEditor}
+        onPinProject={async (projectId, pinned) => {
+          try {
+            await api(`/api/projects/${projectId}/pin`, { pinned });
+            await refresh();
+          } catch (cause) {
+            setError(String(cause));
+          }
+        }}
+        onOpenShortcuts={openShortcuts}
+      />
+      <div
+        className='sidebar-resizer'
+        role='separator'
+        aria-label='Resize session explorer'
+        aria-orientation='vertical'
+        aria-valuemin={sidebarCollapsed ? 0 : 112}
+        aria-valuemax={420}
+        aria-valuenow={sidebarCollapsed ? 0 : sidebarWidth}
+        aria-valuetext={sidebarCollapsed ? 'Collapsed' : `${sidebarWidth} pixels`}
+        tabIndex={0}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setSidebarResizing(true);
+          resizeRef.current = {
+            kind: 'sidebar',
+            x: event.clientX,
+            width: sidebarCollapsed ? 0 : sidebarWidth,
+            pointerId: event.pointerId,
+          };
+        }}
+        onPointerMove={(event) => {
+          const drag = resizeRef.current;
+          if (!drag || drag.pointerId !== event.pointerId || drag.kind !== 'sidebar') return;
+          const width = drag.width + event.clientX - drag.x;
+          drag.x = event.clientX;
+          drag.width = width;
+          if (width < 112) setSidebarCollapsed(true);
+          else {
+            setSidebarCollapsed(false);
+            setSidebarWidth(Math.max(112, Math.min(420, width)));
+          }
+        }}
+        onPointerUp={(event) => {
+          if (resizeRef.current?.pointerId === event.pointerId) {
+            resizeRef.current = null;
+            setSidebarResizing(false);
+          }
+        }}
+        onPointerCancel={() => {
+          resizeRef.current = null;
+          setSidebarResizing(false);
+        }}
+        onLostPointerCapture={() => {
+          resizeRef.current = null;
+          setSidebarResizing(false);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+          event.preventDefault();
+          const width = sidebarWidth + (event.key === 'ArrowRight' ? 16 : -16);
+          if (width < 112) setSidebarCollapsed(true);
+          else {
+            setSidebarCollapsed(false);
+            setSidebarWidth(Math.min(420, width));
+          }
+        }}
+      />
+      <div className='workspace-area'>
+        <main className='main-column'>
+          <header className='topbar'>
+            {panes.length === 1 && renderPaneTabs(rootPane, 0, false)}
+            {windowControls && (
+              <div className='window-controls' role='group' aria-label='Window controls'>
+                <button
+                  aria-label='Minimize window'
+                  title='Minimize'
+                  onClick={() => void windowControls.minimize()}
+                >
+                  <Minus size={14} />
+                </button>
+                <button
+                  aria-label={windowMaximized ? 'Restore window' : 'Maximize window'}
+                  title={windowMaximized ? 'Restore' : 'Maximize'}
+                  onClick={() => void windowControls.toggleMaximize()}
+                >
+                  {windowMaximized ? <Copy size={12} /> : <Maximize2 size={12} />}
+                </button>
+                <button
+                  className='window-close'
+                  aria-label='Close window'
+                  title='Close'
+                  onClick={() => void windowControls.close()}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            )}
+          </header>
+          <div
+            className={
+              'workspace-content mode-tasks ' +
+              (panes.length > 1 ? 'has-session-panes has-side-session ' : '') +
+              (draggedTab ? 'dragging-session' : '')
+            }
+            style={{
+              gridTemplateColumns: panes
+                .flatMap((pane, index) =>
+                  index < panes.length - 1
+                    ? ['minmax(0,' + pane.weight + 'fr)', '5px']
+                    : ['minmax(0,' + pane.weight + 'fr)']
+                )
+                .join(' '),
+              transition: 'grid-template-columns 180ms cubic-bezier(.2,.75,.25,1)',
+            }}
+            onDragOver={(event) => {
+              if (Array.from(event.dataTransfer.types).includes('application/x-opnex-workspace'))
+                event.preventDefault();
+            }}
+            onDrop={(event) => {
+              const mode = event.dataTransfer.getData('application/x-opnex-workspace');
+              const kind = workspaceKindForMode(mode);
+              if (kind) {
+                event.preventDefault();
+                const pane = panes.find((item) => item.id === focusedPaneId) || rootPane;
+                openWorkspaceTab(kind, pane.id, pane.activeTab);
+                return;
+              }
+              const tab = readDraggedTab(event.dataTransfer);
+              if (!tab) return;
+              event.preventDefault();
+              const rect = event.currentTarget.getBoundingClientRect();
+              splitTab(
+                tab,
+                panes[0].id,
+                event.clientX < rect.left + rect.width / 2 ? 'left' : 'right'
+              );
+            }}
+          >
+            {panes.map((pane, index) => (
+              <div className='pane-grid-group' key={pane.id}>
+                {panes.length > 1 && renderPaneTabs(pane, index, true)}
+                {index > 0 && (
+                  <div
+                    className='workspace-resizer'
+                    role='separator'
+                    aria-label={'Resize pane ' + index}
+                    aria-orientation='vertical'
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(
+                      (pane.weight / (pane.weight + panes[index - 1].weight)) * 100
+                    )}
+                    aria-valuetext={`${Math.round((pane.weight / (pane.weight + panes[index - 1].weight)) * 100)}% of the adjacent pane pair`}
+                    tabIndex={0}
+                    style={{ gridColumn: index * 2, gridRow: '1 / -1' }}
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      resizeRef.current = {
+                        kind: 'pane',
+                        x: event.clientX,
+                        left: panes[index - 1].id,
+                        right: pane.id,
+                        pointerId: event.pointerId,
+                      };
+                    }}
+                    onPointerMove={(event) => {
+                      const drag = resizeRef.current;
+                      if (!drag || drag.pointerId !== event.pointerId || drag.kind !== 'pane')
+                        return;
+                      const delta = event.clientX - drag.x;
+                      drag.x = event.clientX;
+                      const rect = document
+                        .querySelector('.workspace-content')
+                        ?.getBoundingClientRect();
+                      if (rect && drag.left && drag.right)
+                        setPanes(
+                          (current) =>
+                            resizeAdjacentPanes(
+                              current,
+                              drag.left,
+                              drag.right,
+                              delta,
+                              rect.width,
+                              168
+                            ).panes
+                        );
+                    }}
+                    onPointerUp={(event) => {
+                      if (resizeRef.current?.pointerId === event.pointerId)
+                        resizeRef.current = null;
+                    }}
+                    onLostPointerCapture={() => {
+                      resizeRef.current = null;
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                      event.preventDefault();
+                      const rect = document
+                        .querySelector('.workspace-content')
+                        ?.getBoundingClientRect();
+                      if (rect)
+                        setPanes(
+                          (current) =>
+                            resizeAdjacentPanes(
+                              current,
+                              panes[index - 1].id,
+                              pane.id,
+                              (event.key === 'ArrowRight' ? 1 : -1) * 24,
+                              rect.width,
+                              168
+                            ).panes
+                        );
+                    }}
+                  />
+                )}
+                {pane.tabs.map((tab) => renderWorkspaceTab(tab, pane, index))}
+              </div>
+            ))}
+          </div>
+        </main>
+      </div>
+      {error && (
+        <div className='toast-error' role='alert'>
+          <AlertCircle size={15} />
+          {error}
+          <button className='icon-btn' aria-label='Dismiss app error' onClick={() => setError('')}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      {projectEditor && (
+        <ProjectEditorDialog
+          project={projectEditor}
+          initialRoot={selectedProject?.projectRoot || ''}
+          close={() => setProjectEditor(null)}
+          saved={(project, duplicate) => void projectSaved(project, duplicate)}
+        />
+      )}
+      {shortcutsOpen && (
+        <div
+          className='dialog-backdrop'
+          data-open='true'
+          role='presentation'
+          onMouseDown={(event) => event.target === event.currentTarget && closeShortcuts()}
+        >
+          <section
+            className='shortcuts-dialog'
+            role='dialog'
+            aria-modal='true'
+            aria-labelledby='shortcuts-title'
+            onKeyDown={trapShortcutsTab}
+          >
+            <header>
+              <div>
+                <h2 id='shortcuts-title'>Keyboard shortcuts</h2>
+                <p>Use Ctrl on Windows/Linux or Command on macOS.</p>
+              </div>
+              <button
+                ref={shortcutsCloseRef}
+                type='button'
+                className='icon-btn'
+                aria-label='Close shortcuts'
+                onClick={closeShortcuts}
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <dl>
+              <dt>New session</dt>
+              <dd>Ctrl/⌘ + N</dd>
+              <dt>Previous / next session</dt>
+              <dd>Ctrl/⌘ + Shift + ↑ / ↓</dd>
+              <dt>Settings</dt>
+              <dd>Ctrl/⌘ + ,</dd>
+              <dt>Git</dt>
+              <dd>Ctrl/⌘ + Shift + G</dd>
+              <dt>Library</dt>
+              <dd>Ctrl/⌘ + Shift + L</dd>
+              <dt>Toggle sidebar</dt>
+              <dd>Ctrl/⌘ + B</dd>
+              <dt>Dismiss dialog</dt>
+              <dd>Escape</dd>
+            </dl>
+          </section>
+        </div>
+      )}
+      {settingsMounted && state && (
+        <SettingsDialog
+          open={settingsOpen}
+          settings={state.settings}
+          models={models}
+          runtime={runtime}
+          close={closeSettings}
+          reconnect={async () => {
+            await refresh();
+          }}
+          saved={async (settings) => {
+            try {
+              await api('/api/settings', settings);
+              await refresh();
+              return true;
+            } catch (cause) {
+              setError(String(cause));
+              return false;
+            }
+          }}
+        />
+      )}
+      {sessionDialogMounted && sessionDialog && (
+        <SessionDialog
+          open={sessionDialogOpen}
+          kind={sessionDialog.kind}
+          task={state?.tasks.find((task) => task.id === sessionDialog.taskId)}
+          close={closeSessionDialog}
+          rename={renameSession}
+          remove={deleteSession}
+        />
+      )}
+    </div>
+  );
 }
-
-
-function executionDescriptor(profile?:ExecutionProfile,deepSeek?:DeepSeekExecutionProfile){
-  if(!profile)return 'Model details unavailable';
-  const model=executionModelName(profile.model);
-  return profile.provider==='deepseek'?`DeepSeek Harness (${deepSeek?.provider==='opencode-go'?'OpenCode Go':deepSeek?.provider||'provider'}) · ${model} · requested native effort ${profile.effort} · effective effort unknown`:`${model} · ${profile.effort}`;
-}
-function passOutputForDisplay(pass:TaskPass){
-  const output=pass.publicAnswer||pass.receipt?.result||'';
-  const team=pass.recruitmentTeam,marker='Read-only worker results (no Git worktree or integration step):';
-  const workers=team?.workers,bundle=team?.workerReceiptBundle;
-  if(team?.mode!=='read_only'||!Array.isArray(workers)||!Array.isArray(bundle)||!workers.length||workers.length!==bundle.length)return output;
-  const matches=workers.every((worker,index)=>{const record=bundle[index];return !!record&&record.workerId===worker.workerId&&record.name===worker.name&&record.status===worker.status&&record.receipt?.result===worker.receipt?.result;});
-  if(!matches)return output;
-  const markerAt=output.lastIndexOf(marker);if(markerAt<0)return output;
-  let captured:unknown;
-  try{captured=JSON.parse(output.slice(markerAt+marker.length).trim());}catch{return output;}
-  if(!Array.isArray(captured)||captured.length!==bundle.length)return output;
-  const capturedMatches=captured.every((record,index)=>{const expected=bundle[index];return !!record&&!!expected&&record.workerId===expected.workerId&&record.name===expected.name&&record.status===expected.status&&record.headCommit===null&&record.receipt?.status===expected.receipt.status&&record.receipt?.result===expected.receipt.result&&record.producer?.threadId===expected.producer?.threadId&&record.producer?.turnId===expected.producer?.turnId&&record.producer?.teamId===expected.producer?.teamId&&record.producer?.passId===expected.producer?.passId;});
-  if(!capturedMatches)return output;
-  return formatReadOnlyWorkerResults(bundle.map(record=>({name:record.name,status:record.status,receipt:record.receipt,error:workers.find(worker=>worker.workerId===record.workerId)?.error})));
-}
-function executionModelName(model:string){return model==='gpt-6-luna'?'GPT-6 Luna':model==='gpt-6.1-sol'?'GPT-6.1 Sol':model==='gpt-6.1-terra'?'GPT-6.1 Terra':model==='gpt-6-sol'?'GPT-6 Sol':model==='gpt-6-astra'?'GPT-6 Astra':model==='deepseek-v4.1-flash'?'DeepSeek V4.1 Flash':model;}
-function compactModelName(model:string){return model==='gpt-6-luna'?'Luna':executionModelName(model);}
-function executionRoleName(role:'worker'|'direct'|'simple',model?:string){
-  if(role==='worker')return model?`${compactModelName(model)} worker`:'Worker';
-  if(role==='direct')return 'Direct answer';
-  return model?`${executionModelName(model)} simple implementation`:'Simple implementation';
-}
-function ConversationMessage({message:m,executionProfile,deepSeekExecution,actualTurn}:{message:Message;executionProfile?:ExecutionProfile;deepSeekExecution?:DeepSeekExecutionProfile;actualTurn?:ReasoningTurn}){
-  if(m.role==='user')return <div className="message user-message" key={m.id}><div className="message-main"><div className="message-meta"><strong>You</strong><span>{stamp(m.createdAt)}</span>{m.submissionKind==='steering'&&<span className={`model-chip steering-chip ${m.deliveryStatus||'pending'}`}>{m.deliveryStatus==='steered'?'Steered active turn':m.deliveryStatus==='unconfirmed'?'Steering delivery unconfirmed':'Sending steering'}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
-  if(m.role==='system')return <div className={`system-event ${m.text.startsWith('Worker activity:')?'progress-event':''}`} key={m.id}><span className="event-glyph">{m.text.startsWith('Worker activity:')?<Activity size={14}/>:<AlertCircle size={14}/>}</span><span>{m.text.replace(/^Worker activity: /,'')}</span></div>;
-  const actualProvider:'deepseek'|'codex'|undefined=actualTurn?.provider==='deepseek'||actualTurn?.requestedModel==='deepseek-v4.1-flash'?'deepseek':actualTurn?.provider==='codex'||actualTurn?.requestedModel.startsWith('gpt-')?'codex':undefined;
-  const turnProfile:ExecutionProfile|undefined=actualTurn&&actualProvider?{provider:actualProvider,model:actualTurn.requestedModel,effort:actualTurn.requestedEffort as ExecutionProfile['effort']}:undefined;
-  const profile=actualTurn?turnProfile:executionProfile;
-  const modelChip=m.role==='direct'?turnProfile?executionDescriptor(turnProfile,deepSeekExecution):'Orchestrator · model unavailable':(['worker','simple'].includes(m.role)?turnProfile?executionDescriptor(turnProfile,deepSeekExecution):profile?executionDescriptor(profile,deepSeekExecution):executionDescriptor():undefined);
-  const model=actualTurn?.requestedModel||(m.role==='direct'?undefined:profile?.model);
-  const heading=m.role==='worker'?profile?.provider==='deepseek'?`DeepSeek Harness worker · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('worker',model):m.role==='router'?'Routing agent':m.role==='direct'?turnProfile?.provider==='deepseek'?`DeepSeek Harness direct answer · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('direct',model):m.role==='simple'?profile?.provider==='deepseek'?`DeepSeek Harness simple implementation · ${deepSeekExecution?.provider||'OpenCode Go'}`:executionRoleName('simple',model):'Orchestrator';
-  return <div className="message agent-message" key={m.id}><div className="message-main"><div className="message-meta"><strong>{heading}</strong><span>{stamp(m.createdAt)}</span>{modelChip&&<span className="model-chip">{modelChip}</span>}</div><div className="message-body markdown-body"><Markdown>{m.text}</Markdown></div></div></div>;
-}
-
-function ActivityRow({item}:{item:LiveActivity}){
-  if(item.kind==='commentary')return <div className="live-activity-row commentary" data-activity-id={item.itemId}><span className="live-activity-icon"><Activity size={14}/></span><div className="live-activity-main"><div className="live-commentary-text">{item.text||'Preparing response…'}</div></div></div>;
-  const label=item.status==='running'?`Running ${item.title}`:item.status==='failed'?`Failed ${item.title}`:item.status==='interrupted'?`Interrupted ${item.title}`:`Ran ${item.title}`;
-  const details=[item.detail,item.output].filter(Boolean).join('\n\n');
-  return <div className={`live-activity-row tool ${item.status}`} data-activity-id={item.itemId}><span className="live-activity-icon">{item.status==='running'?<span className="activity-spinner"/>:item.status==='failed'?<AlertCircle size={14}/>:<Check size={14}/>}</span><div className="live-activity-main"><div className="live-activity-title">{label}</div>{details&&<details className="live-activity-details"><summary>Details</summary><pre>{details}</pre></details>}</div></div>;
-}
-function ReasoningResponse({turn,summaries,activities,live,fallbackTime,status,statusHue}:{turn:NonNullable<TaskPass['reasoningTurns']>[number];summaries:NonNullable<TaskPass['reasoningSummaries']>;activities:LiveActivity[];live:boolean;fallbackTime:string;status?:string;statusHue?:string}){
-  const [clock,setClock]=useState(Date.now());
-  useEffect(()=>{if(!live)return;const timer=window.setInterval(()=>setClock(Date.now()),1000);return()=>window.clearInterval(timer);},[live]);
-  const turnSummaries=summaries.filter(x=>x.role===turn.role&&x.threadId===turn.threadId&&x.turnId===turn.turnId&&x.text.trim());
-  const activity=activities.filter(x=>x.role===turn.role&&x.threadId===turn.threadId&&x.turnId===turn.turnId);
-  const events=[...turnSummaries.map(summary=>({kind:'summary' as const,at:Date.parse(summary.updatedAt||turn.startedAt||fallbackTime)||0,index:summary.summaryIndex,summary})),...activity.map((item,index)=>({kind:'activity' as const,at:Date.parse(item.startedAt)||0,index,item}))].sort((a,b)=>a.at-b.at||a.index-b.index);
-  const elapsedSeconds=Math.max(0,Math.floor((clock-Date.parse(turn.startedAt||fallbackTime))/1000));
-  const elapsed=elapsedSeconds>=3600?`${Math.floor(elapsedSeconds/3600)}h`:elapsedSeconds>=60?`${Math.floor(elapsedSeconds/60)}m`:`${elapsedSeconds}s`;
-  const durationLabel=turn.status==='interrupted'?'Interrupted after':turn.status==='failed'?'Failed after':live?'Working for':'Worked for';
-  const deepSeek=turn.provider==='deepseek';
-  const turnLabel=deepSeek?`DeepSeek Harness ${turn.role} · ${turn.provider}`:turn.role==='orchestrator'?'Orchestrator':executionRoleName(turn.role,turn.requestedModel);
-  const modelLabel=deepSeek?`${turn.requestedModel} · ${turn.requestedEffort}`:`${executionModelName(turn.requestedModel)} · ${turn.requestedEffort}`;
-  return <section className={`turn-activity ${live?'is-live':''}`} aria-label={`${turn.role} model response`} data-status={turn.status} data-role={turn.role}>
-    <header className="turn-activity-heading"><span>{turnLabel}</span><span className="turn-activity-duration">{durationLabel} {elapsed}</span>{status&&<span className="turn-activity-status" role="status" data-hue={statusHue}><i aria-hidden="true"/>{status}</span>}{turn.role!=='orchestrator'&&<span className="model-chip">{modelLabel}</span>}</header>
-    <div className="turn-activity-events">{events.map(event=>event.kind==='summary'?<div className="live-activity-row commentary summary" key={`summary:${event.summary.itemId}:${event.summary.summaryIndex}`}><span className="live-activity-icon"><Command size={14}/></span><div className="live-activity-main"><div className="markdown-body"><Markdown>{event.summary.text}</Markdown></div></div></div>:<ActivityRow key={`activity:${event.item.itemId}`} item={event.item}/>)}{!events.length&&<div className="reasoning-response-empty">{live?'Waiting for activity…':turn.status==='failed'?'Turn failed.':turn.status==='interrupted'?'Turn interrupted.':'No activity details were reported for this turn.'}</div>}</div>
-  </section>;
-}
-
-function PassPanel({pass:p,messages,active,task,receiptExpanded,recruitmentTeamExpanded,toolCallsExpanded,agentmemAuditExpanded,selectedSteerWorkerId,onSelectSteerWorker,onQualityAction,toggleReceipt,toggleRecruitmentTeam,toggleToolCalls,toggleAgentMemAudit}:{pass:TaskPass;messages:Message[];active:boolean;task:Task;receiptExpanded:boolean;recruitmentTeamExpanded:boolean;toolCallsExpanded:boolean;agentmemAuditExpanded:boolean;selectedSteerWorkerId?:string;onSelectSteerWorker:(workerId:string)=>void;onQualityAction:(action:'accept'|'pause'|'resume')=>void;toggleReceipt:()=>void;toggleRecruitmentTeam:()=>void;toggleToolCalls:()=>void;toggleAgentMemAudit:()=>void}){
-  const live=active&&task.phase===p.phase&&['routing','direct_running','simple_running','planning','worker_running','reviewing'].includes(p.phase);
-  const selectedExecution=p.executionProfile;
-  const output=passOutputForDisplay(p);
-  const visibleMessages=messages.filter(m=>!(m.role==='orchestrator'&&m.text==='Prepared a complete assignment.'&&(p.reasoningTurns||[]).some(turn=>turn.role==='orchestrator'))&&!(output&&m.role!=='user'&&m.text===output)&&!(p.error&&m.role==='system'&&m.text===p.error));
-  const turns=p.reasoningTurns||[];const directTurn=turns.filter(turn=>turn.role==='direct'&&turn.threadId===p.directThreadId).at(-1);const directOutputLabel=directTurn?`${directTurn.provider==='deepseek'?`DeepSeek Harness (${p.deepSeekExecution?.provider||'OpenCode Go'}) · `:''}${executionModelName(directTurn.requestedModel)}${directTurn.provider==='deepseek'?` · requested native effort ${directTurn.requestedEffort} · effective effort unknown`:directTurn.requestedEffort?` · ${directTurn.requestedEffort}`:''}`:p.directThreadId?'Orchestrator · model unavailable':'Orchestrator';const simpleOutputLabel=`${executionDescriptor(selectedExecution,p.deepSeekExecution)} · self-verified`;const isReadOnlyTeam=p.recruitmentTeam?.mode==='read_only';const finalOutputLabel=isReadOnlyTeam?(p.recruitmentTeam!.workers.length===1?'Worker response':'Worker responses'):p.resolution==='direct'?directOutputLabel:p.resolution==='simple'?simpleOutputLabel:selectedExecution?.provider==='deepseek'?`DeepSeek Harness (${p.deepSeekExecution?.provider||'OpenCode Go'}) · reviewed by orchestrator`:selectedExecution?`${compactModelName(selectedExecution.model)} · reviewed by orchestrator`:'Model details unavailable · reviewed by orchestrator';const timeline=[...visibleMessages.map((message,index)=>({kind:'message' as const,at:Date.parse(message.createdAt)||0,index,message})),...turns.map((turn,index)=>{const roleTurns=turns.filter(item=>item.role===turn.role);const roleMessages=visibleMessages.filter(message=>message.role===turn.role);const roleIndex=roleTurns.findIndex(item=>item.threadId===turn.threadId&&item.turnId===turn.turnId);const matchingMessage=roleMessages[roleIndex];const latestUser=visibleMessages.filter(message=>message.role==='user').at(-1);const fallbackAt=matchingMessage?(Date.parse(matchingMessage.createdAt)||0)-1:(Date.parse(latestUser?.createdAt||p.createdAt)||0)+1;return {kind:'reasoning' as const,at:Date.parse(turn.startedAt||'')||fallbackAt,index,turn};})].sort((a,b)=>a.at-b.at||(a.kind!==b.kind?(a.kind==='reasoning'?-1:1):a.index-b.index));
-  const workerRows=timeline.filter(row=>row.kind==='reasoning'?row.turn.role==='worker':row.message.role==='worker'||row.message.role==='system'&&row.message.text.startsWith('Worker activity:'));
-  const firstUserMessageId=visibleMessages.find(message=>message.role==='user')?.id;
-  const routeText=p.routeDecision?.justification||p.routingNote||'';
-  const orchestratorStatus=live?(p.phase==='planning'?(p.recruitmentTeam?.status==='recruiting'||p.recruitmentTeam?.status==='starting'?'Recruiting workers':'Drafting assignments'):p.phase==='worker_running'?(p.recruitmentTeam?.status==='recruiting'||p.recruitmentTeam?.status==='starting'?'Recruiting workers':'Waiting for workers'):p.phase==='reviewing'?'Reviewing worker receipts':p.qualityLoop?.status==='auditing'?'Auditing corrections':undefined):undefined;
-  const orchestratorStatusHue=statusHue(orchestratorStatus);
-  const workerPanelSummary=p.recruitmentTeam?`${p.recruitmentTeam.workers.length} ${p.recruitmentTeam.workers.length===1?'worker':'workers'} · ${p.recruitmentTeam.status.replaceAll('_',' ')}`:workerRows.length?`${workerRows.length} ${workerRows.length===1?'worker':'workers'}`:'';
-  const visibleTimeline=timeline.filter(row=>row.kind==='reasoning'?row.turn.role!=='worker':row.message.role!=='worker'&&!(row.message.role==='system'&&row.message.text.startsWith('Worker activity:')));
-  const messageTurn=(message:Message)=>{if(message.role!=='direct'&&message.role!=='simple')return undefined;const threadId=message.role==='direct'?p.directThreadId:p.simpleThreadId,roleMessages=visibleMessages.filter(row=>row.role===message.role),roleIndex=roleMessages.findIndex(row=>row.id===message.id);return turns.filter(turn=>turn.role===message.role&&turn.threadId===threadId)[roleIndex];};
-  return <section className={`pass-panel ${p.legacyUnassociated?'legacy-pass':''}`} aria-label={p.legacyUnassociated?'Legacy pass with unassociated history':`Pass ${p.index}`}>
-    <header className="pass-heading"><span>{p.legacyUnassociated?'Legacy history':`Pass ${p.index}`}</span><span className={`pass-status ${p.phase}`} data-hue={phaseHue[p.phase]}>{phaseText[p.phase]||p.phase}</span><time>{stamp(p.createdAt)}</time></header>
-    {p.legacyUnassociated&&<div className="legacy-association-note">This older session predates per-pass records. Its messages and saved artifacts cannot be reliably matched, so they are shown as unassociated history.</div>}
-    {((p.selectedSkills?.length||0)+(p.loadedSkills?.length||0)>0)&&<div className="pass-skill-provenance"><strong>Saved skills used</strong>{[...(p.selectedSkills||[]).map(skill=>({...skill,usage:'Invoked by you'})),...(p.loadedSkills||[]).map(skill=>({...skill,usage:`Loaded${skill.role?` by ${skill.role}`:''}`}))].map((skill,index)=><details key={`${skill.id}:${skill.revision}:${skill.usage}:${index}`}><summary>{skill.name} · {skill.usage} · {skill.revision.slice(0,12)}</summary><small>{skill.source}</small><pre>{skill.instructions}</pre></details>)}</div>}{(p.savedSkills?.length||0)>0&&<div className="pass-skill-provenance"><strong>Skills saved by agents</strong>{p.savedSkills!.map((skill,index)=><div key={`${skill.id}:${skill.revision}:${index}`}><span>{skill.name} · {skill.action} · {skill.revision.slice(0,12)}</span><small>{skill.source} · {skill.role}</small></div>)}</div>}
-    {visibleTimeline.map(row=>row.kind==='message'?<Fragment key={row.message.id}><ConversationMessage message={row.message} executionProfile={selectedExecution} deepSeekExecution={p.deepSeekExecution} actualTurn={messageTurn(row.message)}/>{row.message.role==='user'&&row.message.id===firstUserMessageId&&routeText&&<><div className="route-line"><b>{p.routeDecision?.route?'Router':'Routing'}</b>{p.routeDecision?.route&&<><span className="route-sep">·</span><span className="route-decision" data-hue={routeHue[p.routeDecision.route]||'slate'}>{p.routeDecision.route}</span></>}</div><p className="route-reason">{routeText}</p></>}</Fragment>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole===row.turn.role&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt} status={row.turn.role==='orchestrator'?orchestratorStatus:undefined} statusHue={row.turn.role==='orchestrator'?orchestratorStatusHue:undefined}/>)}
-    {p.simpleThreadId&&<div className="worker-status" role="status">{p.phase==='simple_running'?<div className="activity-spinner"/>:<Check size={17} className="worker-activity-icon"/>}<strong>{p.phase==='simple_running'?'Simple implementation is working':'Simple implementation complete'}</strong><span className="worker-model">{executionDescriptor(selectedExecution,p.deepSeekExecution)}</span><span className={`worker-state ${p.phase}`}>{p.phase==='simple_running'?'Verifying · no Sol review':'Self-verified · no Sol review'}</span></div>}
-    {p.qualityLoop&&<QualityLoopPanel state={p.qualityLoop} onAction={active?onQualityAction:undefined}/>}
-    {(p.recruitmentTeam||workerRows.length>0||!!p.assignment)&&<Disclosure className="workers-panel" title={`Workers${workerPanelSummary?` · ${workerPanelSummary}`:''}`} open={recruitmentTeamExpanded} onToggle={toggleRecruitmentTeam}>
-      {p.recruitmentTeam&&<RecruitmentTeamPanel team={{teamId:p.recruitmentTeam.teamId,status:p.recruitmentTeam.status,mode:p.recruitmentTeam.mode,canonicalProjectRoot:p.recruitmentTeam.canonicalProjectRoot,workers:p.recruitmentTeam.workers.map(worker=>({workerId:worker.workerId,name:worker.name,step:worker.step,dependsOn:worker.dependsOn,status:worker.status,canSteer:!!worker.activeTurnId&&!worker.deepSeekExecution,effort:worker.effort,...(worker.branch?{branch:worker.branch}:{}),...(worker.worktreeRoot?{worktreePath:worker.worktreeRoot}:{}),...(!worker.worktreeRoot?{executionRoot:p.recruitmentTeam!.canonicalProjectRoot}:{}),assignment:worker.assignment,receipt:worker.receipt,error:worker.error,deepSeekExecution:worker.deepSeekExecution,deepSeekRuntime:worker.deepSeekRuntime,deepSeekPhaseRuns:worker.deepSeekPhaseRuns})),...(p.recruitmentTeam.mode==='read_only'?{}:{integration:{status:p.recruitmentTeam.integration.status,canSteer:!!p.recruitmentTeam.integration.activeTurnId&&!p.recruitmentTeam.integration.deepSeekExecution,branch:p.recruitmentTeam.integration.branch,worktreePath:p.recruitmentTeam.integration.worktreeRoot,receipt:p.recruitmentTeam.integration.receipt,error:p.recruitmentTeam.integration.error,deepSeekExecution:p.recruitmentTeam.integration.deepSeekExecution,deepSeekRuntime:p.recruitmentTeam.integration.deepSeekRuntime,deepSeekPhaseRuns:p.recruitmentTeam.integration.deepSeekPhaseRuns}})}} selectedWorkerId={selectedSteerWorkerId} onSelectSteerWorker={active?onSelectSteerWorker:undefined}/>}
-      {workerRows.length>0&&<div className="worker-dialogue">{workerRows.map(row=>row.kind==='message'?<ConversationMessage key={row.message.id} message={row.message} executionProfile={selectedExecution} deepSeekExecution={p.deepSeekExecution}/>:<ReasoningResponse key={`${row.turn.threadId}:${row.turn.turnId}`} turn={row.turn} summaries={p.reasoningSummaries||[]} activities={p.liveActivity||[]} live={live&&p.activeRole==='worker'&&p.activeTurnId===row.turn.turnId} fallbackTime={p.createdAt}/>)}</div>}
-      {p.assignment&&!p.recruitmentTeam&&<div className="worker-assignment"><div className="worker-assignment-label">Assignment</div><AssignmentView assignment={p.assignment}/></div>}
-    </Disclosure>}
-    <Disclosure title={toolCallsTitle(p)} open={toolCallsExpanded} onToggle={toggleToolCalls}><ToolCallLogView log={p.toolCalls} issueCount={p.toolCallTrackingIssueCount} missingMessage="This historical pass predates universal tool-call tracking. Complete invocation coverage is unavailable."/></Disclosure>
-    <Disclosure title={p.receipt?`Receipt · ${p.receipt.status}`:'Receipt'} open={receiptExpanded} onToggle={toggleReceipt}><RunReceipt pass={p} taskId={task.id}/></Disclosure>
-    {p.agentmemAudit&&<Disclosure title={agentMemAuditTitle(p)} open={agentmemAuditExpanded} onToggle={toggleAgentMemAudit}><AgentMemAuditView pass={p}/></Disclosure>}
-    {p.escalation&&<div className="escalation-card"><div className="escalation-head"><AlertCircle size={16}/><strong>Worker needs a decision</strong></div><p>{p.escalation.decision_needed}</p>{p.escalation.evidence?.map((x:string,i:number)=><div className="escalation-detail" key={i}>{x}</div>)}<div className="escalation-options">{p.escalation.options?.map((x:string,i:number)=><span key={i}>{x}</span>)}</div>{p.escalation.recommendation&&<p className="rec-line"><b>Recommendation:</b> {p.escalation.recommendation}</p>}</div>}
-    {p.reviewNote&&!(p.phase==='accepted'&&isReadOnlyTeam)&&<div className={`review-outcome ${p.phase}`}><span>{p.phase==='accepted'?<Check size={15}/>:<AlertCircle size={15}/>}</span><div><strong>{p.phase==='accepted'?(p.resolution==='direct'?'Direct answer':p.resolution==='simple'?'Simple implementation complete':'Receipt accepted'):phaseText[p.phase]}</strong><div className="markdown-body"><Markdown>{p.reviewNote}</Markdown></div>{p.resolution==='direct'&&p.routingNote&&<small className="routing-note">Routing basis: {p.routingNote}</small>}</div></div>}
-    {p.error&&<div className="error-card"><AlertCircle size={16}/><div><strong>{p.phase==='needs_attention'?'Action needed':'Workflow error'}</strong><p>{p.error}</p>{p.phase==='paused_after_restart'&&<small>Send an explicit update to reattach the saved threads and continue.</small>}</div></div>}
-    {output&&<section className="final-artifact" aria-label="Final output">
-      <header><strong>Final output</strong><span>{finalOutputLabel}</span><button type="button" className="final-artifact-copy" onClick={()=>{if(typeof navigator!=='undefined'&&navigator.clipboard)void navigator.clipboard.writeText(output);}}>copy</button></header>
-      <div className="final-artifact-body markdown-body"><Markdown>{output}</Markdown></div>
-    </section>}
-    <PassUsagePanel pass={p}/>
-  </section>;
-}
-
-function toolCallsTitle(pass:TaskPass){return toolCallLogTitle(pass.toolCalls);}
-function agentMemAuditTitle(pass:TaskPass){const audit=pass.agentmemAudit;if(!audit?.recorded)return 'Historical AgentMem audit · record unavailable';const app=audit.calls.filter(call=>call.source==='application').length;const model=audit.calls.filter(call=>call.source==='model').length;return `Historical AgentMem audit · ${model} model calls · ${app} app calls`;}
-function AgentMemAuditView({pass}:{pass:TaskPass}){
-  const audit=pass.agentmemAudit;
-  if(!audit?.recorded)return <div className="agentmem-audit-unknown" role="status">This pass predates AgentMem call auditing. Model-issued MCP calls and app-provided context were not recorded, so usage is unknown.</div>;
-  const modelStatus=audit.modelMcpStatus==='observed'?'Model-issued AgentMem MCP calls were observed.':audit.modelMcpStatus==='disabled'?'AgentMem MCP was disabled for this pass.':audit.modelMcpStatus==='available'?'AgentMem MCP was available to execution roles; no call has been recorded yet.':audit.modelMcpStatus==='unavailable'?'AgentMem MCP was unavailable to the execution runtime.':audit.modelMcpStatus==='no_calls_observed'?'No AgentMem MCP call was observed for this pass.':'Model MCP availability and usage are unknown.';
-  const identity=audit.identityStatus==='verified'?`Verified: ${audit.verifiedProjectId||audit.selectedProjectId} ↔ ${audit.verifiedRoot||audit.workspaceRoot}`:audit.identityStatus==='disabled'?'No AgentMem knowledge base was selected for this pass.':audit.identityStatus==='mismatch'?`Workspace identity mismatch. Selected knowledge base: ${audit.selectedProjectId||'none'}; workspace root: ${audit.workspaceRoot}.`:`Selected knowledge base: ${audit.selectedProjectId||'none'} ↔ ${audit.workspaceRoot} · ${audit.identityStatus}.`;
-  return <div className="agentmem-audit" data-model-mcp-status={audit.modelMcpStatus}>
-    <p className={audit.identityStatus==='mismatch'||audit.identityStatus==='unavailable'?'is-error':''}><strong>Selected knowledge base:</strong> {identity}</p>
-    <p><strong>Selected repository index:</strong> {audit.verifiedRepositoryId||'Not verified for this pass'}</p>
-    <p><strong>Model-issued MCP:</strong> {modelStatus}</p>
-    {audit.coverage==='from_first_recorded_call'&&<p>This older pass was only audited from its first newly observed call; earlier AgentMem usage is unknown.</p>}
-    {audit.contexts.length>0&&<section><strong>App context retrieval</strong><ul>{audit.contexts.map(context=><li key={context.id}><span>{context.role} · {context.purpose} · {context.status==='supplied'?'supplied to model':context.status}</span><small>{auditStamp(context.startedAt)}{context.threadId&&context.turnId?` · turn ${context.turnId}`:''}</small>{context.resultSummary&&<small>{context.resultSummary}</small>}{context.error&&<small className="is-error">{context.error}</small>}</li>)}</ul></section>}
-    {audit.calls.length>0&&<section><strong>Observed MCP calls</strong><ul>{audit.calls.map(call=><li key={call.id}><span>{call.source==='model'?'Model':'App'} · {call.method} · {call.status}</span><small>{call.service?`${call.service.replace('_',' ')} · `:''}{call.operation?`${call.operation} · `:''}{call.role}{call.purpose?` · ${call.purpose}`:''}{call.projectId?` · KB ${call.projectId}`:''}{call.repositoryId?` · repo ${call.repositoryId}`:''}{call.turnId?` · turn ${call.turnId}`:''} · {auditStamp(call.startedAt)}</small>{call.resultSummary&&<small>{call.resultSummary}</small>}{call.error&&<small className="is-error">{call.error}</small>}</li>)}</ul></section>}
-    {!audit.contexts.length&&!audit.calls.length&&<p>No AgentMem context retrieval or tool call was recorded for this pass.</p>}
-  </div>;
-}
-
-const tokenCount=(value:number)=>new Intl.NumberFormat(undefined).format(value);
-const cell=(value:number|null|undefined)=>value===null||value===undefined?'–':tokenCount(value);
-function PassUsagePanel({pass}:{pass:TaskPass}){
-  const usage=pass.usage||{};
-  const roleNames:Record<string,string>={router:'router',direct:'direct answer',simple:'simple implementation',orchestrator:'orchestrator',worker:'worker'};
-  const modelLabel=(role:keyof PassUsage)=>{const models=[...new Set((usage[role]?.groups||[]).map(group=>group.model).filter((model):model is string=>!!model))];return models.length>1?`${models.length} models`:models.length===1?executionModelName(models[0]):undefined;};
-  const expected=(['router','direct','simple','orchestrator','worker'] as (keyof typeof usage)[]).filter(role=>role==='router'?!!pass.routerThreadId:role==='direct'?!!pass.directThreadId:role==='simple'?!!pass.simpleThreadId:role==='orchestrator'?!!pass.orchestratorThreadId:!!pass.workerThreadId||pass.resolution==='delegated');
-  if(!expected.length)return null;
-  const rows=expected.flatMap(role=>{const entry=usage[role];return entry?.tokens&&entry.tokenStatus==='available'?[{role,label:`${modelLabel(role)||'model unavailable'} · ${roleNames[role]}`,tokens:entry.tokens}]:[];});
-  const pending=expected.some(role=>usage[role]?.tokenStatus==='pending');
-  const sumOf=(pick:(tokens:PassTokenUsage)=>number|null)=>{const values=rows.map(row=>pick(row.tokens)).filter((value):value is number=>value!==null);return values.length?tokenCount(values.reduce((sum,value)=>sum+value,0)):'–';};
-  const grandTotal=rows.reduce((sum,row)=>sum+row.tokens.totalTokens,0);
-  return <details className="usage" aria-label={`Usage summary for pass ${pass.index}`}>
-    <summary><span className="usage-label">token usage</span><span className="usage-value">{rows.length?`${tokenCount(grandTotal)} tokens`:pending?'collecting…':'not reported'}</span></summary>
-    {rows.length?<table className="usage-table">
-      <thead><tr><th>model</th><th>input</th><th>cached</th><th>output</th><th>reasoning</th><th>total</th></tr></thead>
-      <tbody>{rows.map(row=><tr key={row.role}><td>{row.label}</td><td>{cell(row.tokens.inputTokens)}</td><td>{cell(row.tokens.cachedInputTokens)}</td><td>{cell(row.tokens.outputTokens)}</td><td>{cell(row.tokens.reasoningOutputTokens)}</td><td>{tokenCount(row.tokens.totalTokens)}</td></tr>)}
-        {rows.length>1&&<tr className="usage-total"><td>total</td><td>{sumOf(tokens=>tokens.inputTokens)}</td><td>{sumOf(tokens=>tokens.cachedInputTokens)}</td><td>{sumOf(tokens=>tokens.outputTokens)}</td><td>{sumOf(tokens=>tokens.reasoningOutputTokens)}</td><td>{tokenCount(grandTotal)}</td></tr>}
-      </tbody>
-    </table>:<p className="usage-empty">No token usage was reported for this pass.</p>}
-  </details>;
-}
-function ForgeApprovalCard({ticket,request,onDecision}:{ticket?:ForgeTicket;request:ApprovalRequest;onDecision:(decision:'accept'|'decline'|'cancel',content?:Record<string,unknown>)=>void}){
-  return <ApprovalCard request={request} onDecision={onDecision} disabledReason={ticket?forgeApprovalResponseReason(ticket,request):'The saved Forge ticket is unavailable. Refresh the session before responding.'}/>;
-}
-function forgeApprovalResponseReason(ticket:ForgeTicket,request:ApprovalRequest){
-  if(ticket.phase==='paused')return 'Forge is paused. Review the saved run and resume the ticket before answering; this request remains pending.';
-  if(ticket.phase==='cancelled'||ticket.phase==='complete')return 'This Forge ticket is cancelled or complete. The saved request cannot receive a response.';
-  if(ticket.phase==='blocked')return `Forge needs reconciliation before this request can be answered${ticket.attentionReason?`: ${ticket.attentionReason}`:''}. Refresh the board and reconcile the saved run.`;
-  if(!['planning','review','running','integrating'].includes(ticket.phase))return 'This request is not attached to a currently actionable Forge run.';
-  const context=request.forgeContext;
-  if(!context||context.ticketId!==ticket.id)return 'This saved request is missing its Forge run identity and cannot be answered.';
-  if(context.targetType==='planning'||context.targetType==='final_review'){
-    const run=ticket.orchestratorRuns.find(row=>row.id===context.targetId&&row.purpose===context.targetType);
-    if(run?.status==='unknown_after_restart')return 'The orchestrator run status is uncertain after restart. Refresh and reconcile the saved run before answering; the request remains pending.';
-    if(!run||ticket.activeOrchestratorRunId!==run.id||run.status!=='running'||run.ownerId!==context.ownerId||run.threadId!==request.threadId||run.turnId!==request.turnId||context.claimToken)return 'This request no longer matches the active orchestrator run and cannot be answered.';
-    return undefined;
-  }
-  if(context.targetType==='worker_attempt'){
-    const attempt=ticket.attempts.find(row=>row.id===context.targetId);
-    if(attempt?.status==='unknown_after_restart'||attempt?.status==='unknown_effect')return 'The worker attempt is uncertain or unreconciled. Refresh and reconcile the saved attempt before answering; the request remains pending.';
-    const active=ticket.workitems.some(row=>row.id===attempt?.taskId&&row.activeAttemptId===attempt.id);
-    if(!attempt||!active||attempt.status!=='claimed'||attempt.claim.ownerId!==context.ownerId||attempt.claim.token!==context.claimToken||attempt.threadId!==request.threadId||attempt.turnId!==request.turnId)return 'This request no longer matches an active worker attempt and cannot be answered.';
-    return undefined;
-  }
-  const run=ticket.integration.runs.find(row=>row.id===context.targetId);
-  if(run?.status==='unknown_after_restart')return 'The integration run status is uncertain after restart. Refresh and reconcile the saved run before answering; the request remains pending.';
-  if(!run||ticket.integration.activeRunId!==run.id||run.status!=='running'||run.ownerId!==context.ownerId||run.threadId!==request.threadId||run.turnId!==request.turnId||context.claimToken)return 'This request no longer matches the active integration run and cannot be answered.';
-  return undefined;
-}
-function ApprovalCard({request,onDecision,disabledReason}:{request:any;onDecision:(decision:'accept'|'decline'|'cancel',content?:Record<string,unknown>)=>void;disabledReason?:string}){const [contentText,setContentText]=useState('{}');const [contentError,setContentError]=useState('');const permission=request.method==='item/permissions/requestApproval';const elicitation=request.method==='mcpServer/elicitation/request';const forgeContext=request.forgeContext;const accept=()=>{if(disabledReason)return;if(!elicitation||request.mode==='url'||!request.requestedSchema){onDecision('accept');return;}try{const value=JSON.parse(contentText||'{}');if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Response must be a JSON object.');onDecision('accept',value as Record<string,unknown>);setContentError('');}catch(error){setContentError(error instanceof Error?error.message:'Enter a valid JSON object.');}};return <section className="approval-card" aria-label={elicitation?'MCP server input request':'Codex approval needed'}><div className="approval-heading"><ShieldCheck size={15}/><strong>{elicitation?'MCP server needs your input':'Approval needed'}</strong><span>{forgeContext?`Forge · ${forgeContext.targetType.replaceAll('_',' ')}`:elicitation?`${request.serverName||'MCP server'} · ${request.mode||'form'}`:permission?'Permission request':request.method.includes('fileChange')?'File change':'Command execution'}</span></div>{(elicitation?request.message:request.reason)&&<p>{elicitation?request.message:request.reason}</p>}{forgeContext&&<div className="approval-meta">Bound to {forgeContext.targetType.replaceAll('_',' ')} run {forgeContext.targetId} · {forgeContext.ownerId}</div>}{disabledReason&&<div className="forge-approval-inactive" role="status">{disabledReason}</div>}{request.url&&elicitation&&<div className="approval-meta">Requested URL: {request.url}</div>}{elicitation&&request.requestedSchema&&<><div className="approval-meta">Requested fields</div><pre className="permission-preview">{JSON.stringify(request.requestedSchema,null,2)}</pre><label className="approval-form-label">Response JSON<textarea disabled={!!disabledReason} value={contentText} onChange={event=>{setContentText(event.target.value);setContentError('');}} spellCheck={false} aria-label="MCP response JSON" /></label>{contentError&&<div role="alert" className="approval-error">{contentError}</div>}</>}{request.command&&<pre>{request.command}</pre>}{request.networkHost&&<div className="approval-meta">Network destination: {request.networkHost} ({request.networkProtocol})</div>}{request.cwd&&<div className="approval-meta">Working directory: {request.cwd}</div>}{request.grantRoot&&<div className="approval-meta">Requested write root: {request.grantRoot}</div>}{permission&&<pre className="permission-preview">{JSON.stringify(request.permissionRequest,null,2)}</pre>}<div className="approval-actions"><button disabled={!!disabledReason} onClick={()=>onDecision('decline')}>Decline</button><button disabled={!!disabledReason} onClick={()=>onDecision('cancel')}>Cancel turn</button><button className="approval-accept" disabled={!!disabledReason} onClick={accept}>{elicitation?'Send response':permission?'Grant requested permissions':'Approve once'}</button></div></section>}
-function Disclosure({title,open,onToggle,children,className}:{title:React.ReactNode;open:boolean;onToggle:()=>void;children:React.ReactNode;className?:string}){return <div className={`disclosure${open?' open':''}${className?` ${className}`:''}`}><button type="button" className="disclosure-head" onClick={onToggle} aria-expanded={open}><strong>{title}</strong><span className="disclosure-toggle" aria-hidden="true">{open?'▾':'▸'}</span></button><div className="disclosure-panel" aria-hidden={!open} inert={!open}><div className="disclosure-panel-inner"><div className="disclosure-content">{children}</div></div></div></div>}
-function AssignmentView({assignment:a}:{assignment:Assignment}){const data:[string,string[]][]=[['Outcome',[a.outcome,a.deliverable]],['Authorized read scope',a.read_scope],['Authorized write scope',a.write_scope],['Constraints',a.constraints],['Acceptance',a.acceptance],['Verification',a.verification],['Escalate when',a.escalation_conditions],['Exclusions',a.exclusions]];return <div className="assignment-grid">{data.map(([label,items])=><div key={label} className="assignment-block"><span>{label}</span><ul>{items.map((x,i)=><li key={i}>{x}</li>)}</ul></div>)}</div>;}
-function RunReceipt({pass:p,taskId}:{pass:TaskPass;taskId:string}){
-  const receipt=p.receipt;
-  return <div className="run-receipt-content">
-    {!receipt?<p className="receipt-unavailable">This pass has no Opnex worker receipt to summarize.</p>:<>
-      <PassGitDiff key={`${taskId}:${p.id}`} taskId={taskId} passId={p.id}/>
-      {p.receiptProvenance?<p className="receipt-provenance">Produced by {p.receiptProvenance.producerRole} · turn {p.receiptProvenance.turnId} · {p.receiptProvenance.artifactRefs.length} artifact references</p>:<p className="receipt-provenance">Producer and turn provenance is unavailable for this historical receipt.</p>}
-      {(p.agentReceipts?.length||0)>1&&<section className="agent-receipt-history"><b>Receipts from artifact-producing turns</b>{p.agentReceipts!.map(record=><details key={`${record.producerRole}:${record.threadId}:${record.turnId}`}><summary>{record.producerRole} · turn {record.turnId} · {record.receipt.status}</summary><p>{record.receipt.result}</p><div><b>Artifact references</b>{list(record.artifactRefs)}</div><div><b>Knowledge and index updates</b>{list(record.receipt.knowledge.updated)}</div></details>)}</section>}
-      {!!p.turnSourceChanges?.length&&<section className="source-turn-audit"><b>Workspace changes verified by artifact turn</b><ul>{p.turnSourceChanges.map(source=><li key={`${source.role}:${source.threadId}:${source.turnId}`}><span>{source.role} · turn {source.turnId} · {source.status}</span><small>{source.changedPaths.length?source.changedPaths.join(', '):source.repositoryRevisionChanged?'Repository revision changed':'No workspace source changes detected'}{source.reason&&` · ${source.reason}`}</small></li>)}</ul></section>}
-      <div className="receipt-change-grid"><div><b>Worker-reported repository changes</b>{list(receipt.changes)}</div><div><b>Knowledge base changes</b>{list(receipt.knowledge?.updated)}</div></div>
-      <div className="receipt-acceptance-grid"><div><b>Acceptance met</b>{list(receipt.acceptance?.met)}</div><div><b>Unmet</b>{list(receipt.acceptance?.unmet)}</div></div>
-      <div className="receipt-verification"><b>Verification</b>{receipt.verification?.length?<ul>{receipt.verification.map((item,index)=><li key={index}><span className={`check-state ${item.result}`}>{item.result==='passed'?'✓':item.result==='failed'?'!':'·'}</span><span>{item.check}{item.evidence&&<small>{item.evidence}</small>}</span></li>)}</ul>:<div className="none">Not reported</div>}</div>
-      {receipt.risks?.length>0&&<div className="receipt-risks"><b>Risks and limits</b>{list(receipt.risks)}</div>}
-      {receipt.decision_required&&<div className="decision-line">Decision required: {receipt.decision_required}</div>}
-    </>}
-  </div>;
-}
-
-function QualityLoopPanel({state,onAction}:{state:NonNullable<TaskPass['qualityLoop']>;onAction?:(action:'accept'|'pause'|'resume')=>void}){
-  if(!state.enabled)return null;
-  const labels:Record<string,string>={awaiting_audit:'Waiting for QA audit',auditing:'GPT-6.1 Terra is auditing',awaiting_corrections:'QA findings need correction',correcting:'Workers are correcting QA findings',complete:'QA audit found no actionable issues',user_accepted:'Known QA findings accepted by user',needs_attention:'QA loop needs attention',paused:'QA loop paused',paused_after_restart:'QA paused when the kernel restarted',cancelled:'QA loop cancelled',disabled:'QA loop off'};
-  const latest=state.rounds[state.rounds.length-1];
-  const findings=latest?.findings||[];
-  const canAccept=!!onAction&&qualityLoopCanAcceptFindings(state,latest?.roundId);
-  const canPause=!!onAction&&['auditing','awaiting_corrections'].includes(state.status);
-  const resumeAction=qualityLoopResumeAction(state);
-  const canResume=!!onAction&&['paused','paused_after_restart'].includes(state.status)&&resumeAction!==undefined;
-  const canRetry=!!onAction&&state.status==='needs_attention'&&resumeAction==='audit';
-  return <section className={`quality-loop-panel ${state.status}`} aria-label="Independent QA loop" data-qa-status={state.status}>
-    <header><Sparkles size={15}/><strong>Independent QA loop</strong><span className={`quality-loop-status ${state.status}`}>{labels[state.status]||state.status}</span></header>
-    <p>Each audit uses gpt-6.1-terra with high reasoning. Findings return to the orchestrator for worker corrections; the independent final receipt review remains separate.</p>
-    {state.terminalReason&&<div className="quality-loop-note">{state.terminalReason}</div>}
-    {qualityCorrectionPlannerInFlight(state.correctionPlanner)&&<div className="quality-loop-note">The correction planner setup or turn is unresolved. Wait for its outcome before resuming or accepting findings.</div>}
-    {state.userAcceptanceNote&&<div className="quality-loop-note">User acceptance: {state.userAcceptanceNote}</div>}
-    {!!state.rounds.length&&<ol className="quality-round-list">{state.rounds.map(round=><li key={round.roundId}>
-      <div><b>Round {round.index}</b><span>{round.resultStatus==='no_actionable_issues'?'No actionable issues':round.resultStatus==='issues_found'?`${round.findings?.length||0} actionable finding(s)`:round.status}</span></div>
-      <small>{round.model} · requested {round.requestedEffort}{round.reportedEffort?` · reported ${round.reportedEffort}`:' · effective effort not reported'} · integration {round.integrationHead.slice(0,12)}</small>
-      {round.error&&<small className="quality-loop-error">{round.error}</small>}
-    </li>)}</ol>}
-    {findings.length>0&&<div className="quality-finding-list">{findings.map(finding=><article key={finding.findingId}>
-      <div><strong>{finding.title}</strong><span className={`quality-severity ${finding.severity}`}>{finding.severity}</span></div>
-      <p>{finding.issue}</p><p><b>Requested fix:</b> {finding.requiredFix}</p>
-      {finding.file&&<code>{finding.file}{finding.line?`:${finding.line}`:''}</code>}
-      <ul>{finding.evidence.map((item,index)=><li key={index}>{item}</li>)}</ul>
-    </article>)}</div>}
-    {onAction&&<div className="quality-loop-actions">
-      {canPause&&<button type="button" onClick={()=>onAction('pause')}>Pause QA</button>}
-      {canResume&&<button type="button" onClick={()=>onAction('resume')}>Resume QA</button>}
-      {canRetry&&<button type="button" onClick={()=>onAction('resume')}>Retry QA audit</button>}
-      {canAccept&&<button type="button" className="accept-findings" onClick={()=>onAction('accept')}>Accept findings and continue to final review</button>}
-    </div>}
-  </section>;
-}
-
-function list(items:string[]=[]){return items.length?<ul>{items.map((v,i)=><li key={i}>{v}</li>)}</ul>:<div className="none">None</div>;}

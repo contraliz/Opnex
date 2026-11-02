@@ -20,7 +20,12 @@ export default defineConfig({
           if (!file.includes('/node_modules/')) return;
           if (/\/node_modules\/(react|react-dom|scheduler)\//.test(file)) return 'vendor-react';
           if (/\/node_modules\/(@codemirror|@lezer)\//.test(file)) return 'vendor-editor';
-          if (/\/node_modules\/(react-markdown|remark-[^/]+|micromark[^/]*|mdast-util-[^/]+|hast-util-[^/]+|rehype-[^/]+|unist-util-[^/]+|vfile[^/]*|unified|bail|trough|devlop|zwitch|ccount|character-entities|decode-named-character-reference|longest-streak|markdown-table|escape-string-regexp|space-separated-tokens|comma-separated-tokens|trim-lines|property-information|html-url-attributes|is-plain-obj)\//.test(file)) return 'vendor-markdown';
+          if (
+            /\/node_modules\/(react-markdown|remark-[^/]+|micromark[^/]*|mdast-util-[^/]+|hast-util-[^/]+|rehype-[^/]+|unist-util-[^/]+|vfile[^/]*|unified|bail|trough|devlop|zwitch|ccount|character-entities|decode-named-character-reference|longest-streak|markdown-table|escape-string-regexp|space-separated-tokens|comma-separated-tokens|trim-lines|property-information|html-url-attributes|is-plain-obj)\//.test(
+              file
+            )
+          )
+            return 'vendor-markdown';
         },
       },
     },
@@ -28,6 +33,12 @@ export default defineConfig({
   test: {
     // Nested Git worktrees and preserved build copies live inside the checkout;
     // running their test suites from the main tree duplicates every test.
-    exclude: [...configDefaults.exclude, '.agents/**', '.local-preserved/**', '.opnex-live-build-*/**', 'tmp/**'],
+    exclude: [
+      ...configDefaults.exclude,
+      '.agents/**',
+      '.local-preserved/**',
+      '.opnex-live-build-*/**',
+      'tmp/**',
+    ],
   },
 });

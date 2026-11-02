@@ -1,67 +1,836 @@
-import type { ForgeExecutionProfile, ForgeKnowledgeBudget, ForgeLimits, ForgeScope, ForgeTicket, ForgeTicketPhase } from '../server/forge-contracts.js';
+import type {
+  ForgeExecutionProfile,
+  ForgeKnowledgeBudget,
+  ForgeLimits,
+  ForgeScope,
+  ForgeTicket,
+  ForgeTicketPhase,
+} from '../server/forge-contracts.js';
 import type { McpServerRegistration } from '../server/mcp-registration.js';
 
-export type Assignment={outcome:string;deliverable:string;read_scope:string[];write_scope:string[];exclusions:string[];constraints:string[];context_refs:string[];skill_refs?:string[];acceptance:string[];verification:string[];ordinary_authority:string[];escalation_conditions:string[];receipt_requirements:string[]};
-export type Receipt={status:'complete'|'incomplete'|'blocked'|'failed';result:string;changes:string[];acceptance:{met:string[];unmet:string[]};verification:{check:string;result:'passed'|'failed'|'not_run';evidence?:string}[];risks:string[];knowledge:{consulted:string[];updated:string[]};decision_required:string|null};
-export type WorkflowRole='router'|'direct'|'simple'|'orchestrator'|'worker';
-export type TaskAttachment={name:string;type:string;size:number;data:string};
-export type Message={id:string;role:'user'|'router'|'direct'|'simple'|'orchestrator'|'worker'|'system';text:string;createdAt:string;passId?:string;attachments?:TaskAttachment[];submissionKind?:'steering';deliveryStatus?:'pending'|'steered'|'unconfirmed'};
-export type WorkspaceGitFile={path:string;status:string;kind:'tracked'|'untracked';additions:number|null;deletions:number|null;binary:boolean;patch?:string;omittedReason?:string};
-export type WorkspaceGitSnapshot={available:boolean;workspaceRoot:string;repositoryRoot?:string;branch?:string;headRevision?:string;capturedAt:string;changes:{path:string;status:string;kind:'tracked'|'untracked'}[];files:WorkspaceGitFile[];diff:string;truncated:boolean;message?:string};
-export type PassGitDiffTurn={threadId:string;turnId:string;role:'simple'|'orchestrator'|'worker';diff:string;capturedAt:string;truncated?:boolean};
-export type PassGitDiff={status:'recorded'|'partial'|'unavailable';source?:'codex-turn-diff';updatedAt?:string;turns?:PassGitDiffTurn[];message?:string};
-export type ActivityRole='direct'|'simple'|'orchestrator'|'worker';
-export type ReasoningSummary={role:ActivityRole;threadId:string;turnId:string;itemId:string;summaryIndex:number;text:string;passId?:string;provider?:string;requestedModel?:string;requestedEffort?:string;effectiveModel?:string;updatedAt?:string};
-export type ReasoningTurn={role:ActivityRole;threadId:string;turnId:string;provider?:string;requestedModel:string;requestedEffort:string;effectiveModel?:string;startedAt?:string;status:'streaming'|'completed'|'interrupted'|'failed'};
-export type LiveActivity={role:ActivityRole;threadId:string;turnId:string;itemId:string;kind:'commentary'|'tool';itemType:string;title:string;text?:string;detail?:string;output?:string;status:'running'|'completed'|'failed'|'interrupted';startedAt:string;updatedAt:string;passId?:string};
-export type PassTokenUsage={totalTokens:number;inputTokens:number;cachedInputTokens:number|null;cacheWriteInputTokens:number|null;outputTokens:number;reasoningOutputTokens:number|null;modelContextWindow:number|null;source:'thread'|'thread-estimate'};
-export type PassUsageGroup={model:string|null;reasoningEffort:string|null;speed:string|null;estimatedCreditsMicros:string;netNewInputTokens:string|null;cachedInputTokens:string|null;inputTokens:string|null;outputTokens:string|null;totalTokens:string|null};
-export type PassAllowanceWindow={sampleCount:number;firstSampledAt:string;lastSampledAt:string;windowDurationMins:number;resetsAt:number;boundariesChanged:boolean};
-export type PassAllowanceUsage={fiveHourPercent:number|null;weeklyPercent:number|null;fiveHourWindow?:PassAllowanceWindow;weeklyWindow?:PassAllowanceWindow};
-export type PassRoleUsage={threadId:string;tokenStatus:'pending'|'available'|'unavailable';tokens?:PassTokenUsage;creditStatus:'pending'|'available'|'unavailable';estimateSource?:'codex-app-server-thread-usage';estimatedCreditsMicros?:string;estimatedUsdMicros?:string|null;allowance?:PassAllowanceUsage;groups?:PassUsageGroup[];updatedAt?:string};
-export type PassUsage=Partial<Record<WorkflowRole,PassRoleUsage>>;
-export type AgentMemAudit={recorded:boolean;coverage?:'full_pass'|'from_first_recorded_call';selectedProjectId:string|null;workspaceRoot:string;identityStatus:'unknown'|'unverified'|'verified'|'mismatch'|'unavailable'|'disabled';verifiedProjectId?:string;verifiedRoot?:string;verifiedRepositoryId?:string;repositories?:{root:string;repositoryId:string;threadId?:string;purpose:string;registeredAt:string}[];modelMcpStatus:'unknown'|'disabled'|'available'|'unavailable'|'no_calls_observed'|'observed';contexts:{id:string;role:ActivityRole;purpose:string;queryHash:string;status:'running'|'retrieved'|'supplied'|'failed'|'disabled'|'interrupted';startedAt:string;updatedAt:string;threadId?:string;turnId?:string;projectId?:string;resultSummary?:string;error?:string}[];calls:{id:string;source:'application'|'model';role:WorkflowRole;method:string;status:'running'|'completed'|'failed'|'interrupted';startedAt:string;updatedAt:string;contextId?:string;purpose?:string;projectId?:string;repositoryId?:string;threadId?:string;turnId?:string;providerEventSequence?:number;service?:'knowledge'|'repository_index'|'unknown';operation?:'read'|'write'|'unknown';resultSummary?:string;error?:string}[]};
-export type ToolCallStatus='started'|'completed'|'failed'|'interrupted';
-export type ToolCallRecord={key:string;identity:{provider:string;agentId:string;threadId:string;turnId:string;callId:string};name:string;type:string;status:ToolCallStatus;sources:('application'|'model')[];firstSeenAt:string;lastSeenAt:string;startedAt?:string;finishedAt?:string;agentRole?:string;summary?:string};
-export type ToolCallLog={schemaVersion:1;total:number;statusCounts:Record<ToolCallStatus,number>;seen:Record<string,ToolCallStatus>;calls:ToolCallRecord[];omittedCount:number};
-export type ReceiptProducerRole='simple'|'worker'|'integrator';
-export type ReceiptProvenance={producerRole:ReceiptProducerRole;threadId:string;turnId:string;recordedAt:string;artifactRefs:string[];origin?:'model_turn'|'application_failure'|'application_status';workerId?:string;teamId?:string;passId?:string};
-export type AgentReceiptRecord=ReceiptProvenance&{receipt:Receipt};
-export type TurnSourceChangeRecord={role:'simple'|'worker';threadId:string;turnId:string;status:'verified'|'unavailable';workspaceRoot:string;baselineCapturedAt:string;completedAt:string;changedPaths:string[];repositoryRevisionChanged:boolean;reason?:string};
-export type DeepSeekExecutionProfile={kind:'deepseek-harness-sdk';provider:string;model:string;nativeReasoningEffort:string};
-export type ExecutionProfile={provider:'codex'|'deepseek';model:string;effort:'low'|'medium'|'high'|'xhigh'|'max'|'ultra';serviceTier?:'priority'};
-export type DeepSeekMcpToolCatalog={status:'not-configured'|'pending'|'ready'|'missing-tools';configuredServerNames:string[];availableServerNames:string[];missingServerNames:string[];toolNames:string[];observedAtSequence?:number};
-export type DeepSeekRuntimeInfo={provider:string;requestedProviderRoute?:string;model:string;requestedReasoningEffort?:string;permissionMode:'read-only'|'workspace-write'|'danger-full-access'|'native-profile';selectedApprovalPolicy:'on-request'|'untrusted'|'never'|'full-access';workspaceRoot:string;writeScope:string[];access:'read-only'|'unrestricted'|'native-profile';filesystemScope:'assignment-instruction-only'|'read-only-preset'|'native-profile';sessionId:string;profileName?:string;configuredMcpServers?:string[];mcpToolCatalog?:DeepSeekMcpToolCatalog;serverInfo:{name:string;version:string};harnessVersion?:string;capabilities:{sessionResume:boolean;workingDirectory:boolean;approvalResponse:boolean;steering:boolean;gracefulSessionCancellation:boolean;cancellation:'process-tree-termination'}};
-export type DeepSeekProviderEventSummary={type:string;sequence?:number;turn?:number;step?:number;status?:string;messageRole?:string;contentBlockTypes?:string[];textCharacters?:number;toolName?:string;toolCallId?:string;sourceEventSequences?:number[];toolError?:boolean;hasError?:boolean;errorCode?:string;dataKeys?:string[];reasonKeys?:string[];reasonKind?:string;reasonErrorName?:string;reasonErrorCode?:string;reasonErrorMessagePresent?:boolean};
-export type DeepSeekPhaseRunState={stage:'execute';sessionId:string;turnId:string;provider:string;model:string;requestedProviderRoute?:string;requestedReasoningEffort?:string;permissionMode:'read-only'|'workspace-write'|'danger-full-access'|'native-profile';approvalPolicy:'on-request'|'untrusted'|'never'|'full-access';workspaceRoot:string;writeScope:string[];access:'read-only'|'unrestricted'|'native-profile';filesystemScope:'assignment-instruction-only'|'read-only-preset'|'native-profile';status:'running'|'completed'|'interrupted'|'failed';startedAt:string;updatedAt:string;profileName?:string;configuredMcpServers?:string[];mcpToolCatalog?:DeepSeekMcpToolCatalog;providerEvents?:DeepSeekProviderEventSummary[];legacyAgentMem?:Record<string,unknown>;serverInfo?:{name:string;version:string};harnessVersion?:string;capabilities?:DeepSeekRuntimeInfo['capabilities'];error?:string};
-export type RecruitmentWorkerState={workerId:string;name:string;step?:string;dependsOn?:string[];status:string;workerStage?:'execute';effort:'high'|'xhigh'|'max';branch?:string;worktreeRoot?:string;assignment:Assignment;receipt?:Receipt;error?:string;threadId?:string;activeTurnId?:string;legacyAgentMem?:Record<string,unknown>;executionProfile?:ExecutionProfile;deepSeekExecution?:DeepSeekExecutionProfile;deepSeekRuntime?:DeepSeekRuntimeInfo;deepSeekPhaseRuns?:DeepSeekPhaseRunState[]};
-export type RecruitmentIntegrationState={status:string;workerStage?:'execute';branch?:string;worktreeRoot?:string;receipt?:Receipt;error?:string;threadId?:string;activeTurnId?:string;legacyAgentMem?:Record<string,unknown>;executionProfile?:ExecutionProfile;deepSeekExecution?:DeepSeekExecutionProfile;deepSeekRuntime?:DeepSeekRuntimeInfo;deepSeekPhaseRuns?:DeepSeekPhaseRunState[]};
-export type RecruitmentTeamState={teamId:string;status:string;mode?:'worktree'|'read_only';canonicalProjectRoot?:string;workers:RecruitmentWorkerState[];workerReceiptBundle?:Array<{workerId:string;name:string;status:string;receipt:Receipt;headCommit?:string|null;producer?:ReceiptProvenance|null}>;integration:RecruitmentIntegrationState;legacyAgentMem?:Record<string,unknown>};
-export type QAFinding={findingId:string;fingerprint:string;title:string;severity:'critical'|'high'|'medium'|'low';issue:string;requiredFix:string;evidence:string[];file?:string;line?:number};
-export type QACorrectionPlannerDispatch={roundId:string;status:'preflight'|'dispatch_unknown'|'active'|'interrupted'|'completed';threadId?:string;turnId?:string};
-export type QAAuditRoundState={roundId:string;index:number;status:'starting'|'auditing'|'completed'|'awaiting_corrections'|'correcting'|'interrupted'|'failed'|'paused_after_restart';createdAt:string;startedAt:string;completedAt?:string;threadId?:string;turnId?:string;model:'gpt-6.1-terra';requestedEffort:'high';reportedModel?:string;reportedEffort?:string;workspaceRoot:string;integrationBranch:string;integrationHead:string;summary?:string;resultStatus?:'issues_found'|'no_actionable_issues';findings?:QAFinding[];findingsFingerprint?:string;teamId?:string;error?:string};
-export type QualityLoopState={enabled:boolean;status:'disabled'|'awaiting_audit'|'auditing'|'awaiting_corrections'|'correcting'|'complete'|'user_accepted'|'needs_attention'|'paused'|'paused_after_restart'|'cancelled';rounds:QAAuditRoundState[];maxRounds:number;terminalReason?:string;userAcceptedAt?:string;userAcceptanceNote?:string;resumeAction?:'audit'|'corrections';correctionPlanner?:QACorrectionPlannerDispatch};
-export type RouteDecision={route:'direct_answer'|'simple_implementation'|'hard_task';effectiveRoute?:'direct_answer'|'simple_implementation'|'hard_task';rule_id:string;justification:string;model:string;effort:string;speed:string;decidedAt:string;fallback?:boolean};
-export type ExecutionEscalation={from:'direct_answer'|'simple_implementation';to:'simple_implementation'|'hard_task';reason:string;completedActions:string[];evidence:string[]};
-export type SavedSkillSnapshot={id:string;revision:string;name:string;description:string;source:string;instructions:string;files:{path:string;size:number}[];role?:WorkflowRole;loadedAt?:string};
-export type SkillSaveRecord={id:string;revision:string;name:string;description:string;source:string;role:string;action:'create'|'update';savedAt:string};
-export type TaskPass={id:string;index:number;createdAt:string;userInput:string;userInputs:string[];userMessageIds:string[];attachments?:TaskAttachment[];selectedSkills?:SavedSkillSnapshot[];loadedSkills?:SavedSkillSnapshot[];savedSkills?:SkillSaveRecord[];toolCalls?:ToolCallLog;toolCallTrackingIssueCount?:number;phase:string;agentmemAudit?:AgentMemAudit;legacyAgentMem?:Record<string,unknown>;receiptProvenance?:ReceiptProvenance;agentReceipts?:AgentReceiptRecord[];turnSourceChanges?:TurnSourceChangeRecord[];recruitmentTeam?:RecruitmentTeamState;recruitmentHistory?:RecruitmentTeamState[];qualityLoop?:QualityLoopState;approvalPolicy?:'on-request'|'untrusted'|'never'|'full-access';executionProfile?:ExecutionProfile;deepSeekExecution?:DeepSeekExecutionProfile;deepSeekConversationStorage?:{mode:'native'|'isolated';directory?:string};mcpServers?:McpServerRegistration[];agentContextVersion?:number;legacyUnassociated?:boolean;routeDecision?:RouteDecision;executionEscalation?:ExecutionEscalation;publicAnswer?:string;assignment?:Assignment;receipt?:Receipt;reviewNote?:string;resolution?:'direct'|'simple'|'delegated';routingNote?:string;error?:string;escalation?:any;reasoningSummaries?:ReasoningSummary[];reasoningTurns?:ReasoningTurn[];liveActivity?:LiveActivity[];usage?:PassUsage;correctionCount:number;workerStage?:'execute';routerThreadId?:string;directThreadId?:string;simpleThreadId?:string;orchestratorThreadId?:string;workerThreadId?:string;activeTurnId?:string;activeRole?:WorkflowRole;processedTurns:string[]};
-export type ForgeApprovalContext={ticketId:string;targetType:'planning'|'final_review'|'worker_attempt'|'integration';targetId:string;ownerId:string;claimToken?:string};
-export type ApprovalRequest={requestId:string|number;method:'item/commandExecution/requestApproval'|'item/fileChange/requestApproval'|'item/permissions/requestApproval'|'mcpServer/elicitation/request';itemId:string;threadId:string;turnId:string;reason?:string;command?:string;cwd?:string;grantRoot?:string;availableDecisions?:string[];kind?:string;networkHost?:string;networkProtocol?:string;permissionRequest?:unknown;serverName?:string;mode?:string;message?:string;requestedSchema?:Record<string,unknown>;url?:string;forgeContext?:ForgeApprovalContext};
-export type GitHubTaskLink={repository:string;branch:string;baseBranch?:string;pullRequestUrl?:string;updatedAt:string};
-export type Task={id:string;sessionType?:'conversation'|'forge';forge?:ForgeTicket;toolCalls?:ToolCallLog;projectId?:string;lastInteractedAt?:string;pinned?:boolean;archived?:boolean;requiresFreshSession?:boolean;legacyAgentMem?:Record<string,unknown>;title:string;phase:string;createdAt:string;updatedAt:string;userRoot:string;githubLink?:GitHubTaskLink;workspaceCommand?:{id:string;mode:'browser'|'github';placement:'side'|'full';url?:string;createdAt:string};messages:Message[];passes?:TaskPass[];currentPassId?:string;routeDecision?:RouteDecision;executionEscalation?:ExecutionEscalation;assignment?:Assignment;receipt?:Receipt;reviewNote?:string;resolution?:'direct'|'simple'|'delegated';allowDirectResponse?:boolean;routingNote?:string;reasoningSummaries?:ReasoningSummary[];reasoningTurns?:ReasoningTurn[];liveActivity?:LiveActivity[];activeModelId?:string;activeEffort?:string;correctionCount:number;workerStage?:'execute';error?:string;escalation?:any;approvalRequests?:ApprovalRequest[];routerThreadId?:string;directThreadId?:string;simpleThreadId?:string;workerThreadId?:string;orchestratorThreadId?:string;activeRole?:WorkflowRole;activeTurnId?:string};
-export type Project={id:string;name:string;projectRoot:string;needsLocation:boolean;pinned:boolean;createdAt:string;updatedAt:string};
-export type Settings={orchestratorModel:string;orchestratorEffort:string;orchestratorServiceTier?:'priority';routerProfile?:ExecutionProfile;fontFamily?:'sans'|'mono';approvalPolicy:'on-request'|'untrusted'|'never'|'full-access';accessMode?:AccessMode;executionProfile?:ExecutionProfile;deepseekProvider?:string;deepseekModel?:string;deepseekReasoningEffort?:string;deepseekConversationStorageMode?:'native'|'isolated';deepseekConversationStorageDirectory?:string;mcpServers?:McpServerRegistration[]};
-export type ForgeAccessMode='read-only'|'workspace-write'|'workspace-write-approval'|'full-access';
-export type AccessMode=ForgeAccessMode;
-export type ForgeTicketCreateRequest={projectId:string;description:string;title?:string;acceptanceCriteria?:string[];scope?:ForgeScope;orchestrator?:{model:string;effort:ForgeTicket['orchestrator']['effort']};accessMode?:ForgeAccessMode;targetBranch?:string;skillIds?:string[];limits?:Partial<ForgeLimits>;knowledgeBudget?:Partial<ForgeKnowledgeBudget>};
-export type { ForgeTicket, ForgeTicketPhase, ForgeExecutionProfile, ForgeKnowledgeBudget, ForgeLimits, ForgeScope };
-export type Runtime={codex:{state:string;error:string;models:{id:string;displayName?:string;efforts:string[];serviceTiers?:string[]}[];workerAvailable:boolean};deepseekConversationStorage?:{defaultHome:string;nativeHome:string}};
-export type BrowserAnnotation={url:string;title:string;target:string;selectedText:string};
-export type EmbeddedBrowserTab={id:string;url:string;title:string;pane:'main'|'side'|'chat'|'hidden';loading:boolean;commenting?:boolean;workspaceId?:string;canGoBack?:boolean;canGoForward?:boolean;failure?:{code:number;description:string}};
-export type BrowserWorkspaceBounds={x:number;y:number;width:number;height:number;annotationHeight?:number}|null;
-export type BrowserWorkspaceNavigation='back'|'forward'|'reload'|{url:string};
-export type EmbeddedBrowserBridge={list:()=>Promise<EmbeddedBrowserTab[]>;open:(url:string,pane?:'main'|'side'|'chat')=>Promise<EmbeddedBrowserTab[]>;select:(id:string,pane?:'main'|'side'|'chat')=>Promise<EmbeddedBrowserTab[]>;openSide:(id:string)=>Promise<EmbeddedBrowserTab[]>;openMain:(id:string)=>Promise<EmbeddedBrowserTab[]>;openChat:(id:string)=>Promise<EmbeddedBrowserTab[]>;undock:(id:string)=>Promise<EmbeddedBrowserTab[]>;close:(id:string)=>Promise<EmbeddedBrowserTab[]>;navigate:(id:string,action:'back'|'forward'|'reload')=>Promise<EmbeddedBrowserTab[]>;setCommenting:(id:string,enabled:boolean)=>Promise<EmbeddedBrowserTab[]>;annotationOverlay:(id:string,visible:boolean)=>Promise<EmbeddedBrowserTab[]>;setBounds:(bounds:{main:{x:number;y:number;width:number;height:number}|null;side:{x:number;y:number;width:number;height:number}|null;chat:{x:number;y:number;width:number;height:number}|null})=>Promise<void>;hide:()=>Promise<void>;clearData:()=>Promise<boolean>;workspaceGet:(workspaceId:string)=>Promise<EmbeddedBrowserTab|null>;workspaceOpen:(workspaceId:string,url:string)=>Promise<EmbeddedBrowserTab>;workspaceRelease:(workspaceId:string)=>Promise<void>;workspaceSetBounds:(workspaceId:string,bounds:BrowserWorkspaceBounds,active:boolean)=>Promise<void>;workspaceNavigate:(workspaceId:string,navigation:BrowserWorkspaceNavigation)=>Promise<EmbeddedBrowserTab>;workspaceSetCommenting:(workspaceId:string,enabled:boolean)=>Promise<void>;workspaceAnnotationOverlay:(workspaceId:string,visible:boolean)=>Promise<void>;onEvent:(callback:(event:{type:string;tabs:EmbeddedBrowserTab[];tab?:{id:string;url:string;title:string;workspaceId?:string};workspaceId?:string;url?:string;annotation?:BrowserAnnotation})=>void)=>()=>void};
-export type OpnexDesktopBridge={platform:string;quit?:()=>Promise<void>;windowControls?:{minimize:()=>Promise<void>;toggleMaximize:()=>Promise<boolean>;close:()=>Promise<void>;onState:(callback:(maximized:boolean)=>void)=>()=>void};browser:EmbeddedBrowserBridge;openCodexThread:(threadId:string)=>Promise<boolean>};
-declare global{interface Window{opnexDesktop?:OpnexDesktopBridge;pseudoharnessDesktop?:OpnexDesktopBridge}}
-export type AppState={version:number;revision?:number;settings:Settings;tasks:Task[];activeTaskId:string|null;projects:Project[];selectedProjectId:string|null;expandedProjectIds:string[]};
+export type Assignment = {
+  outcome: string;
+  deliverable: string;
+  read_scope: string[];
+  write_scope: string[];
+  exclusions: string[];
+  constraints: string[];
+  context_refs: string[];
+  skill_refs?: string[];
+  acceptance: string[];
+  verification: string[];
+  ordinary_authority: string[];
+  escalation_conditions: string[];
+  receipt_requirements: string[];
+};
+export type Receipt = {
+  status: 'complete' | 'incomplete' | 'blocked' | 'failed';
+  result: string;
+  changes: string[];
+  acceptance: { met: string[]; unmet: string[] };
+  verification: { check: string; result: 'passed' | 'failed' | 'not_run'; evidence?: string }[];
+  risks: string[];
+  knowledge: { consulted: string[]; updated: string[] };
+  decision_required: string | null;
+};
+export type WorkflowRole = 'router' | 'direct' | 'simple' | 'orchestrator' | 'worker';
+export type TaskAttachment = { name: string; type: string; size: number; data: string };
+export type Message = {
+  id: string;
+  role: 'user' | 'router' | 'direct' | 'simple' | 'orchestrator' | 'worker' | 'system';
+  text: string;
+  createdAt: string;
+  passId?: string;
+  attachments?: TaskAttachment[];
+  submissionKind?: 'steering';
+  deliveryStatus?: 'pending' | 'steered' | 'unconfirmed';
+};
+export type WorkspaceGitFile = {
+  path: string;
+  status: string;
+  kind: 'tracked' | 'untracked';
+  additions: number | null;
+  deletions: number | null;
+  binary: boolean;
+  patch?: string;
+  omittedReason?: string;
+};
+export type WorkspaceGitSnapshot = {
+  available: boolean;
+  workspaceRoot: string;
+  repositoryRoot?: string;
+  branch?: string;
+  headRevision?: string;
+  capturedAt: string;
+  changes: { path: string; status: string; kind: 'tracked' | 'untracked' }[];
+  files: WorkspaceGitFile[];
+  diff: string;
+  truncated: boolean;
+  message?: string;
+};
+export type PassGitDiffTurn = {
+  threadId: string;
+  turnId: string;
+  role: 'simple' | 'orchestrator' | 'worker';
+  diff: string;
+  capturedAt: string;
+  truncated?: boolean;
+};
+export type PassGitDiff = {
+  status: 'recorded' | 'partial' | 'unavailable';
+  source?: 'codex-turn-diff';
+  updatedAt?: string;
+  turns?: PassGitDiffTurn[];
+  message?: string;
+};
+export type ActivityRole = 'direct' | 'simple' | 'orchestrator' | 'worker';
+export type ReasoningSummary = {
+  role: ActivityRole;
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  summaryIndex: number;
+  text: string;
+  passId?: string;
+  provider?: string;
+  requestedModel?: string;
+  requestedEffort?: string;
+  effectiveModel?: string;
+  updatedAt?: string;
+};
+export type ReasoningTurn = {
+  role: ActivityRole;
+  threadId: string;
+  turnId: string;
+  provider?: string;
+  requestedModel: string;
+  requestedEffort: string;
+  effectiveModel?: string;
+  startedAt?: string;
+  status: 'streaming' | 'completed' | 'interrupted' | 'failed';
+};
+export type LiveActivity = {
+  role: ActivityRole;
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  kind: 'commentary' | 'tool';
+  itemType: string;
+  title: string;
+  text?: string;
+  detail?: string;
+  output?: string;
+  status: 'running' | 'completed' | 'failed' | 'interrupted';
+  startedAt: string;
+  updatedAt: string;
+  passId?: string;
+};
+export type PassTokenUsage = {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number | null;
+  cacheWriteInputTokens: number | null;
+  outputTokens: number;
+  reasoningOutputTokens: number | null;
+  modelContextWindow: number | null;
+  source: 'thread' | 'thread-estimate';
+};
+export type PassUsageGroup = {
+  model: string | null;
+  reasoningEffort: string | null;
+  speed: string | null;
+  estimatedCreditsMicros: string;
+  netNewInputTokens: string | null;
+  cachedInputTokens: string | null;
+  inputTokens: string | null;
+  outputTokens: string | null;
+  totalTokens: string | null;
+};
+export type PassAllowanceWindow = {
+  sampleCount: number;
+  firstSampledAt: string;
+  lastSampledAt: string;
+  windowDurationMins: number;
+  resetsAt: number;
+  boundariesChanged: boolean;
+};
+export type PassAllowanceUsage = {
+  fiveHourPercent: number | null;
+  weeklyPercent: number | null;
+  fiveHourWindow?: PassAllowanceWindow;
+  weeklyWindow?: PassAllowanceWindow;
+};
+export type PassRoleUsage = {
+  threadId: string;
+  tokenStatus: 'pending' | 'available' | 'unavailable';
+  tokens?: PassTokenUsage;
+  creditStatus: 'pending' | 'available' | 'unavailable';
+  estimateSource?: 'codex-app-server-thread-usage';
+  estimatedCreditsMicros?: string;
+  estimatedUsdMicros?: string | null;
+  allowance?: PassAllowanceUsage;
+  groups?: PassUsageGroup[];
+  updatedAt?: string;
+};
+export type PassUsage = Partial<Record<WorkflowRole, PassRoleUsage>>;
+export type AgentMemAudit = {
+  recorded: boolean;
+  coverage?: 'full_pass' | 'from_first_recorded_call';
+  selectedProjectId: string | null;
+  workspaceRoot: string;
+  identityStatus: 'unknown' | 'unverified' | 'verified' | 'mismatch' | 'unavailable' | 'disabled';
+  verifiedProjectId?: string;
+  verifiedRoot?: string;
+  verifiedRepositoryId?: string;
+  repositories?: {
+    root: string;
+    repositoryId: string;
+    threadId?: string;
+    purpose: string;
+    registeredAt: string;
+  }[];
+  modelMcpStatus:
+    'unknown' | 'disabled' | 'available' | 'unavailable' | 'no_calls_observed' | 'observed';
+  contexts: {
+    id: string;
+    role: ActivityRole;
+    purpose: string;
+    queryHash: string;
+    status: 'running' | 'retrieved' | 'supplied' | 'failed' | 'disabled' | 'interrupted';
+    startedAt: string;
+    updatedAt: string;
+    threadId?: string;
+    turnId?: string;
+    projectId?: string;
+    resultSummary?: string;
+    error?: string;
+  }[];
+  calls: {
+    id: string;
+    source: 'application' | 'model';
+    role: WorkflowRole;
+    method: string;
+    status: 'running' | 'completed' | 'failed' | 'interrupted';
+    startedAt: string;
+    updatedAt: string;
+    contextId?: string;
+    purpose?: string;
+    projectId?: string;
+    repositoryId?: string;
+    threadId?: string;
+    turnId?: string;
+    providerEventSequence?: number;
+    service?: 'knowledge' | 'repository_index' | 'unknown';
+    operation?: 'read' | 'write' | 'unknown';
+    resultSummary?: string;
+    error?: string;
+  }[];
+};
+export type ToolCallStatus = 'started' | 'completed' | 'failed' | 'interrupted';
+export type ToolCallRecord = {
+  key: string;
+  identity: { provider: string; agentId: string; threadId: string; turnId: string; callId: string };
+  name: string;
+  type: string;
+  status: ToolCallStatus;
+  sources: ('application' | 'model')[];
+  firstSeenAt: string;
+  lastSeenAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  agentRole?: string;
+  summary?: string;
+};
+export type ToolCallLog = {
+  schemaVersion: 1;
+  total: number;
+  statusCounts: Record<ToolCallStatus, number>;
+  seen: Record<string, ToolCallStatus>;
+  calls: ToolCallRecord[];
+  omittedCount: number;
+};
+export type ReceiptProducerRole = 'simple' | 'worker' | 'integrator';
+export type ReceiptProvenance = {
+  producerRole: ReceiptProducerRole;
+  threadId: string;
+  turnId: string;
+  recordedAt: string;
+  artifactRefs: string[];
+  origin?: 'model_turn' | 'application_failure' | 'application_status';
+  workerId?: string;
+  teamId?: string;
+  passId?: string;
+};
+export type AgentReceiptRecord = ReceiptProvenance & { receipt: Receipt };
+export type TurnSourceChangeRecord = {
+  role: 'simple' | 'worker';
+  threadId: string;
+  turnId: string;
+  status: 'verified' | 'unavailable';
+  workspaceRoot: string;
+  baselineCapturedAt: string;
+  completedAt: string;
+  changedPaths: string[];
+  repositoryRevisionChanged: boolean;
+  reason?: string;
+};
+export type DeepSeekExecutionProfile = {
+  kind: 'deepseek-harness-sdk';
+  provider: string;
+  model: string;
+  nativeReasoningEffort: string;
+};
+export type ExecutionProfile = {
+  provider: 'codex' | 'deepseek';
+  model: string;
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+  serviceTier?: 'priority';
+};
+export type DeepSeekMcpToolCatalog = {
+  status: 'not-configured' | 'pending' | 'ready' | 'missing-tools';
+  configuredServerNames: string[];
+  availableServerNames: string[];
+  missingServerNames: string[];
+  toolNames: string[];
+  observedAtSequence?: number;
+};
+export type DeepSeekRuntimeInfo = {
+  provider: string;
+  requestedProviderRoute?: string;
+  model: string;
+  requestedReasoningEffort?: string;
+  permissionMode: 'read-only' | 'workspace-write' | 'danger-full-access' | 'native-profile';
+  selectedApprovalPolicy: 'on-request' | 'untrusted' | 'never' | 'full-access';
+  workspaceRoot: string;
+  writeScope: string[];
+  access: 'read-only' | 'unrestricted' | 'native-profile';
+  filesystemScope: 'assignment-instruction-only' | 'read-only-preset' | 'native-profile';
+  sessionId: string;
+  profileName?: string;
+  configuredMcpServers?: string[];
+  mcpToolCatalog?: DeepSeekMcpToolCatalog;
+  serverInfo: { name: string; version: string };
+  harnessVersion?: string;
+  capabilities: {
+    sessionResume: boolean;
+    workingDirectory: boolean;
+    approvalResponse: boolean;
+    steering: boolean;
+    gracefulSessionCancellation: boolean;
+    cancellation: 'process-tree-termination';
+  };
+};
+export type DeepSeekProviderEventSummary = {
+  type: string;
+  sequence?: number;
+  turn?: number;
+  step?: number;
+  status?: string;
+  messageRole?: string;
+  contentBlockTypes?: string[];
+  textCharacters?: number;
+  toolName?: string;
+  toolCallId?: string;
+  sourceEventSequences?: number[];
+  toolError?: boolean;
+  hasError?: boolean;
+  errorCode?: string;
+  dataKeys?: string[];
+  reasonKeys?: string[];
+  reasonKind?: string;
+  reasonErrorName?: string;
+  reasonErrorCode?: string;
+  reasonErrorMessagePresent?: boolean;
+};
+export type DeepSeekPhaseRunState = {
+  stage: 'execute';
+  sessionId: string;
+  turnId: string;
+  provider: string;
+  model: string;
+  requestedProviderRoute?: string;
+  requestedReasoningEffort?: string;
+  permissionMode: 'read-only' | 'workspace-write' | 'danger-full-access' | 'native-profile';
+  approvalPolicy: 'on-request' | 'untrusted' | 'never' | 'full-access';
+  workspaceRoot: string;
+  writeScope: string[];
+  access: 'read-only' | 'unrestricted' | 'native-profile';
+  filesystemScope: 'assignment-instruction-only' | 'read-only-preset' | 'native-profile';
+  status: 'running' | 'completed' | 'interrupted' | 'failed';
+  startedAt: string;
+  updatedAt: string;
+  profileName?: string;
+  configuredMcpServers?: string[];
+  mcpToolCatalog?: DeepSeekMcpToolCatalog;
+  providerEvents?: DeepSeekProviderEventSummary[];
+  legacyAgentMem?: Record<string, unknown>;
+  serverInfo?: { name: string; version: string };
+  harnessVersion?: string;
+  capabilities?: DeepSeekRuntimeInfo['capabilities'];
+  error?: string;
+};
+export type RecruitmentWorkerState = {
+  workerId: string;
+  name: string;
+  step?: string;
+  dependsOn?: string[];
+  status: string;
+  workerStage?: 'execute';
+  effort: 'high' | 'xhigh' | 'max';
+  branch?: string;
+  worktreeRoot?: string;
+  assignment: Assignment;
+  receipt?: Receipt;
+  error?: string;
+  threadId?: string;
+  activeTurnId?: string;
+  legacyAgentMem?: Record<string, unknown>;
+  executionProfile?: ExecutionProfile;
+  deepSeekExecution?: DeepSeekExecutionProfile;
+  deepSeekRuntime?: DeepSeekRuntimeInfo;
+  deepSeekPhaseRuns?: DeepSeekPhaseRunState[];
+};
+export type RecruitmentIntegrationState = {
+  status: string;
+  workerStage?: 'execute';
+  branch?: string;
+  worktreeRoot?: string;
+  receipt?: Receipt;
+  error?: string;
+  threadId?: string;
+  activeTurnId?: string;
+  legacyAgentMem?: Record<string, unknown>;
+  executionProfile?: ExecutionProfile;
+  deepSeekExecution?: DeepSeekExecutionProfile;
+  deepSeekRuntime?: DeepSeekRuntimeInfo;
+  deepSeekPhaseRuns?: DeepSeekPhaseRunState[];
+};
+export type RecruitmentTeamState = {
+  teamId: string;
+  status: string;
+  mode?: 'worktree' | 'read_only';
+  canonicalProjectRoot?: string;
+  workers: RecruitmentWorkerState[];
+  workerReceiptBundle?: Array<{
+    workerId: string;
+    name: string;
+    status: string;
+    receipt: Receipt;
+    headCommit?: string | null;
+    producer?: ReceiptProvenance | null;
+  }>;
+  integration: RecruitmentIntegrationState;
+  legacyAgentMem?: Record<string, unknown>;
+};
+export type QAFinding = {
+  findingId: string;
+  fingerprint: string;
+  title: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  issue: string;
+  requiredFix: string;
+  evidence: string[];
+  file?: string;
+  line?: number;
+};
+export type QACorrectionPlannerDispatch = {
+  roundId: string;
+  status: 'preflight' | 'dispatch_unknown' | 'active' | 'interrupted' | 'completed';
+  threadId?: string;
+  turnId?: string;
+};
+export type QAAuditRoundState = {
+  roundId: string;
+  index: number;
+  status:
+    | 'starting'
+    | 'auditing'
+    | 'completed'
+    | 'awaiting_corrections'
+    | 'correcting'
+    | 'interrupted'
+    | 'failed'
+    | 'paused_after_restart';
+  createdAt: string;
+  startedAt: string;
+  completedAt?: string;
+  threadId?: string;
+  turnId?: string;
+  model: 'gpt-6.1-terra';
+  requestedEffort: 'high';
+  reportedModel?: string;
+  reportedEffort?: string;
+  workspaceRoot: string;
+  integrationBranch: string;
+  integrationHead: string;
+  summary?: string;
+  resultStatus?: 'issues_found' | 'no_actionable_issues';
+  findings?: QAFinding[];
+  findingsFingerprint?: string;
+  teamId?: string;
+  error?: string;
+};
+export type QualityLoopState = {
+  enabled: boolean;
+  status:
+    | 'disabled'
+    | 'awaiting_audit'
+    | 'auditing'
+    | 'awaiting_corrections'
+    | 'correcting'
+    | 'complete'
+    | 'user_accepted'
+    | 'needs_attention'
+    | 'paused'
+    | 'paused_after_restart'
+    | 'cancelled';
+  rounds: QAAuditRoundState[];
+  maxRounds: number;
+  terminalReason?: string;
+  userAcceptedAt?: string;
+  userAcceptanceNote?: string;
+  resumeAction?: 'audit' | 'corrections';
+  correctionPlanner?: QACorrectionPlannerDispatch;
+};
+export type RouteDecision = {
+  route: 'direct_answer' | 'simple_implementation' | 'hard_task';
+  effectiveRoute?: 'direct_answer' | 'simple_implementation' | 'hard_task';
+  rule_id: string;
+  justification: string;
+  model: string;
+  effort: string;
+  speed: string;
+  decidedAt: string;
+  fallback?: boolean;
+};
+export type ExecutionEscalation = {
+  from: 'direct_answer' | 'simple_implementation';
+  to: 'simple_implementation' | 'hard_task';
+  reason: string;
+  completedActions: string[];
+  evidence: string[];
+};
+export type SavedSkillSnapshot = {
+  id: string;
+  revision: string;
+  name: string;
+  description: string;
+  source: string;
+  instructions: string;
+  files: { path: string; size: number }[];
+  role?: WorkflowRole;
+  loadedAt?: string;
+};
+export type SkillSaveRecord = {
+  id: string;
+  revision: string;
+  name: string;
+  description: string;
+  source: string;
+  role: string;
+  action: 'create' | 'update';
+  savedAt: string;
+};
+export type TaskPass = {
+  id: string;
+  index: number;
+  createdAt: string;
+  userInput: string;
+  userInputs: string[];
+  userMessageIds: string[];
+  attachments?: TaskAttachment[];
+  selectedSkills?: SavedSkillSnapshot[];
+  loadedSkills?: SavedSkillSnapshot[];
+  savedSkills?: SkillSaveRecord[];
+  toolCalls?: ToolCallLog;
+  toolCallTrackingIssueCount?: number;
+  phase: string;
+  agentmemAudit?: AgentMemAudit;
+  legacyAgentMem?: Record<string, unknown>;
+  receiptProvenance?: ReceiptProvenance;
+  agentReceipts?: AgentReceiptRecord[];
+  turnSourceChanges?: TurnSourceChangeRecord[];
+  recruitmentTeam?: RecruitmentTeamState;
+  recruitmentHistory?: RecruitmentTeamState[];
+  qualityLoop?: QualityLoopState;
+  approvalPolicy?: 'on-request' | 'untrusted' | 'never' | 'full-access';
+  executionProfile?: ExecutionProfile;
+  deepSeekExecution?: DeepSeekExecutionProfile;
+  deepSeekConversationStorage?: { mode: 'native' | 'isolated'; directory?: string };
+  mcpServers?: McpServerRegistration[];
+  agentContextVersion?: number;
+  legacyUnassociated?: boolean;
+  routeDecision?: RouteDecision;
+  executionEscalation?: ExecutionEscalation;
+  publicAnswer?: string;
+  assignment?: Assignment;
+  receipt?: Receipt;
+  reviewNote?: string;
+  resolution?: 'direct' | 'simple' | 'delegated';
+  routingNote?: string;
+  error?: string;
+  escalation?: any;
+  reasoningSummaries?: ReasoningSummary[];
+  reasoningTurns?: ReasoningTurn[];
+  liveActivity?: LiveActivity[];
+  usage?: PassUsage;
+  correctionCount: number;
+  workerStage?: 'execute';
+  routerThreadId?: string;
+  directThreadId?: string;
+  simpleThreadId?: string;
+  orchestratorThreadId?: string;
+  workerThreadId?: string;
+  activeTurnId?: string;
+  activeRole?: WorkflowRole;
+  processedTurns: string[];
+};
+export type ForgeApprovalContext = {
+  ticketId: string;
+  targetType: 'planning' | 'final_review' | 'worker_attempt' | 'integration';
+  targetId: string;
+  ownerId: string;
+  claimToken?: string;
+};
+export type ApprovalRequest = {
+  requestId: string | number;
+  method:
+    | 'item/commandExecution/requestApproval'
+    | 'item/fileChange/requestApproval'
+    | 'item/permissions/requestApproval'
+    | 'mcpServer/elicitation/request';
+  itemId: string;
+  threadId: string;
+  turnId: string;
+  reason?: string;
+  command?: string;
+  cwd?: string;
+  grantRoot?: string;
+  availableDecisions?: string[];
+  kind?: string;
+  networkHost?: string;
+  networkProtocol?: string;
+  permissionRequest?: unknown;
+  serverName?: string;
+  mode?: string;
+  message?: string;
+  requestedSchema?: Record<string, unknown>;
+  url?: string;
+  forgeContext?: ForgeApprovalContext;
+};
+export type GitHubTaskLink = {
+  repository: string;
+  branch: string;
+  baseBranch?: string;
+  pullRequestUrl?: string;
+  updatedAt: string;
+};
+export type Task = {
+  id: string;
+  sessionType?: 'conversation' | 'forge';
+  forge?: ForgeTicket;
+  toolCalls?: ToolCallLog;
+  projectId?: string;
+  lastInteractedAt?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  requiresFreshSession?: boolean;
+  legacyAgentMem?: Record<string, unknown>;
+  title: string;
+  phase: string;
+  createdAt: string;
+  updatedAt: string;
+  userRoot: string;
+  githubLink?: GitHubTaskLink;
+  workspaceCommand?: {
+    id: string;
+    mode: 'browser' | 'github';
+    placement: 'side' | 'full';
+    url?: string;
+    createdAt: string;
+  };
+  messages: Message[];
+  passes?: TaskPass[];
+  currentPassId?: string;
+  routeDecision?: RouteDecision;
+  executionEscalation?: ExecutionEscalation;
+  assignment?: Assignment;
+  receipt?: Receipt;
+  reviewNote?: string;
+  resolution?: 'direct' | 'simple' | 'delegated';
+  allowDirectResponse?: boolean;
+  routingNote?: string;
+  reasoningSummaries?: ReasoningSummary[];
+  reasoningTurns?: ReasoningTurn[];
+  liveActivity?: LiveActivity[];
+  activeModelId?: string;
+  activeEffort?: string;
+  correctionCount: number;
+  workerStage?: 'execute';
+  error?: string;
+  escalation?: any;
+  approvalRequests?: ApprovalRequest[];
+  routerThreadId?: string;
+  directThreadId?: string;
+  simpleThreadId?: string;
+  workerThreadId?: string;
+  orchestratorThreadId?: string;
+  activeRole?: WorkflowRole;
+  activeTurnId?: string;
+};
+export type Project = {
+  id: string;
+  name: string;
+  projectRoot: string;
+  needsLocation: boolean;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+export type Settings = {
+  orchestratorModel: string;
+  orchestratorEffort: string;
+  orchestratorServiceTier?: 'priority';
+  routerProfile?: ExecutionProfile;
+  fontFamily?: 'sans' | 'mono';
+  approvalPolicy: 'on-request' | 'untrusted' | 'never' | 'full-access';
+  accessMode?: AccessMode;
+  executionProfile?: ExecutionProfile;
+  deepseekProvider?: string;
+  deepseekModel?: string;
+  deepseekReasoningEffort?: string;
+  deepseekConversationStorageMode?: 'native' | 'isolated';
+  deepseekConversationStorageDirectory?: string;
+  mcpServers?: McpServerRegistration[];
+};
+export type ForgeAccessMode =
+  'read-only' | 'workspace-write' | 'workspace-write-approval' | 'full-access';
+export type AccessMode = ForgeAccessMode;
+export type ForgeTicketCreateRequest = {
+  projectId: string;
+  description: string;
+  title?: string;
+  acceptanceCriteria?: string[];
+  scope?: ForgeScope;
+  orchestrator?: { model: string; effort: ForgeTicket['orchestrator']['effort'] };
+  accessMode?: ForgeAccessMode;
+  targetBranch?: string;
+  skillIds?: string[];
+  limits?: Partial<ForgeLimits>;
+  knowledgeBudget?: Partial<ForgeKnowledgeBudget>;
+};
+export type {
+  ForgeTicket,
+  ForgeTicketPhase,
+  ForgeExecutionProfile,
+  ForgeKnowledgeBudget,
+  ForgeLimits,
+  ForgeScope,
+};
+export type Runtime = {
+  codex: {
+    state: string;
+    error: string;
+    models: { id: string; displayName?: string; efforts: string[]; serviceTiers?: string[] }[];
+    workerAvailable: boolean;
+  };
+  deepseekConversationStorage?: { defaultHome: string; nativeHome: string };
+};
+export type BrowserAnnotation = {
+  url: string;
+  title: string;
+  target: string;
+  selectedText: string;
+};
+export type EmbeddedBrowserTab = {
+  id: string;
+  url: string;
+  title: string;
+  pane: 'main' | 'side' | 'chat' | 'hidden';
+  loading: boolean;
+  commenting?: boolean;
+  workspaceId?: string;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  failure?: { code: number; description: string };
+};
+export type BrowserWorkspaceBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  annotationHeight?: number;
+} | null;
+export type BrowserWorkspaceNavigation = 'back' | 'forward' | 'reload' | { url: string };
+export type EmbeddedBrowserBridge = {
+  list: () => Promise<EmbeddedBrowserTab[]>;
+  open: (url: string, pane?: 'main' | 'side' | 'chat') => Promise<EmbeddedBrowserTab[]>;
+  select: (id: string, pane?: 'main' | 'side' | 'chat') => Promise<EmbeddedBrowserTab[]>;
+  openSide: (id: string) => Promise<EmbeddedBrowserTab[]>;
+  openMain: (id: string) => Promise<EmbeddedBrowserTab[]>;
+  openChat: (id: string) => Promise<EmbeddedBrowserTab[]>;
+  undock: (id: string) => Promise<EmbeddedBrowserTab[]>;
+  close: (id: string) => Promise<EmbeddedBrowserTab[]>;
+  navigate: (id: string, action: 'back' | 'forward' | 'reload') => Promise<EmbeddedBrowserTab[]>;
+  setCommenting: (id: string, enabled: boolean) => Promise<EmbeddedBrowserTab[]>;
+  annotationOverlay: (id: string, visible: boolean) => Promise<EmbeddedBrowserTab[]>;
+  setBounds: (bounds: {
+    main: { x: number; y: number; width: number; height: number } | null;
+    side: { x: number; y: number; width: number; height: number } | null;
+    chat: { x: number; y: number; width: number; height: number } | null;
+  }) => Promise<void>;
+  hide: () => Promise<void>;
+  clearData: () => Promise<boolean>;
+  workspaceGet: (workspaceId: string) => Promise<EmbeddedBrowserTab | null>;
+  workspaceOpen: (workspaceId: string, url: string) => Promise<EmbeddedBrowserTab>;
+  workspaceRelease: (workspaceId: string) => Promise<void>;
+  workspaceSetBounds: (
+    workspaceId: string,
+    bounds: BrowserWorkspaceBounds,
+    active: boolean
+  ) => Promise<void>;
+  workspaceNavigate: (
+    workspaceId: string,
+    navigation: BrowserWorkspaceNavigation
+  ) => Promise<EmbeddedBrowserTab>;
+  workspaceSetCommenting: (workspaceId: string, enabled: boolean) => Promise<void>;
+  workspaceAnnotationOverlay: (workspaceId: string, visible: boolean) => Promise<void>;
+  onEvent: (
+    callback: (event: {
+      type: string;
+      tabs: EmbeddedBrowserTab[];
+      tab?: { id: string; url: string; title: string; workspaceId?: string };
+      workspaceId?: string;
+      url?: string;
+      annotation?: BrowserAnnotation;
+    }) => void
+  ) => () => void;
+};
+export type OpnexDesktopBridge = {
+  platform: string;
+  quit?: () => Promise<void>;
+  windowControls?: {
+    minimize: () => Promise<void>;
+    toggleMaximize: () => Promise<boolean>;
+    close: () => Promise<void>;
+    onState: (callback: (maximized: boolean) => void) => () => void;
+  };
+  browser: EmbeddedBrowserBridge;
+  openCodexThread: (threadId: string) => Promise<boolean>;
+};
+declare global {
+  interface Window {
+    opnexDesktop?: OpnexDesktopBridge;
+    pseudoharnessDesktop?: OpnexDesktopBridge;
+  }
+}
+export type AppState = {
+  version: number;
+  revision?: number;
+  settings: Settings;
+  tasks: Task[];
+  activeTaskId: string | null;
+  projects: Project[];
+  selectedProjectId: string | null;
+  expandedProjectIds: string[];
+};
