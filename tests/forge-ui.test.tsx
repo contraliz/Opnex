@@ -130,7 +130,7 @@ beforeEach(()=>{
   (globalThis as any).EventSource=class{onmessage:any;onerror:any;constructor(){eventSource=this;}close(){}};
   mockApi.bootstrap.mockImplementation(async()=>({...snapshot(),csrf:'test'}));mockWorkspaceApi();
 });
-afterEach(()=>{cleanup();delete (window as any).opnexDesktop;delete (window as any).pseudoharnessDesktop;});
+afterEach(()=>{cleanup();delete (window as any).opnexDesktop;});
 
 describe('Forge session creation',()=>{
   it('keeps Conversation as the default and creates a separate workspace-owned Forge draft',async()=>{

@@ -53,7 +53,7 @@ describe('DeepSeek Harness SDK worker boundary', () => {
 
   it('builds a shell-free SDK command from a verified Windows app installation root', async () => {
     if (process.platform !== 'win32') return;
-    const root = await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-dsh-launch-'));
+    const root = await mkdtemp(path.join(os.tmpdir(), 'opnex-dsh-launch-'));
     try {
       const appResources = path.join(root, 'resources');
       await mkdir(appResources, { recursive: true });
@@ -162,7 +162,7 @@ describe('DeepSeek Harness SDK worker boundary', () => {
   });
 
   it('reports only session-observed MCP tool names and preserves tool call/result provenance', async () => {
-    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['project_notes', 'pseudoharness_skills']));
+    const runtime = new DeepSeekHarnessSdkRuntime(options('mcp-catalog', undefined, ['project_notes', 'opnex_skills']));
     const catalogEvents: unknown[] = [];
     const notifications: Array<{ method: string; params: unknown }> = [];
     runtime.on('mcpToolCatalog', catalog => catalogEvents.push(catalog));
@@ -175,10 +175,10 @@ describe('DeepSeek Harness SDK worker boundary', () => {
 
     expect(runtime.runtimeInfo?.mcpToolCatalog).toEqual({
       status: 'ready',
-      configuredServerNames: ['project_notes', 'pseudoharness_skills'],
-      availableServerNames: ['project_notes', 'pseudoharness_skills'],
+      configuredServerNames: ['opnex_skills', 'project_notes'],
+      availableServerNames: ['opnex_skills', 'project_notes'],
       missingServerNames: [],
-      toolNames: ['mcp__project_notes__search', 'mcp__pseudoharness_skills__skills_list'],
+      toolNames: ['mcp__opnex_skills__skills_list', 'mcp__project_notes__search'],
       observedAtSequence: 17,
     });
     expect(catalogEvents).toHaveLength(1);
@@ -197,7 +197,7 @@ describe('DeepSeek Harness SDK worker boundary', () => {
     await runtime.waitSession();
     expect(runtime.mcpToolCatalog).toMatchObject({
       status: 'missing-tools',
-      availableServerNames: ['project_notes','pseudoharness_skills'],
+      availableServerNames: ['opnex_skills','project_notes'],
       missingServerNames: ['missing-server'],
     });
     await runtime.shutdown();

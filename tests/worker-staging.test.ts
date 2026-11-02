@@ -35,7 +35,7 @@ describe('worker execution prompt',()=>{
   });
 
   it('loads exact named skill files from supported Codex roots and refuses path traversal or missing names',async()=>{
-    temporaryRoot=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-skills-'));
+    temporaryRoot=await mkdtemp(path.join(os.tmpdir(),'opnex-skills-'));
     const selected=path.join(temporaryRoot,'plugins','cache','test-plugin','1.0.0','skills','testing');
     await mkdir(selected,{recursive:true});await writeFile(path.join(selected,'SKILL.md'),'# Testing\nUse a focused check.');
     const content=await loadSelectedSkills(['testing'],temporaryRoot);
@@ -45,11 +45,11 @@ describe('worker execution prompt',()=>{
     expect(await readFile(path.join(selected,'SKILL.md'),'utf8')).toContain('Use a focused check.');
   });
   it('searches and explicitly resolves configured filesystem skills under namespaced stable references',async()=>{
-    temporaryRoot=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-codex-skills-'));const selected=path.join(temporaryRoot,'skills','review-helper');await mkdir(selected,{recursive:true});await writeFile(path.join(selected,'SKILL.md'),'---\nname: Review helper\ndescription: Source review instructions\n---\nPreserve citations.');
+    temporaryRoot=await mkdtemp(path.join(os.tmpdir(),'opnex-codex-skills-'));const selected=path.join(temporaryRoot,'skills','review-helper');await mkdir(selected,{recursive:true});await writeFile(path.join(selected,'SKILL.md'),'---\nname: Review helper\ndescription: Source review instructions\n---\nPreserve citations.');
     const found=await searchConfiguredSkills('source review',temporaryRoot);expect(found).toHaveLength(1);expect(found[0]).toMatchObject({id:expect.stringMatching(/^codex:review-helper:[a-f0-9]{12}$/),name:'Review helper',description:'Source review instructions'});const loaded=await loadConfiguredSkill(found[0].id,temporaryRoot);expect(loaded).toMatchObject({id:found[0].id,revision:found[0].revision,source:await realpath(path.join(selected,'SKILL.md')),instructions:'Preserve citations.'});await expect(loadConfiguredSkill('codex:review-helper:000000000000',temporaryRoot)).rejects.toThrow('unavailable or changed');
   });
   it('reads folded descriptions from configured skill frontmatter',async()=>{
-    temporaryRoot=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-codex-skills-'));const selected=path.join(temporaryRoot,'skills','ponytail-review');await mkdir(selected,{recursive:true});
+    temporaryRoot=await mkdtemp(path.join(os.tmpdir(),'opnex-codex-skills-'));const selected=path.join(temporaryRoot,'skills','ponytail-review');await mkdir(selected,{recursive:true});
     await writeFile(path.join(selected,'SKILL.md'),'---\nname: ponytail-review\ndescription: >\n  Quality review of a change: is the logic right,\n  is it safe, does it hold under real load.\n---\nReview the connected code, not only the diff.');
     const found=await searchConfiguredSkills('quality review',temporaryRoot);expect(found).toHaveLength(1);expect(found[0]).toMatchObject({name:'ponytail-review',description:'Quality review of a change: is the logic right, is it safe, does it hold under real load.'});
     const loaded=await loadConfiguredSkill(found[0].id,temporaryRoot);expect(loaded).toMatchObject({description:'Quality review of a change: is the logic right, is it safe, does it hold under real load.',instructions:'Review the connected code, not only the diff.'});

@@ -25,7 +25,7 @@ async function currentPassContext(){
     return {passId:pass.id};
   }catch{return undefined;}
 }
-const server=new Server({name:'pseudoharness_skills',version:'1.0.0'},{capabilities:{tools:{listChanged:false}}});
+const server=new Server({name:'opnex_skills',version:'1.0.0'},{capabilities:{tools:{listChanged:false}}});
 const readonlyTools=[
   {name:'skills_list',description:'List saved application skills by name, with a short description and immutable revision. Bodies are not included.',inputSchema:{type:'object',properties:{query:{type:'string',maxLength:200}},additionalProperties:false}},
   {name:'skills_search',description:'Search saved application skill names and descriptions. Returns concise matches and immutable revisions, without skill instructions.',inputSchema:{type:'object',properties:{query:{type:'string',minLength:1,maxLength:200},limit:{type:'integer',minimum:1,maximum:20}},required:['query'],additionalProperties:false}},

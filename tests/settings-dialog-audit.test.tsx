@@ -16,7 +16,7 @@ vi.mock('../src/ui/api.js',()=>({KERNEL_PROTOCOL_VERSION:1,bootstrap:vi.fn(async
 function nativeWorkspaceBridge(){const pages=new Map<string,any>();const listeners=new Set<(event:any)=>void>();return {workspaceGet:vi.fn(async(id:string)=>pages.get(id)||null),workspaceOpen:vi.fn(async(workspaceId:string,url:string)=>{const page={id:workspaceId,workspaceId,url,title:new URL(url).hostname,pane:'hidden',loading:false,canGoBack:false,canGoForward:false};pages.set(workspaceId,page);return page;}),workspaceRelease:vi.fn(async(id:string)=>{pages.delete(id);}),workspaceSetBounds:vi.fn(async()=>{}),workspaceNavigate:vi.fn(async()=>{}),workspaceSetCommenting:vi.fn(async()=>{}),workspaceAnnotationOverlay:vi.fn(async()=>{}),onEvent:vi.fn((callback:(event:any)=>void)=>{listeners.add(callback);return()=>listeners.delete(callback);})};}
 
 beforeEach(async()=>{
-  vi.clearAllMocks();delete (window as any).pseudoharnessDesktop;eventSource=undefined;failSettingsSave=false;serverState={...fixture.state,settings:{...fixture.state.settings}};
+  vi.clearAllMocks();delete (window as any).opnexDesktop;eventSource=undefined;failSettingsSave=false;serverState={...fixture.state,settings:{...fixture.state.settings}};
   const range=Range.prototype as any;range.getClientRects??=()=>[];range.getBoundingClientRect??=()=>new DOMRect(0,0,0,0);
   (globalThis as any).EventSource=class{onmessage:any;onerror:any;constructor(){eventSource=this;}close(){}};
   const apiMod=await import('../src/ui/api.js');
@@ -35,7 +35,7 @@ beforeEach(async()=>{
 
 afterEach(()=>{
   if(observedWindowKeydown)window.removeEventListener('keydown',observedWindowKeydown);
-  observedWindowKeydown=null;cleanup();delete (window as any).pseudoharnessDesktop;
+  observedWindowKeydown=null;cleanup();delete (window as any).opnexDesktop;
 });
 
 describe('Settings audit regressions',()=>{
@@ -186,7 +186,7 @@ describe('Settings audit regressions',()=>{
   });
 
   it('opens Settings from Sessions, Browser, Git, and Library workspaces',async()=>{
-    const user=userEvent.setup();(window as any).pseudoharnessDesktop=nativeWorkspaceBridge();render(<App/>);
+    const user=userEvent.setup();(window as any).opnexDesktop=nativeWorkspaceBridge();render(<App/>);
     await screen.findByRole('textbox',{name:'Task message'});
     for(const kind of ['Sessions','Browser','Git','Library']){
       await user.click(screen.getByRole('tab',{name:kind}));

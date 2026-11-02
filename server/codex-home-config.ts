@@ -50,7 +50,7 @@ async function replaceVerifiedTemp(temp:string,destination:string,agentHome:stri
   let existing:Stats|undefined;
   try{existing=await ops.lstat(destination);}catch(error){if(!isCode(error,['ENOENT']))throw error;}
   if(!existing){await ops.rename(temp,destination);return;}
-  const backup=path.join(agentHome,`.pseudoharness-config-backup-${ops.randomId()}`);
+  const backup=path.join(agentHome,`.opnex-config-backup-${ops.randomId()}`);
   await ops.rename(destination,backup);
   try{await ops.rename(temp,destination);}catch(error){try{await ops.rename(backup,destination);}catch{}throw error;}
   await ops.unlink(backup);
@@ -99,7 +99,7 @@ export async function linkNormalCodexFile(
     if(sourceCurrent.dev===destinationCurrent.dev&&sourceCurrent.ino===destinationCurrent.ino)return 'hardlink';
   }
 
-  const temp=path.join(agentRoot,`.pseudoharness-config-${ops.randomId()}`);
+  const temp=path.join(agentRoot,`.opnex-config-${ops.randomId()}`);
   try{
     try{
       await ops.link(source,temp);

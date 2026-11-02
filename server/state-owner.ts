@@ -14,6 +14,7 @@ export class StateDirectoryInUseError extends Error{
  */
 export function acquireStateDirectoryOwner(directory=stateDirectory()):StateDirectoryOwner{
   mkdirSync(directory,{recursive:true,mode:0o700});
+  // Keep the lock filename stable so old and new kernels share one owner record.
   const db=new DatabaseSync(path.join(directory,'.pseudoharness-owner.sqlite'));
   try {
     db.exec('PRAGMA busy_timeout = 0');

@@ -6,7 +6,7 @@ import { linkNormalCodexFile } from '../server/codex-home-config.js';
 
 const roots:string[]=[];
 const fixture=async()=>{
-  const root=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-codex-home-config-'));
+  const root=await mkdtemp(path.join(os.tmpdir(),'opnex-codex-home-config-'));
   roots.push(root);
   const normalHome=path.join(root,'normal'),agentHome=path.join(root,'agent');
   await Promise.all([mkdir(normalHome),mkdir(agentHome)]);
@@ -56,7 +56,7 @@ describe('instruction-filtered Codex configuration sharing',()=>{
     await linkNormalCodexFile(normalHome,agentHome,'config.toml',true,undefined,{link:crossVolumeLink as any,symlink:unavailableSymlink as any});
     await writeFile(source,second);
     const failInstall=async(from:string,to:string)=>{
-      if(path.basename(from).startsWith('.pseudoharness-config-')&&!path.basename(from).startsWith('.pseudoharness-config-backup-')&&path.basename(to)==='config.toml')throw Object.assign(new Error('replacement failed'),{code:'EIO'});
+      if(path.basename(from).startsWith('.opnex-config-')&&!path.basename(from).startsWith('.opnex-config-backup-')&&path.basename(to)==='config.toml')throw Object.assign(new Error('replacement failed'),{code:'EIO'});
       return rename(from,to);
     };
     await expect(linkNormalCodexFile(normalHome,agentHome,'config.toml',true,undefined,{link:crossVolumeLink as any,symlink:unavailableSymlink as any,rename:failInstall as any})).rejects.toThrow('replacement failed');

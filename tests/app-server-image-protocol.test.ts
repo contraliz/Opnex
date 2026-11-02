@@ -19,7 +19,7 @@ function acceptsImageInput(schema:any,value:Record<string,unknown>){
 
 describe('installed Codex app-server image protocol',()=>{
   it.skipIf(!appServerAvailable)('rejects the old image_url field and accepts the generated v2 image url shape',async()=>{
-    const temp=await mkdtemp(path.join(tmpdir(),'pseudoharness-image-schema-'));
+    const temp=await mkdtemp(path.join(tmpdir(),'opnex-image-schema-'));
     try{
       const generated=spawnSync(codexExecutable,['app-server','generate-json-schema','--experimental','--out',temp],{windowsHide:true,stdio:'ignore',timeout:20000});
       expect(generated.status).toBe(0);

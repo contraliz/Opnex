@@ -14,8 +14,8 @@ const canRunGit=await gitAvailable();
 
 describe('read-only workspace Git snapshots',()=>{
   it.runIf(canRunGit)('shows actual tracked, staged, and untracked changes without touching the index',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-git-'));
-    git(['init','--quiet'],temporary);git(['config','user.name','Pseudoharness test'],temporary);git(['config','user.email','test@example.invalid'],temporary);
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-git-'));
+    git(['init','--quiet'],temporary);git(['config','user.name','Opnex test'],temporary);git(['config','user.email','test@example.invalid'],temporary);
     await writeFile(path.join(temporary,'app.ts'),'const value = 1;\n');await writeFile(path.join(temporary,'.gitignore'),'private.txt\n');await writeFile(path.join(temporary,'binary.dat'),Buffer.from([0,1,2,3]));
     git(['add','app.ts','.gitignore','binary.dat'],temporary);git(['commit','--quiet','-m','fixture'],temporary);
     await writeFile(path.join(temporary,'app.ts'),'const value = 2;\n');git(['add','app.ts'],temporary);await writeFile(path.join(temporary,'app.ts'),'const value = 3;\n');await writeFile(path.join(temporary,'binary.dat'),Buffer.from([0,2,4,6]));
@@ -40,14 +40,14 @@ describe('read-only workspace Git snapshots',()=>{
   });
 
   it.runIf(canRunGit)('refuses to inspect a Git root above the selected workspace',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-git-boundary-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-git-boundary-'));
     git(['init','--quiet'],temporary);await mkdir(path.join(temporary,'workspace'));await writeFile(path.join(temporary,'outside.txt'),'private');
     const snapshot=await readWorkspaceGitSnapshot(path.join(temporary,'workspace'));
     expect(snapshot.available).toBe(false);expect(snapshot.message).toMatch(/outside this task workspace/);expect(snapshot.diff).toBe('');
   });
 
   it('reports a workspace without a Git repository without inventing a diff',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-no-git-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-no-git-'));
     const snapshot=await readWorkspaceGitSnapshot(temporary);
     expect(snapshot).toMatchObject({available:false,changes:[],diff:'',message:'This workspace is not inside a Git repository.'});
   });

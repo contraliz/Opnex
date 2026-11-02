@@ -11,7 +11,7 @@ describe('browser API session recovery',()=>{
     vi.stubGlobal('fetch',fetchMock);const api=await import('../src/ui/api.js');await api.bootstrap();
     await expect(api.api('/api/tasks/new',{})).resolves.toEqual({ok:true});
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(fetchMock.mock.calls[3][1].headers['x-pseudoharness-token']).toBe('new');
+    expect(fetchMock.mock.calls[3][1].headers).toMatchObject({'x-opnex-token':'new','x-pseudoharness-token':'new','x-opnex-protocol-version':'1','x-pseudoharness-protocol-version':'1'});
   });
   it('sends skill edits as authenticated PUT requests',async()=>{
     const fetchMock=vi.fn()
@@ -19,7 +19,7 @@ describe('browser API session recovery',()=>{
       .mockResolvedValueOnce(new Response(JSON.stringify({skill:{id:'skill-1'}}),{status:200}));
     vi.stubGlobal('fetch',fetchMock);const api=await import('../src/ui/api.js');await api.bootstrap();
     await expect(api.apiPut('/api/skills/skill-1',{name:'Updated'})).resolves.toEqual({skill:{id:'skill-1'}});
-    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/skills/skill-1');expect(fetchMock.mock.calls[1][1]).toMatchObject({method:'PUT',headers:{'content-type':'application/json','x-pseudoharness-token':'skill-token','x-pseudoharness-protocol-version':'1'},body:'{"name":"Updated"}'});
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/skills/skill-1');expect(fetchMock.mock.calls[1][1]).toMatchObject({method:'PUT',headers:{'content-type':'application/json','x-opnex-token':'skill-token','x-pseudoharness-token':'skill-token','x-opnex-protocol-version':'1','x-pseudoharness-protocol-version':'1'},body:'{"name":"Updated"}'});
   });
   it('reports malformed responses without leaking raw server content',async()=>{
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('<internal detail>',{status:502})));

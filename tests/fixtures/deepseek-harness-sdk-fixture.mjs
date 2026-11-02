@@ -28,7 +28,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       write({ jsonrpc: '2.0', method: 'session.event', params: { sessionId: params.sessionId, event: {
         type: 'request/header', seq: 17, time: 1700000000000, data: { reason: 'turn-start', header: { tools: [
           { name: 'mcp__project_notes__search' },
-          { name: 'mcp__pseudoharness_skills__skills_list' },
+          { name: 'mcp__opnex_skills__skills_list' },
           { name: 'read' },
         ] } },
       } } });

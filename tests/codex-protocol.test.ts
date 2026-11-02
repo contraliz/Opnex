@@ -11,7 +11,7 @@ describe('Codex approval and turn configuration',()=>{
     for(const role of ['router','direct','simple','orchestrator','worker'] as const){const config=appAgentConfig('/repo',role);expect(config).not.toHaveProperty('mcp_servers');}
     const skills={command:'node',args:['gateway.js'],enabled:true,enabled_tools:['skills_list']};
     const worker=appAgentConfig('/repo','worker',skills) as any;
-    expect(worker.mcp_servers).toEqual({pseudoharness_skills:skills});
+    expect(worker.mcp_servers).toEqual({opnex_skills:skills});
     const router=appAgentConfig('/repo','router',skills,['github']) as any;expect(router.mcp_servers).toBeUndefined();expect(router['mcp_servers.github.enabled']).toBe(false);
     const qa=appAgentConfig('/repo','qa',skills,['github']) as any;expect(qa.mcp_servers).toBeUndefined();expect(qa['mcp_servers.github.enabled']).toBe(false);
   });
@@ -320,9 +320,9 @@ describe('Codex approval and turn configuration',()=>{
     expect(request).toHaveBeenNthCalledWith(1,'mcpServerStatus/list',{threadId:'direct-thread',detail:'toolsAndAuthOnly',limit:100},15000);expect(request).toHaveBeenNthCalledWith(2,'mcpServerStatus/list',{threadId:'direct-thread',detail:'toolsAndAuthOnly',limit:100,cursor:'next'},15000);client.close();
   });
   it('waits for a specific thread MCP server catalog when one is requested',async()=>{
-    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};(client as any).verifiedAgentThreads.add('orchestrator-thread');const request=vi.fn().mockResolvedValue({data:[{name:'pseudoharness_skills',tools:{skills_list:{}}}]});(client as any).request=request;
-    await expect(client.mcpServerStatus('orchestrator-thread','pseudoharness_skills')).resolves.toEqual([{name:'pseudoharness_skills',tools:{skills_list:{}}}]);
-    expect(request).toHaveBeenCalledWith('mcpServerStatus/list',{threadId:'orchestrator-thread',detail:'toolsAndAuthOnly',limit:100,serverName:'pseudoharness_skills'},15000);client.close();
+    const client=new AppServer();(client as any).ready=true;(client as any).child={killed:false,stdin:{write:()=>{}}};(client as any).verifiedAgentThreads.add('orchestrator-thread');const request=vi.fn().mockResolvedValue({data:[{name:'opnex_skills',tools:{skills_list:{}}}]});(client as any).request=request;
+    await expect(client.mcpServerStatus('orchestrator-thread','opnex_skills')).resolves.toEqual([{name:'opnex_skills',tools:{skills_list:{}}}]);
+    expect(request).toHaveBeenCalledWith('mcpServerStatus/list',{threadId:'orchestrator-thread',detail:'toolsAndAuthOnly',limit:100,serverName:'opnex_skills'},15000);client.close();
   });
   it('reads Codex rate limits without requesting reset-credit detail calls',async()=>{
     const client=new AppServer();(client as any).ready=true;const request=vi.fn().mockResolvedValue({rateLimits:{limitId:'codex'}});(client as any).request=request;

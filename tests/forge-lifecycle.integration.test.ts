@@ -181,14 +181,14 @@ describe('Forge runtime lifecycle on a disposable repository', () => {
     const codexHome = path.join(fixture, 'codex'); await mkdir(codexHome);
     git(repo, 'init', '-b', 'main'); git(repo, 'config', 'core.longpaths', 'true'); git(repo, 'config', 'user.name', 'Forge API fixture'); git(repo, 'config', 'user.email', 'forge@example.invalid');
     await writeFile(path.join(repo, 'src', 'base.ts'), 'export const base = true;\n'); git(repo, 'add', '.'); git(repo, 'commit', '-m', 'baseline');
-    const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'test', PORT: '0', PSEUDOHARNESS_DATA_DIR: data, CODEX_HOME: codexHome }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], { cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'test', PORT: '0', OPNEX_DATA_DIR: data, CODEX_HOME: codexHome }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     children.push(child);
     let output = ''; child.stdout?.on('data', (chunk) => { output += String(chunk); }); child.stderr?.on('data', (chunk) => { output += String(chunk); });
     await waitFor(() => !!output.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/));
     const origin = `http://127.0.0.1:${output.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/)![1]}`;
     await waitFor(async () => (await fetch(`${origin}/api/health`).catch(() => undefined))?.ok);
     const bootstrap = await (await fetch(`${origin}/api/bootstrap`)).json() as { csrf: string };
-    const headers = { origin, 'content-type': 'application/json', 'x-pseudoharness-token': bootstrap.csrf };
+    const headers = { origin, 'content-type': 'application/json', 'x-opnex-token': bootstrap.csrf };
     const projectResponse = await fetch(`${origin}/api/projects`, { method: 'POST', headers, body: JSON.stringify({ id: projectId, name: 'Fixture', projectRoot: repo, pinned: false }) });
     expect(projectResponse.status).toBe(200);
     const createdResponse = await fetch(`${origin}/api/forge/tickets`, { method: 'POST', headers, body: JSON.stringify({ projectId, title: 'HTTP ticket', description: 'Exercise the Forge HTTP contract.', acceptanceCriteria: ['The draft is saved.'], scope: { read: ['src'], write: ['src'], knowledge: ['knowledge/opnex'] }, orchestrator: { model: 'gpt-6.1-terra', effort: 'low' }, workerProfile: { provider: 'codex', model: 'gpt-6-luna', effort: 'max' }, skillIds: [] }) });

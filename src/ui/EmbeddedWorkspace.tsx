@@ -107,13 +107,13 @@ export function EmbeddedWorkspace({mode,task,placement,docked,workspaceId,active
       if(settleTimer)window.clearTimeout(settleTimer);
       settleTimer=window.setTimeout(()=>{last=null;stable=0;frames=0;measure();},220);
     };
-    const shell=rootRef.current?.closest<HTMLElement>('.app-shell')||null;
     const onShellTransition=(event:Event)=>{
       const transition=event as TransitionEvent;
       if(event.target!==shell||transition.propertyName!=='grid-template-columns')return;
       shellTransitionRunning=event.type==='transitionrun';
       schedule();
     };
+    const shell=rootRef.current?.closest<HTMLElement>('.app-shell')||null;
     schedule();
     const observer=typeof ResizeObserver==='undefined'?null:new ResizeObserver(schedule);
     if(rootRef.current)observer?.observe(rootRef.current);

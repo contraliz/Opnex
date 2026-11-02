@@ -75,7 +75,7 @@ describe('workflow contracts and scheduling policy',()=>{
     expect(()=>assignmentWriteRoots({write_scope:['src']},root)).toThrow(/absolute/i);
   });
   it('derives simple-route writes only from explicit existing project directories',async()=>{
-    const temp=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-simple-scope-'));const root=path.join(temp,'project');const source=path.join(root,'src');
+    const temp=await mkdtemp(path.join(os.tmpdir(),'opnex-simple-scope-'));const root=path.join(temp,'project');const source=path.join(root,'src');
     try{
       await mkdir(source,{recursive:true});await writeFile(path.join(source,'label.ts'),'export const label="ok";');
       expect(await simpleRouteWriteRoots(['Fix it under `src/`.'],root)).toEqual([source]);

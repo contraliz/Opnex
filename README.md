@@ -68,10 +68,10 @@ npm ci --include=dev
 npm run package
 ```
 
-The output is `artifacts/opnex-1.1.2.tgz`. Copy that file to another machine with Node.js/npm and Codex CLI, then install and start it:
+The output is `artifacts/opnex-1.1.3.tgz`. Copy that file to another machine with Node.js/npm and Codex CLI, then install and start it:
 
 ```sh
-npm install --global ./opnex-1.1.2.tgz
+npm install --global ./opnex-1.1.3.tgz
 opnex
 ```
 

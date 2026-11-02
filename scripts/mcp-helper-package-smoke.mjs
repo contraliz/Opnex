@@ -18,17 +18,17 @@ async function findPackagedResources(root,depth=0){
 const packagedResources=process.env.OPNEX_PACKAGED_RESOURCES||process.env.PSEUDOHARNESS_PACKAGED_RESOURCES||await findPackagedResources(path.join(repositoryRoot,'desktop-release'));
 if(!packagedResources)throw new Error('No packaged app Resources folder with the bundled helper runtime was found.');
 const resourcesPath=path.resolve(packagedResources);
-process.env.OPNEX_PACKAGED_APP='1';process.env.PSEUDOHARNESS_PACKAGED_APP='1';process.env.OPNEX_RESOURCES_PATH=resourcesPath;process.env.PSEUDOHARNESS_RESOURCES_PATH=resourcesPath;
-const temp=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-mcp-package-smoke-'));
+process.env.OPNEX_PACKAGED_APP='1';process.env.OPNEX_RESOURCES_PATH=resourcesPath;
+const temp=await mkdtemp(path.join(os.tmpdir(),'opnex-mcp-package-smoke-'));
 const data=path.join(temp,'app-data'),taskId='packaged-smoke-task',passId='packaged-smoke-pass';
-await mkdir(data,{recursive:true});await writeFile(path.join(data,'state.json'),JSON.stringify({tasks:[{id:taskId,currentPassId:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn',passes:[{id:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn'}]}]}));process.env.OPNEX_DATA_DIR=data;process.env.PSEUDOHARNESS_DATA_DIR=data;
+await mkdir(data,{recursive:true});await writeFile(path.join(data,'state.json'),JSON.stringify({tasks:[{id:taskId,currentPassId:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn',passes:[{id:passId,phase:'direct_running',activeRole:'direct',activeTurnId:'packaged-smoke-turn'}]}]}));process.env.OPNEX_DATA_DIR=data;
 const inheritedEnv=Object.fromEntries(['PATH','SystemRoot','WINDIR','TEMP','TMP','HOME'].flatMap(key=>process.env[key]===undefined?[]:[[key,process.env[key]]]));
 
 async function connect(config,extraEnv={}){
   if('ELECTRON_RUN_AS_NODE' in {...config.env,...extraEnv})throw new Error('Packaged helpers must not depend on Electron RunAsNode.');
   const transport=new StdioClientTransport({command:config.command,args:config.args,cwd:config.cwd,env:{...inheritedEnv,...config.env,...extraEnv},stderr:'pipe'});
   transport.stderr?.on('data',chunk=>process.stderr.write(`packaged helper: ${chunk}`));
-  const client=new Client({name:'pseudoharness-packaged-helper-smoke',version:'1'});
+  const client=new Client({name:'opnex-packaged-helper-smoke',version:'1'});
   await client.connect(transport);return {client,transport};
 }
 

@@ -297,7 +297,8 @@ type TaskManifest = {
   workers: Array<{ workerId: string; branch: string; worktreeRoot: string }>;
 };
 
-const TASK_MANIFEST = '.pseudoharness-recruitment.json';
+const TASK_MANIFEST = '.opnex-recruitment.json';
+const LEGACY_TASK_MANIFEST = '.pseudoharness-recruitment.json';
 
 export async function prepareRecruitmentWorktrees(options: {
   canonicalRoot: string;
@@ -499,10 +500,22 @@ async function validateOwnedLocation(projectRoot: string, taskRoot: string, targ
   return candidate;
 }
 
-async function readTaskManifest(projectRoot: string, taskRoot: string): Promise<TaskManifest> {
+async function taskManifestPath(taskRoot: string): Promise<string> {
+  const entries = await readdir(taskRoot);
+  const manifests = entries.filter(entry => entry === TASK_MANIFEST || entry === LEGACY_TASK_MANIFEST);
+
+  if (manifests.length !== 1) {
+    throw new RecruitmentGitError('Task ownership record is missing or ambiguous.');
+  }
+
+  return path.join(taskRoot, manifests[0]);
+}
+
+async function readTaskManifest(projectRoot: string, taskRoot: string, manifestPath?: string): Promise<TaskManifest> {
   let manifest: TaskManifest;
   try {
-    manifest = JSON.parse(await readFile(path.join(taskRoot, TASK_MANIFEST), 'utf8')) as TaskManifest;
+    const sourcePath = manifestPath ?? await taskManifestPath(taskRoot);
+    manifest = JSON.parse(await readFile(sourcePath, 'utf8')) as TaskManifest;
   } catch (error) {
     throw new RecruitmentGitError('Task ownership record is missing or invalid.', { cause: error });
   }
@@ -549,7 +562,7 @@ const samePath=(left:string,right:string)=>path.resolve(left).toLowerCase()===pa
 /** Retires only an unsealed, pristine recruitment whose complete manifest still matches preparation. */
 export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecruitmentWorktrees,expectedTaskParent:string,attemptedTargets?:Array<{branch:string;worktreeRoot:string}>):Promise<string[]>{
   const preserve=(reason:string)=>[`Prepared recruitment cleanup was skipped or incomplete: ${reason}. Its remaining worktrees, branches, and ownership record were preserved.`];
-  let projectRoot:string,taskRoot:string,taskParent:string,manifest:TaskManifest,manifestText:string;
+  let projectRoot:string,taskRoot:string,taskParent:string,manifestPath:string,manifest:TaskManifest,manifestText:string;
   const targets=[{branch:prepared.integration.branch,worktreeRoot:prepared.integration.worktreeRoot},...prepared.workers.map(row=>({branch:row.branch,worktreeRoot:row.worktreeRoot}))];
   const attempts=attemptedTargets??targets,worktreesToRemove:Array<{branch:string;worktreeRoot:string}>=[],branchesToDelete:string[]=[];
   try{
@@ -559,13 +572,19 @@ export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecru
     taskRoot=await realpath(prepared.taskRoot);
     if(!samePath(taskRoot,prepared.taskRoot)||!samePath(path.dirname(taskRoot),taskParent)||!samePath(path.dirname(path.resolve(prepared.taskRoot)),taskParent))return preserve('the task root escaped its exact generated parent');
     if(!/^[0-9a-f]{40,64}$/i.test(prepared.baseCommit))return preserve('the preparation result has no full initial commit SHA');
-    manifestText=await readFile(path.join(taskRoot,TASK_MANIFEST),'utf8');manifest=await readTaskManifest(projectRoot,taskRoot);
+    manifestPath=await taskManifestPath(taskRoot);
+    manifestText=await readFile(manifestPath,'utf8');manifest=await readTaskManifest(projectRoot,taskRoot,manifestPath);
     const expectedWorkers=[...prepared.workers].sort((a,b)=>a.workerId.localeCompare(b.workerId));const recordedWorkers=[...manifest.workers].sort((a,b)=>a.workerId.localeCompare(b.workerId));
     if(!samePath(manifest.canonicalRoot,projectRoot)||manifest.integration.branch!==prepared.integration.branch||!samePath(manifest.integration.worktreeRoot,prepared.integration.worktreeRoot)||recordedWorkers.length!==expectedWorkers.length||recordedWorkers.some((row,index)=>row.workerId!==expectedWorkers[index].workerId||row.branch!==expectedWorkers[index].branch||!samePath(row.worktreeRoot,expectedWorkers[index].worktreeRoot)))return preserve('the task ownership manifest no longer exactly matches this preparation');
     if(new Set(targets.map(row=>row.branch)).size!==targets.length||new Set(targets.map(row=>path.resolve(row.worktreeRoot).toLowerCase())).size!==targets.length)return preserve('the prepared branches or worktree paths are not unique');
     const targetKey=(row:{branch:string;worktreeRoot:string})=>`${row.branch}\0${path.resolve(row.worktreeRoot).toLowerCase()}`;
     if(new Set(attempts.map(targetKey)).size!==attempts.length||attempts.some(row=>!targets.some(target=>targetKey(target)===targetKey(row))))return preserve('the attempted worktree list does not exactly match task-manifest targets');
     for(const row of targets){validateRecruitmentBranch(row.branch);if(!samePath(path.dirname(row.worktreeRoot),taskRoot))return preserve(`worktree ${row.worktreeRoot} is not a direct child of its task root`);}
+    const allowedEntries=new Set([path.basename(manifestPath),...targets.map(row=>path.basename(row.worktreeRoot))]);
+    const taskEntries=await readdir(taskRoot);
+    if(taskEntries.some(entry=>!allowedEntries.has(entry)))return preserve('the task root contains unexpected files or directories');
+    const manifestInfo=await lstat(manifestPath);
+    if(!manifestInfo.isFile()||manifestInfo.isSymbolicLink())return preserve('the ownership manifest is not a regular file');
     const worktrees=listedWorktrees((await git(projectRoot,['worktree','list','--porcelain'])).stdout);
     for(const row of targets){
       const attempted=attempts.some(item=>targetKey(item)===targetKey(row)),refName=`refs/heads/${row.branch}`,refRows=(await git(projectRoot,['for-each-ref','--format=%(refname) %(objectname)',refName])).stdout.split(/\r?\n/).filter(Boolean),exactRefs=refRows.filter(item=>item.startsWith(`${refName} `)),branchHead=exactRefs[0]?.slice(refName.length+1),attachments=worktrees.filter(item=>item.branch===refName);
@@ -601,10 +620,10 @@ export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecru
 
   try{
     const latestTaskRoot=await realpath(prepared.taskRoot);if(!samePath(latestTaskRoot,taskRoot)||!samePath(path.dirname(latestTaskRoot),taskParent))return preserve('the task root changed before generated branch cleanup');
-    const currentText=await readFile(path.join(taskRoot,TASK_MANIFEST),'utf8'),currentManifest=await readTaskManifest(projectRoot,taskRoot);
+    const currentText=await readFile(manifestPath,'utf8'),currentManifest=await readTaskManifest(projectRoot,taskRoot,manifestPath);
     if(currentText!==manifestText||JSON.stringify(currentManifest)!==JSON.stringify(manifest))return preserve('the ownership manifest changed before generated branch cleanup');
-    const entries=await readdir(taskRoot);if(entries.length!==1||entries[0]!==TASK_MANIFEST)return preserve('the task root contains unexpected files or directories');
-    const manifestInfo=await lstat(path.join(taskRoot,TASK_MANIFEST));if(!manifestInfo.isFile()||manifestInfo.isSymbolicLink())return preserve('the ownership manifest is not a regular file');
+    const entries=await readdir(taskRoot);if(entries.length!==1||entries[0]!==path.basename(manifestPath))return preserve('the task root contains unexpected files or directories');
+    const currentManifestInfo=await lstat(manifestPath);if(!currentManifestInfo.isFile()||currentManifestInfo.isSymbolicLink())return preserve('the ownership manifest is not a regular file');
   }catch(error){return preserve(error instanceof Error?error.message:String(error));}
 
   const branchErrors:string[]=[];
@@ -616,12 +635,12 @@ export async function cleanupPreparedRecruitmentWorktrees(prepared:PreparedRecru
 
   try{
     const latestTaskRoot=await realpath(prepared.taskRoot);if(!samePath(latestTaskRoot,taskRoot)||!samePath(path.dirname(latestTaskRoot),taskParent))return preserve('the task root changed before manifest removal');
-    const currentText=await readFile(path.join(taskRoot,TASK_MANIFEST),'utf8'),currentManifest=await readTaskManifest(projectRoot,taskRoot);
+    const currentText=await readFile(manifestPath,'utf8'),currentManifest=await readTaskManifest(projectRoot,taskRoot,manifestPath);
     if(currentText!==manifestText||JSON.stringify(currentManifest)!==JSON.stringify(manifest))return preserve('the ownership manifest changed before removal');
-    const entries=await readdir(taskRoot);if(entries.length!==1||entries[0]!==TASK_MANIFEST)return preserve('the task root contains unexpected files or directories');
-    const manifestInfo=await lstat(path.join(taskRoot,TASK_MANIFEST));if(!manifestInfo.isFile()||manifestInfo.isSymbolicLink())return preserve('the ownership manifest is not a regular file');
-    await unlink(path.join(taskRoot,TASK_MANIFEST));
-    try{await rmdir(taskRoot);}catch(error){try{await writeFile(path.join(taskRoot,TASK_MANIFEST),manifestText,{flag:'wx'});}catch{}return preserve(`the empty task root could not be removed (${error instanceof Error?error.message:String(error)})`);}
+    const entries=await readdir(taskRoot);if(entries.length!==1||entries[0]!==path.basename(manifestPath))return preserve('the task root contains unexpected files or directories');
+    const currentManifestInfo=await lstat(manifestPath);if(!currentManifestInfo.isFile()||currentManifestInfo.isSymbolicLink())return preserve('the ownership manifest is not a regular file');
+    await unlink(manifestPath);
+    try{await rmdir(taskRoot);}catch(error){try{await writeFile(manifestPath,manifestText,{flag:'wx'});}catch{}return preserve(`the empty task root could not be removed (${error instanceof Error?error.message:String(error)})`);}
   }catch(error){return preserve(error instanceof Error?error.message:String(error));}
   return [];
 }

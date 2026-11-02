@@ -11,7 +11,7 @@ describe('Opnex branding and compatibility', () => {
     const manifest = JSON.parse(read('package.json'));
     const lock = JSON.parse(read('package-lock.json'));
     expect(manifest.name).toBe('opnex');
-    expect(manifest.bin).toEqual({ opnex: 'bin/opnex.js', pseudoharness: 'bin/pseudoharness.js' });
+    expect(manifest.bin).toEqual({ opnex: 'bin/opnex.js', pseudoharness: 'bin/opnex.js' });
     expect(lock.name).toBe('opnex');
     expect(lock.packages[''].name).toBe('opnex');
     expect(manifest.author).toBe('');

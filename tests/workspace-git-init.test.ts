@@ -31,7 +31,7 @@ const canRunGit = await gitAvailable();
 
 describe('workspace repository initialization', () => {
   it.runIf(canRunGit)('reports an empty workspace as missing a repository', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-')));
 
     await expect(inspectWorkspaceRepository(temporary)).resolves.toEqual({
       status: 'missing',
@@ -40,7 +40,7 @@ describe('workspace repository initialization', () => {
   });
 
   it.runIf(canRunGit)('finds the owning parent repository for a nested workspace', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-parent-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-parent-')));
     git(['init', '--quiet'], temporary);
     const nested = path.join(temporary, 'nested', 'workspace');
     await mkdir(nested, { recursive: true });
@@ -52,7 +52,7 @@ describe('workspace repository initialization', () => {
     });
   });
   it.runIf(canRunGit)('recognizes a linked Git worktree from a nested workspace', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-worktree-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-worktree-')));
     const source = path.join(temporary, 'source');
     const linked = path.join(temporary, 'linked');
     await mkdir(source);
@@ -73,7 +73,7 @@ describe('workspace repository initialization', () => {
     });
   });
   it.runIf(canRunGit)('initializes exactly the selected workspace and preserves its files', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-init-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-init-')));
     await writeFile(path.join(temporary, 'notes.txt'), 'keep this file');
 
     await expect(ensureWorkspaceRepository(temporary)).resolves.toEqual({
@@ -85,7 +85,7 @@ describe('workspace repository initialization', () => {
     await expect(inspectWorkspaceRepository(temporary)).resolves.toMatchObject({ status: 'repository', repositoryRoot: temporary });
   });
   it.runIf(canRunGit)('rechecks agent authorization immediately before creating a missing repository', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-authorization-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-authorization-')));
     let initCalls = 0, authorizationCalls = 0;
     const runner: GitWorkspaceCommand = async (_executable, args) => {
       if (args[0] === 'init') { initCalls++; return { code: 0, stdout: '', stderr: '' }; }
@@ -99,7 +99,7 @@ describe('workspace repository initialization', () => {
     await expect(lstat(path.join(temporary, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it.runIf(canRunGit)('does not create a nested repository inside an existing parent repository', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-parent-init-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-parent-init-')));
     git(['init', '--quiet'], temporary);
     const nested = path.join(temporary, 'nested');
     await mkdir(nested);
@@ -112,7 +112,7 @@ describe('workspace repository initialization', () => {
     await expect(lstat(path.join(nested, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it.runIf(canRunGit)('serializes concurrent repository creation for the same workspace', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-concurrent-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-concurrent-')));
     const workspace = path.join(temporary, 'workspace with spaces');
     await mkdir(workspace);
     let initCalls = 0;
@@ -140,7 +140,7 @@ describe('workspace repository initialization', () => {
     await expect(ensureWorkspaceRepository(await realpath(workspace), runner)).resolves.toMatchObject({ created: false, repositoryRoot: workspace });
   });
   it('rejects relative, missing, and control-character workspace paths before invoking Git', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-invalid-root-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-invalid-root-')));
     let calls = 0;
     const runner: GitWorkspaceCommand = async () => {
       calls++;
@@ -157,7 +157,7 @@ describe('workspace repository initialization', () => {
   });
 
   it('distinguishes an unavailable Git executable from a missing repository', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-missing-exe-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-missing-exe-')));
     const commands: string[] = [];
     const runner: GitWorkspaceCommand = async (_executable, args) => {
       commands.push(args[0]);
@@ -173,7 +173,7 @@ describe('workspace repository initialization', () => {
   });
 
   it('does not treat unsafe-directory, permission, or unexpected Git failures as no repository', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-failure-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-failure-')));
     const cases: Array<{ stderr: string; code: string; message: RegExp }> = [
       { stderr: 'fatal: detected dubious ownership in repository at private-path', code: 'unsafe-repository', message: /ownership|safe\.directory/i },
       { stderr: 'fatal: cannot access folder: Permission denied', code: 'permission-denied', message: /permissions/i },
@@ -189,7 +189,7 @@ describe('workspace repository initialization', () => {
     }
   });
   it('returns a repository discovered during initialization checks without creating a nested one', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-race-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-race-')));
     const workspace = path.join(temporary, 'workspace');
     await mkdir(workspace);
     let inspections = 0;
@@ -212,7 +212,7 @@ describe('workspace repository initialization', () => {
     expect(initCalls).toBe(0);
   });
   it.runIf(process.platform === 'win32')('rejects a workspace path that traverses a Windows junction', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-junction-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-junction-')));
     const target = path.join(temporary, 'target');
     const junction = path.join(temporary, 'junction');
     await mkdir(target);
@@ -228,7 +228,7 @@ describe('workspace repository initialization', () => {
     });
   });
   it('reports a workspace removed during Git inspection as an invalid root', async () => {
-    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-workspace-git-disappears-')));
+    temporary = await realpath(await mkdtemp(path.join(os.tmpdir(), 'opnex-workspace-git-disappears-')));
     const workspace = path.join(temporary, 'workspace');
     await mkdir(workspace);
     const runner: GitWorkspaceCommand = async () => {

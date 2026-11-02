@@ -42,20 +42,46 @@ const eventStreams=new Set<{response:express.Response;unsubscribe:()=>void;heart
 function initializeRuntime(){if(process.env.NODE_ENV==='test')return runtimeInitialization??=Promise.resolve();return runtimeInitialization??=initialize();}
 app.disable('x-powered-by');app.use(express.json({limit:'17mb'}));
 function isLoopbackHost(raw:string|undefined){if(!raw)return false;const v=raw.split(':')[0].replace(/^\[|\]$/g,'').toLowerCase();return ['127.0.0.1','localhost','::1'].includes(v);}
+function allowedOrigin(origin:string|undefined,port:number){return !origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${port}`||origin===`http://localhost:${port}`;}
+function requestHeader(req:express.Request,current:string,legacy:string){return req.get(current)??req.get(legacy);}
 function requestedProject(req:express.Request){const id=req.query.projectId;if(typeof id!=="string"||!id)throw new Error("Choose a project before opening its workspace.");const project=getState().projects.find(row=>row.id===id);if(!project)throw new Error("Project not found.");if(project.needsLocation)throw new Error("Choose a current working directory for this project first.");return project;}
 function projectForTask(taskId:string){const task=getTask(taskId);if(!task)throw new Error("Session not found.");if(!task.projectId)throw new Error("This is unclassified history. Choose a project and start a new session to work.");const project=getState().projects.find(row=>row.id===task.projectId);if(!project||project.needsLocation)throw new Error("This session’s project directory needs to be restored before workspace access.");assertTaskCanResumeInProject(task,project);return {task,project};}
-app.use((req,res,next)=>{if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}const origin=req.headers.origin;const allowed=!origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${boundPort}`||origin===`http://localhost:${boundPort}`;if(!allowed){res.status(403).json({error:'Request origin rejected.'});return;}const versionHeader=req.get('x-pseudoharness-protocol-version');const versionedPath=req.originalUrl.split('?')[0].startsWith('/api/v1/');const eventQuery=versionedPath&&req.method==='GET'?req.query.protocol:undefined;const suppliedVersion=versionHeader??(typeof eventQuery==='string'?eventQuery:undefined);if((versionedPath&&suppliedVersion!==String(KERNEL_PROTOCOL_VERSION))||(suppliedVersion!==undefined&&suppliedVersion!==String(KERNEL_PROTOCOL_VERSION))){res.status(426).json({error:'The client and Opnex kernel use different protocol versions. Reload with a matching Opnex client.',code:'PROTOCOL_VERSION_MISMATCH',supportedProtocolVersion:KERNEL_PROTOCOL_VERSION});return;}if(shuttingDown||shutdownRequested){res.setHeader('Connection','close');res.status(503).json({error:'Opnex kernel is shutting down.',code:'KERNEL_SHUTTING_DOWN'});return;}next();});
+app.use((req,res,next)=>{
+  if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}
+  if(!allowedOrigin(req.headers.origin,boundPort)){res.status(403).json({error:'Request origin rejected.'});return;}
+  const versionHeader=requestHeader(req,'x-opnex-protocol-version','x-pseudoharness-protocol-version');
+  const versionedPath=req.originalUrl.split('?')[0].startsWith('/api/v1/');
+  if(versionedPath){
+    res.setHeader('X-Opnex-Protocol-Version',String(KERNEL_PROTOCOL_VERSION));
+    res.setHeader('X-Pseudoharness-Protocol-Version',String(KERNEL_PROTOCOL_VERSION));
+  }
+  const eventQuery=versionedPath&&req.method==='GET'?req.query.protocol:undefined;
+  const suppliedVersion=versionHeader??(typeof eventQuery==='string'?eventQuery:undefined);
+  const versionRequired=versionedPath&&suppliedVersion!==String(KERNEL_PROTOCOL_VERSION);
+  const versionUnsupported=suppliedVersion!==undefined&&suppliedVersion!==String(KERNEL_PROTOCOL_VERSION);
+  if(versionRequired||versionUnsupported){
+    res.status(426).json({error:'The client and Opnex kernel use different protocol versions. Reload with a matching Opnex client.',code:'PROTOCOL_VERSION_MISMATCH',supportedProtocolVersion:KERNEL_PROTOCOL_VERSION});
+    return;
+  }
+  if(shuttingDown||shutdownRequested){res.setHeader('Connection','close');res.status(503).json({error:'Opnex kernel is shutting down.',code:'KERNEL_SHUTTING_DOWN'});return;}
+  next();
+});
 const versionedControlPaths=new Set(['/api/v1/info','/api/v1/snapshot','/api/v1/events','/api/v1/kernel/shutdown']);
 app.use((req,_res,next)=>{const originalPath=req.originalUrl.split('?')[0];if(originalPath.startsWith('/api/v1/')&&!versionedControlPaths.has(originalPath))req.url=req.url.replace(/^\/api\/v1(?=\/|$)/,'/api');next();});
-app.use('/api',(req,res,next)=>{if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}if(req.method!=='GET'&&req.method!=='HEAD'){
-  const origin=req.headers.origin;const allowed=!origin||origin==='http://127.0.0.1:5173'||origin==='http://localhost:5173'||origin===`http://127.0.0.1:${boundPort}`||origin===`http://localhost:${boundPort}`;
-  if(!allowed||req.get('x-pseudoharness-token')!==nonce){res.status(403).json({error:'Local request origin or session token rejected.'});return;}
-}if(stateOwnershipError&&req.path!=='/health'){res.status(503).json({error:stateOwnershipError,code:stateOwnershipCode});return;}next();});
+app.use('/api',(req,res,next)=>{
+  if(!isLoopbackHost(req.headers.host)){res.status(403).json({error:'Loopback host required.'});return;}
+  if(req.method!=='GET'&&req.method!=='HEAD'&&(!allowedOrigin(req.headers.origin,boundPort)||requestHeader(req,'x-opnex-token','x-pseudoharness-token')!==nonce)){
+    res.status(403).json({error:'Local request origin or session token rejected.'});
+    return;
+  }
+  if(stateOwnershipError&&req.path!=='/health'){res.status(503).json({error:stateOwnershipError,code:stateOwnershipCode});return;}
+  next();
+});
 app.get('/api/bootstrap',async(_req,res)=>{try{await loadState();stateLoadError=undefined;void initializeRuntime();res.json({state:getState(),runtime:getRuntimeStatus(),csrf:nonce});}catch(e){stateLoadError=errorMessage(e);res.status(503).json({error:stateLoadError,code:'STATE_UNAVAILABLE'});}});
 app.get('/api/state',async(_req,res)=>{try{await loadState();stateLoadError=undefined;void initializeRuntime();res.json({state:getState(),runtime:getRuntimeStatus()});}catch(e){stateLoadError=errorMessage(e);res.status(503).json({error:stateLoadError,code:'STATE_UNAVAILABLE'});}});
 function kernelSnapshot(csrf?:string){const state=getState();return {protocolVersion:KERNEL_PROTOCOL_VERSION,kernelInstanceId:kernelInstance?.instanceId||'',cursor:state.revision,state,runtime:getRuntimeStatus(),...(csrf?{csrf}:{})};}
 app.get('/api/v1/info',(_req,res)=>res.json({protocol:'pseudoharness.kernel',protocolVersion:KERNEL_PROTOCOL_VERSION,kernelInstanceId:kernelInstance?.instanceId||'',stateRevision:getState().revision,host,port:boundPort}));
-app.get('/api/v1/snapshot',async(_req,res)=>{try{await loadState();stateLoadError=undefined;void initializeRuntime();res.setHeader('X-Pseudoharness-Protocol-Version',String(KERNEL_PROTOCOL_VERSION));res.json(kernelSnapshot(nonce));}catch(e){stateLoadError=errorMessage(e);res.status(503).json({error:stateLoadError,code:'STATE_UNAVAILABLE'});}});
+app.get('/api/v1/snapshot',async(_req,res)=>{try{await loadState();stateLoadError=undefined;void initializeRuntime();res.json(kernelSnapshot(nonce));}catch(e){stateLoadError=errorMessage(e);res.status(503).json({error:stateLoadError,code:'STATE_UNAVAILABLE'});}});
 const projectSchema=z.object({id:z.string().uuid(),name:z.string().trim().min(1).max(80).optional(),projectRoot:z.string().trim().min(1).max(1024),pinned:z.boolean().default(false)}).strict();
 app.post('/api/projects',async(req,res)=>{try{const body=projectSchema.parse(req.body);const {resolveProjectDirectory}=await import('./directories.js');const projectRoot=await resolveProjectDirectory(body.projectRoot);const duplicate=getState().projects.find(row=>sameProjectRoot(row.projectRoot,projectRoot));if(duplicate&&duplicate.id!==body.id){res.json({project:duplicate,duplicate:true});return;}let project:any;await mutate(state=>{project=saveProjectInState(state,{...body,projectRoot,needsLocation:false});if(!state.selectedProjectId)state.selectedProjectId=project.id;if(!state.expandedProjectIds.includes(project.id))state.expandedProjectIds.push(project.id);});res.json({project,duplicate:false});}catch(e){const message=errorMessage(e);res.status(message.startsWith('Finish or stop')?409:400).json({error:message});}});
 app.post('/api/projects/select',async(req,res)=>{try{const body=z.object({projectId:z.string().uuid().nullable()}).strict().parse(req.body);await mutate(state=>{selectProjectInState(state,body.projectId);});res.json({ok:true,projectId:body.projectId});}catch(e){res.status(400).json({error:errorMessage(e)});}});
@@ -83,7 +109,7 @@ app.get('/api/tasks/:id/github',async(req,res)=>{try{const {task,project}=projec
 app.get('/api/directories',async(req,res)=>{try{const requested=req.query.path;if(requested!==undefined&&typeof requested!=='string'||typeof requested==='string'&&requested.length>1024){res.status(400).json({error:'Enter one folder path of 1024 characters or fewer.'});return;}const roots=req.query.roots;const resolve=req.query.resolve;if(roots!==undefined&&roots!=='1'&&roots!=='true'||resolve!==undefined&&resolve!=='1'&&resolve!=='true'||roots!==undefined&&resolve!==undefined){res.status(400).json({error:'Invalid folder browser request.'});return;}if(resolve==='1'||resolve==='true'){if(typeof requested!=='string'||!requested.trim()){res.status(400).json({error:'Select a folder before continuing.'});return;}res.json(await validateProjectDirectory(requested));return;}res.json(await listDirectories(typeof requested==='string'?requested:undefined,roots==='1'||roots==='true'));}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/directories',async(req,res)=>{try{const body=req.body;if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>key!=='parent'&&key!=='name')||typeof body.parent!=='string'||typeof body.name!=='string'){res.status(400).json({error:'Choose a parent folder and enter one folder name.'});return;}if(body.parent.length>1024){res.status(400).json({error:'The selected parent path is too long. Browse to the folder again.'});return;}res.status(201).json(await createChildDirectory(body.parent,body.name));}catch(e){res.status(400).json({error:errorMessage(e)});}});
 function streamStateEvents(req:express.Request,res:express.Response){
-  res.setHeader('Content-Type','text/event-stream');res.setHeader('Cache-Control','no-cache');res.setHeader('Connection','keep-alive');res.setHeader('X-Pseudoharness-Protocol-Version',String(KERNEL_PROTOCOL_VERSION));res.flushHeaders();
+  res.setHeader('Content-Type','text/event-stream');res.setHeader('Cache-Control','no-cache');res.setHeader('Connection','keep-alive');res.flushHeaders();
   const requested=req.get('last-event-id')??(typeof req.query.after==='string'?req.query.after:undefined);
   const parsedRequested=requested===undefined?undefined:Number(requested);
   let lastSent=-1;
@@ -131,7 +157,7 @@ app.post('/api/tasks/:id/delete',async(req,res)=>{try{await mutate(s=>{deleteTas
 app.post('/api/settings',async(req,res)=>{try{const settings=settingsSchema.parse(req.body);res.json({runtime:await saveSettings(settings)});}catch(e){res.status(400).json({error:errorMessage(e)});}});
 app.post('/api/runtime/refresh',async(_req,res)=>res.json({runtime:await refreshConnections()}));
 app.post('/api/v1/kernel/shutdown',async(req,res)=>{
-  if(req.get('x-pseudoharness-token')!==nonce){res.status(403).json({error:'Local request origin or session token rejected.'});return;}
+  if(requestHeader(req,'x-opnex-token','x-pseudoharness-token')!==nonce){res.status(403).json({error:'Local request origin or session token rejected.'});return;}
   if(shutdownRequested){res.status(409).json({error:'The kernel is already stopping.',code:'KERNEL_SHUTTING_DOWN'});return;}
   try{
     z.object({confirm:z.literal('stop-kernel')}).strict().parse(req.body);
@@ -146,7 +172,7 @@ app.post('/api/v1/kernel/shutdown',async(req,res)=>{
     res.status(400).json({error:message});
   }
 });
-app.get('/api/health',(req,res)=>{const challenge=req.get('x-pseudoharness-startup-challenge')||'';const startupProof=/^[a-f0-9]{64}$/i.test(challenge)?createHmac('sha256',kernelStartupSecret).update(challenge).digest('hex'):undefined;res.json({ok:true,host,port:boundPort,version,protocolVersion:KERNEL_PROTOCOL_VERSION,kernelInstanceId:kernelInstance?.instanceId||'',stateReady:!stateLoadError&&!stateOwnershipError,...(stateLoadError||stateOwnershipError?{stateError:stateOwnershipError||stateLoadError}:{}),...(stateOwnershipError?{stateCode:stateOwnershipCode}:{}),...(startupProof?{startupProof}:{})});});
+app.get('/api/health',(req,res)=>{const challenge=requestHeader(req,'x-opnex-startup-challenge','x-pseudoharness-startup-challenge')||'';const startupProof=/^[a-f0-9]{64}$/i.test(challenge)?createHmac('sha256',kernelStartupSecret).update(challenge).digest('hex'):undefined;res.json({ok:true,host,port:boundPort,version,protocolVersion:KERNEL_PROTOCOL_VERSION,kernelInstanceId:kernelInstance?.instanceId||'',stateReady:!stateLoadError&&!stateOwnershipError,...(stateLoadError||stateOwnershipError?{stateError:stateOwnershipError||stateLoadError}:{}),...(stateOwnershipError?{stateCode:stateOwnershipCode}:{}),...(startupProof?{startupProof}:{})});});
 app.use('/api',(req,res)=>res.status(404).json({error:`Unknown API endpoint: ${req.method} ${req.path}.`}));
 if(production) app.use(express.static(path.resolve(here,'../dist'),{fallthrough:true}));
 app.use((req,res)=>{if(production)res.sendFile(path.resolve(here,'../dist/index.html'));else res.status(404).send('Open the Vite development server on port 5173.');});

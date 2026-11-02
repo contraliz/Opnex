@@ -243,7 +243,7 @@ describe('Forge Git operations', () => {
     await writeFile(path.join(otherRepo, 'other.txt'), 'other root\n');
     run(otherRepo, 'add', 'other.txt');
     run(otherRepo, 'commit', '-m', 'other root');
-    const manifestPath = path.join(prepared.taskRoot, '.pseudoharness-recruitment.json');
+    const manifestPath = path.join(prepared.taskRoot, '.opnex-recruitment.json');
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { canonicalRoot: string };
     manifest.canonicalRoot = otherRepo;
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -663,7 +663,7 @@ describe('Forge Git operations', () => {
     expect(result.candidate.workerCommits.find((worker) => worker.workItemId === 'item-a')?.commit).toBe(retryCommit);
     expect(run(result.candidate.candidateRoot, 'cat-file', '-e', `${independentCommit}^{commit}`)).toBe('');
     await expect(access(path.join(oldRetry.worktreeRoot, '.git'))).resolves.toBeUndefined();
-    await expect(readFile(path.join(firstAttempt.taskRoot, '.pseudoharness-recruitment.json'), 'utf8')).resolves.toContain('attempt-1');
+    await expect(readFile(path.join(firstAttempt.taskRoot, '.opnex-recruitment.json'), 'utf8')).resolves.toContain('attempt-1');
     await expect(access(path.join(result.candidate.candidateRoot, 'src', 'retry-new.ts'))).resolves.toBeUndefined();
     await expect(access(path.join(result.candidate.candidateRoot, 'src', 'retry-old.ts'))).rejects.toThrow();
     const merged = await finalizeForgeMerge({
@@ -706,8 +706,8 @@ describe('Forge Git operations', () => {
       ],
     })).rejects.toThrow(/work item appears more than once/i);
     expect(run(candidateOwner.integration.worktreeRoot, 'rev-parse', 'HEAD')).toBe(before);
-    expect(await readFile(path.join(first.taskRoot, '.pseudoharness-recruitment.json'), 'utf8')).toContain('attempt-1');
-    expect(await readFile(path.join(second.taskRoot, '.pseudoharness-recruitment.json'), 'utf8')).toContain('attempt-2');
+    expect(await readFile(path.join(first.taskRoot, '.opnex-recruitment.json'), 'utf8')).toContain('attempt-1');
+    expect(await readFile(path.join(second.taskRoot, '.opnex-recruitment.json'), 'utf8')).toContain('attempt-2');
   });
 
   it('rejects prerequisite outcomes from another ticket or Git common directory', async () => {
@@ -799,6 +799,6 @@ describe('Forge Git operations', () => {
     expect(conflict.mergedWorkItemIds).toEqual(['item-a']);
     expect((await readFile(path.join(dependent.worktreeRoot, 'src', 'base.ts'), 'utf8'))).toContain('<<<<<<<');
     expect(run(dependent.worktreeRoot, 'rev-parse', 'MERGE_HEAD')).toBe(prerequisiteCInput.reportedCommit);
-    expect(await readFile(path.join(prepared.taskRoot, '.pseudoharness-recruitment.json'), 'utf8')).toContain('attempt-1');
+    expect(await readFile(path.join(prepared.taskRoot, '.opnex-recruitment.json'), 'utf8')).toContain('attempt-1');
   });
 });

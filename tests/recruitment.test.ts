@@ -90,7 +90,7 @@ describe('recruited worker team contracts and recovery', () => {
   });
 
   it('keeps canonical project identity while rebasing only the worker filesystem scopes', () => {
-    const canonical = path.resolve('D:/projects/pseudoharness');
+    const canonical = path.resolve('D:/projects/opnex');
     const worktree = path.resolve('D:/app-state/worktrees/task/worker-a');
     const scoped = { ...assignment, read_scope: [path.join(canonical, 'src'), 'REQ-1'], write_scope: [path.join(canonical, 'src')] };
     const local = rebaseRecruitmentAssignment(scoped, canonical, worktree);
@@ -146,7 +146,7 @@ describe('recruited worker team contracts and recovery', () => {
     const team = teamFixture(['running','queued']);
     const task = {
       id: 'task', title: 'Original task', phase: 'worker_running', createdAt: '2026-10-26T00:00:00.000Z', updatedAt: '2026-10-26T00:01:00.000Z',
-      userRoot: 'D:/project', agentmemProjectId: 'pseudoharness', userMessages: ['Original task'], messages: [], correctionCount: 0,
+      userRoot: 'D:/project', agentmemProjectId: 'opnex', userMessages: ['Original task'], messages: [], correctionCount: 0,
       processedTurns: [], currentPassId: 'pass', activeTurnId: 'turn-0', activeRole: 'worker',
       passes: [{ id: 'pass', index: 1, createdAt: '2026-10-26T00:00:00.000Z', userInput: 'Original task', userInputs: ['Original task'], userMessageIds: [], phase: 'worker_running', correctionCount: 0, processedTurns: [], recruitmentTeam: team }],
     };

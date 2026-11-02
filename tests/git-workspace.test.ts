@@ -9,7 +9,7 @@ import { layoutCommitGraph } from '../src/ui/git-graph.js';
 let temporary:string|undefined;
 afterEach(async()=>{if(temporary){await rm(temporary,{recursive:true,force:true});temporary=undefined;}});
 function git(args:string[],cwd:string){execFileSync('git',args,{cwd,stdio:'ignore',windowsHide:true});}
-async function repository(){temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-git-workspace-'));git(['init','--quiet','-b','main'],temporary);git(['config','user.name','Test Author'],temporary);git(['config','user.email','test@example.invalid'],temporary);return temporary;}
+async function repository(){temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-git-workspace-'));git(['init','--quiet','-b','main'],temporary);git(['config','user.name','Test Author'],temporary);git(['config','user.email','test@example.invalid'],temporary);return temporary;}
 
 describe('local Git and GitHub workspace',()=>{
   it('parses Git worktree and commit records without losing branch metadata',()=>{

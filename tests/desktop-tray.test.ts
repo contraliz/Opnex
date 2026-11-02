@@ -84,10 +84,10 @@ describe('managed kernel shutdown', () => {
     const state = { shutdownAccepted: false };
     const waitForBackendExit = vi.fn(async () => true);
     await stopOwnedKernel({ ownsKernel: true, origin: 'http://127.0.0.1:4174', fetchImpl, state, isBackendExited: () => false, waitForBackendExit });
-    expect(fetchImpl.mock.calls[0][1].headers).toEqual({ 'x-pseudoharness-protocol-version': '1' });
+    expect(fetchImpl.mock.calls[0][1].headers).toEqual({ 'x-opnex-protocol-version': '1', 'x-pseudoharness-protocol-version': '1' });
     expect(fetchImpl.mock.calls[1][1]).toMatchObject({
       method: 'POST',
-      headers: { 'x-pseudoharness-protocol-version': '1', 'x-pseudoharness-token': 'opaque-test-token' },
+      headers: { 'x-opnex-protocol-version': '1', 'x-pseudoharness-protocol-version': '1', 'x-opnex-token': 'opaque-test-token', 'x-pseudoharness-token': 'opaque-test-token' },
       body: '{"confirm":"stop-kernel"}',
     });
     expect(state.shutdownAccepted).toBe(true);

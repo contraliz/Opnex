@@ -136,7 +136,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   Reflect.deleteProperty(navigator, 'clipboard');
-  Reflect.deleteProperty(window, 'pseudoharnessDesktop');
+  Reflect.deleteProperty(window, 'opnexDesktop');
 });
 
 describe('Heads-up panel', () => {
@@ -187,7 +187,7 @@ describe('Heads-up panel', () => {
     expect(within(panel).getByText('worker-current')).toBeTruthy();
     expect(within(panel).queryByText('router-old')).toBeNull();
     const openCodexThread = vi.fn().mockResolvedValue(true);
-    Object.defineProperty(window, 'pseudoharnessDesktop', { configurable: true, value: { openCodexThread } });
+    Object.defineProperty(window, 'opnexDesktop', { configurable: true, value: { openCodexThread } });
     const codexLinks = [
       ['Router', 'router-current'],
       ['Orchestrator', 'orchestrator-current'],

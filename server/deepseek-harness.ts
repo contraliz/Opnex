@@ -550,7 +550,7 @@ export class DeepSeekHarnessSdkRuntime extends EventEmitter {
       throw new DeepSeekHarnessError('configuration', 'Select a DeepSeek Harness provider and model before starting a worker.');
     }
     this._mcpToolCatalog = makeMcpToolCatalog(options.launch.configuredMcpServers ?? []);
-    this.sessionId = options.sessionId?.trim() || `pseudoharness-${randomUUID()}`;
+    this.sessionId = options.sessionId?.trim() || `opnex-${randomUUID()}`;
     if (this.sessionId.length > 200 || /[\r\n]/.test(this.sessionId)) {
       throw new DeepSeekHarnessError('configuration', 'The persisted DeepSeek Harness session ID is invalid.');
     }

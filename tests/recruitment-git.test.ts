@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -30,7 +30,7 @@ describe('bounded recruitment Git worktrees', () => {
   const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
 
   beforeEach(async () => {
-    fixture = await mkdtemp(path.join(os.tmpdir(), 'pseudoharness-recruitment-git-'));
+    fixture = await mkdtemp(path.join(os.tmpdir(), 'opnex-recruitment-git-'));
     repo = path.join(fixture, 'repo');
     worktrees = path.join(fixture, 'managed-worktrees');
     await mkdir(repo);
@@ -231,6 +231,27 @@ describe('bounded recruitment Git worktrees', () => {
     await expect(realpath(prepared.taskRoot)).rejects.toThrow();
   });
 
+  it('preserves prepared worktrees when unexpected task-root data is present', async () => {
+    const prepared=await prepare('unexpected-root-data',['alpha']);
+    const note=path.join(prepared.taskRoot,'notes.txt');
+    await writeFile(note,'user data\n');
+
+    const errors=await cleanupPreparedRecruitmentWorktrees(prepared,worktrees);
+
+    expect(errors.join(' ')).toContain('task root contains unexpected files');
+    await expect(readFile(note,'utf8')).resolves.toBe('user data\n');
+    expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(3);
+    expect(await readRecruitmentBranchHead(repo,prepared.workers[0].branch)).toBe(baseCommit);
+  });
+
+  it('reads the old ownership-manifest name for existing prepared worktrees', async () => {
+    const prepared=await prepare('legacy-manifest',['alpha']);
+    await rename(path.join(prepared.taskRoot,'.opnex-recruitment.json'),path.join(prepared.taskRoot,'.pseudoharness-recruitment.json'));
+
+    expect(await cleanupPreparedRecruitmentWorktrees(prepared,worktrees)).toEqual([]);
+    await expect(realpath(prepared.taskRoot)).rejects.toThrow();
+  });
+
   it('retires successfully created worktrees and the initial ref left by a failed later add', async () => {
     const taskRoot=path.join(worktrees,'partial-cleanup'),workerBranch='recruitment/partial-cleanup/worker-alpha',hook=path.join(repo,'.git','hooks','post-checkout');
     await writeFile(hook,`#!/bin/sh\ngit update-ref refs/heads/${workerBranch} "$2"\n`);await chmod(hook,0o755);
@@ -243,7 +264,7 @@ describe('bounded recruitment Git worktrees', () => {
     const taskRoot=path.join(worktrees,'partial-changed'),workerBranch='recruitment/partial-changed/worker-alpha',hook=path.join(repo,'.git','hooks','post-checkout');
     await writeFile(hook,`#!/bin/sh\ngit update-ref refs/heads/${workerBranch} ${foreignHead}\n`);await chmod(hook,0o755);
     await expect(prepareRecruitmentWorktrees({canonicalRoot:repo,taskRoot,baseRef:baseCommit,integrationBranch:'recruitment/partial-changed/integration',workers:[{workerId:'alpha',branch:workerBranch}]})).rejects.toThrow(/Worktree preparation failed.*branch recruitment\/partial-changed\/worker-alpha no longer points at its initial commit/);
-    expect(await readRecruitmentBranchHead(repo,workerBranch)).toBe(foreignHead);expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(2);await expect(readFile(path.join(taskRoot,'.pseudoharness-recruitment.json'),'utf8')).resolves.toContain(workerBranch);
+    expect(await readRecruitmentBranchHead(repo,workerBranch)).toBe(foreignHead);expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(2);await expect(readFile(path.join(taskRoot,'.opnex-recruitment.json'),'utf8')).resolves.toContain(workerBranch);
   });
 
   it('preserves all prepared resources when a generated branch ref no longer has its initial tip', async () => {
@@ -254,7 +275,7 @@ describe('bounded recruitment Git worktrees', () => {
     expect(errors.join(' ')).toContain('no longer points at its initial commit');
     expect(await readRecruitmentBranchHead(repo,worker.branch)).toBe(changedTip);
     expect((await readFile(path.join(worker.worktreeRoot,'shared.txt'),'utf8')).replace(/\r\n/g,'\n')).toBe('base\n');
-    await expect(readFile(path.join(prepared.taskRoot,'.pseudoharness-recruitment.json'),'utf8')).resolves.toContain(worker.branch);
+    await expect(readFile(path.join(prepared.taskRoot,'.opnex-recruitment.json'),'utf8')).resolves.toContain(worker.branch);
     expect(run(repo,'worktree','list','--porcelain').split(/\r?\n/).filter(line=>line.startsWith('worktree '))).toHaveLength(3);
   });
 });

@@ -31,10 +31,10 @@ async function launchSmoke(url, profile, launcher) {
     env: {
       ...process.env,
       OPNEX_ELECTRON_DATA_DIR: profile,
-      PSEUDOHARNESS_ELECTRON_DATA_DIR: profile,
+
       OPNEX_SMOKE_TEST: '1',
-      PSEUDOHARNESS_SMOKE_TEST: '1',
-      ...(url ? { OPNEX_SMOKE_URL: url, PSEUDOHARNESS_SMOKE_URL: url } : {}),
+
+      ...(url ? { OPNEX_SMOKE_URL: url } : {}),
     },
     stdio: 'inherit',
     windowsHide: true,
@@ -93,14 +93,14 @@ async function waitForKernelHealth(origin, child, timeoutMs = 20_000) {
 
 async function stopExternalKernel(origin, child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  const versionHeaders = { 'x-pseudoharness-protocol-version': '1' };
+  const versionHeaders = { 'x-opnex-protocol-version': '1' };
   const snapshotResponse = await fetch(`${origin}/api/v1/snapshot`, { headers: versionHeaders, signal: AbortSignal.timeout(1500) });
   if (!snapshotResponse.ok) throw new Error(`External kernel snapshot failed with HTTP ${snapshotResponse.status}.`);
   const snapshot = await snapshotResponse.json();
   if (typeof snapshot.csrf !== 'string' || !snapshot.csrf) throw new Error('External kernel snapshot omitted its shutdown token.');
   const shutdown = await fetch(`${origin}/api/v1/kernel/shutdown`, {
     method: 'POST',
-    headers: { ...versionHeaders, 'content-type': 'application/json', 'x-pseudoharness-token': snapshot.csrf },
+    headers: { ...versionHeaders, 'content-type': 'application/json', 'x-opnex-token': snapshot.csrf },
     body: JSON.stringify({ confirm: 'stop-kernel' }),
     signal: AbortSignal.timeout(5000),
   });
@@ -124,11 +124,11 @@ async function verifyAttachedKernelQuit(profile) {
       NODE_ENV: 'production',
       PORT: String(port),
       OPNEX_DATA_DIR: dataDirectory,
-      PSEUDOHARNESS_DATA_DIR: dataDirectory,
+
       OPNEX_DESKTOP: '1',
-      PSEUDOHARNESS_DESKTOP: '1',
+
       OPNEX_STARTUP_SECRET: startupSecret,
-      PSEUDOHARNESS_STARTUP_SECRET: startupSecret,
+
     },
     stdio: 'ignore',
     windowsHide: true,

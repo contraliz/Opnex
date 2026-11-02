@@ -5,7 +5,7 @@
   "main": "dist-server/index.js",
   "bin": {
     "opnex": "bin/opnex.js",
-    "pseudoharness": "bin/pseudoharness.js"
+    "pseudoharness": "bin/opnex.js"
   },
   "files": [
     "LICENSE",
@@ -15,11 +15,6 @@
     "dist-server/",
     "policy/CODEX_DELEGATION_POLICY.md",
     "docs/browser-github-and-parallel-workers.md"
-  ],
-  "bundledDependencies": [
-    "@modelcontextprotocol/sdk",
-    "express",
-    "zod"
   ],
   "license": "MIT",
   "engines": {

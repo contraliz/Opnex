@@ -17,7 +17,10 @@ async function stopOwnedKernel({ ownsKernel, origin, fetchImpl = fetch, state, i
     let snapshot;
     try {
       snapshot = await fetchImpl(`${origin}/api/v1/snapshot`, {
-        headers: { 'x-pseudoharness-protocol-version': String(protocolVersion) },
+        headers: {
+          'x-opnex-protocol-version': String(protocolVersion),
+          'x-pseudoharness-protocol-version': String(protocolVersion),
+        },
         signal: AbortSignal.timeout(1_500),
       });
     } catch (error) {
@@ -38,7 +41,9 @@ async function stopOwnedKernel({ ownsKernel, origin, fetchImpl = fetch, state, i
           method: 'POST',
           headers: {
             'content-type': 'application/json',
+            'x-opnex-protocol-version': String(protocolVersion),
             'x-pseudoharness-protocol-version': String(protocolVersion),
+            'x-opnex-token': snapshotBody.csrf,
             'x-pseudoharness-token': snapshotBody.csrf,
           },
           body: JSON.stringify({ confirm: 'stop-kernel' }),

@@ -9,7 +9,7 @@ afterEach(async()=>{if(temporary){await rm(temporary,{recursive:true,force:true}
 
 describe('local directory browsing',()=>{
   it('returns canonical directory paths and only child directories',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-folders-'));
     await mkdir(path.join(temporary,'Projects'));
     await mkdir(path.join(temporary,'Archive'));
     await writeFile(path.join(temporary,'notes.txt'),'not listed');
@@ -22,7 +22,7 @@ describe('local directory browsing',()=>{
   });
 
   it('rejects relative, missing and file paths with actionable errors',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-folders-'));
     const file=path.join(temporary,'file.txt');await writeFile(file,'content');
     await expect(listDirectories('relative/path')).rejects.toThrow('Enter an absolute folder path.');
     await expect(resolveProjectDirectory('relative/path')).rejects.toThrow('Enter an absolute folder path.');
@@ -41,7 +41,7 @@ describe('local directory browsing',()=>{
   });
 
   it('validates a selected folder without enumerating its contents',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-folders-'));
     await mkdir(path.join(temporary,'child'));
     const result=await validateProjectDirectory(path.join(temporary,'child'));
     expect(result.path).toBe(await realPath(path.join(temporary,'child')));
@@ -50,7 +50,7 @@ describe('local directory browsing',()=>{
   });
 
   it('creates one child folder under the canonical selected parent without recursion',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-folders-'));
     const parent=path.join(temporary,'Projects');await mkdir(parent);
     const created=await createChildDirectory(parent,'New project');
     expect(created).toEqual({parent:await realPath(parent),entry:{name:'New project',path:path.join(await realPath(parent),'New project')}});
@@ -60,14 +60,14 @@ describe('local directory browsing',()=>{
   });
 
   it('rejects empty, traversal, separator and control-character names',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-folders-'));
     for(const name of ['', '   ','.','..','../outside','nested/child',`nested\\child`,'bad\u0000name'])await expect(createChildDirectory(temporary,name)).rejects.toThrow();
     if(process.platform==='win32')for(const name of ['CON','folder.','folder ','bad:name'])await expect(createChildDirectory(temporary,name)).rejects.toThrow('not valid for a Windows folder');
     await expect(createChildDirectory(path.join(temporary,'missing'),'New')).rejects.toThrow('does not exist');
   });
 
   it('does not overwrite an existing file or folder',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-folders-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-folders-'));
     const existing=path.join(temporary,'same');await writeFile(existing,'keep this file');
     await expect(createChildDirectory(temporary,'same')).rejects.toThrow('already exists');
     expect(await readFile(existing,'utf8')).toBe('keep this file');

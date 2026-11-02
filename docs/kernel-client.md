@@ -20,7 +20,7 @@ Closing the Electron window disconnects that client and leaves the shell and ker
 
 ## Protocol version 1
 
-Every `/api/v1/*` request must supply `x-pseudoharness-protocol-version: 1`. This versioned protocol header and the matching `X-Pseudoharness-Protocol-Version` response header retain their established names across the Opnex rebrand for client compatibility. EventSource clients pass `?protocol=1`, because the browser API does not let them set request headers. A missing, stale, or unsupported version returns HTTP 426 with `PROTOCOL_VERSION_MISMATCH`. The existing `/api/*` routes remain available for legacy clients. Version 1 maps supported commands onto those same server-side validators and handlers; it does not give the page authority to write state directly.
+Every `/api/v1/*` request must supply `x-opnex-protocol-version: 1`. The kernel also accepts the former `x-pseudoharness-protocol-version` header. Current Opnex clients send both names so they can attach to an already-running older kernel; responses include both names during the compatibility period. EventSource clients pass `?protocol=1`, because the browser API does not let them set request headers. A missing, stale, or unsupported version returns HTTP 426 with `PROTOCOL_VERSION_MISMATCH`. The existing `/api/*` routes remain available for legacy clients. Version 1 maps supported commands onto those same server-side validators and handlers; it does not give the page authority to write state directly.
 
 The first client request is `GET /api/v1/snapshot`. It returns:
 
@@ -35,7 +35,7 @@ The first client request is `GET /api/v1/snapshot`. It returns:
 }
 ```
 
-The `csrf` value is process-local. Send it as `x-pseudoharness-token` on every mutation, together with the protocol version. For example, `POST /api/v1/projects/select` carries the same JSON body as the compatible `/api/projects/select` route. The kernel validates project IDs, settings, approvals, file paths, write scopes, and workflow state before changing the persisted snapshot. A rejected command leaves state unchanged and returns an HTTP error.
+The `csrf` value is process-local. Send it as `x-opnex-token` on every mutation, together with the protocol version. The former `x-pseudoharness-token` remains accepted; current Opnex clients send both token headers for older running kernels. For example, `POST /api/v1/projects/select` carries the same JSON body as the compatible `/api/projects/select` route. The kernel validates project IDs, settings, approvals, file paths, write scopes, and workflow state before changing the persisted snapshot. A rejected command leaves state unchanged and returns an HTTP error.
 
 `GET /api/v1/info` returns the protocol version, instance ID, loopback host/port, and persisted revision. `GET /api/v1/events?protocol=1` opens a server-sent event stream. Each state event has an SSE `id` equal to the persisted monotonic revision and contains a complete snapshot, not a partial patch. A reconnect sends the browser's `Last-Event-ID`; clients may also pass `?after=<revision>`. If the saved cursor no longer equals the current revision, the kernel sets `resync: true` and sends the latest full snapshot. Snapshot reconnects never issue commands or wake a model.
 
@@ -45,7 +45,7 @@ The revision increments after every successful state mutation, after the new sta
 
 ## Local security and compatibility
 
-The kernel binds only to loopback, validates the request `Host` and allowed browser origins, uses a session token for mutations, applies request-size limits, and retains the existing route-level schema, path, approval, and task-scope checks. It does not trust a client-provided provider, session, worktree, or approval outcome. A client protocol mismatch fails with an explicit error; it does not downgrade to a different provider or permission policy.
+The kernel binds only to loopback, validates the request `Host` and allowed browser origins, uses a session token for mutations, applies request-size limits, and retains the existing route-level schema, path, approval, and task-scope checks. It does not trust a client-provided provider, session, worktree, or approval outcome. The version 1 `protocol` identity in `/api/v1/info` remains `pseudoharness.kernel` for clients that check that established value. A client protocol mismatch fails with an explicit error; it does not downgrade to a different provider or permission policy.
 
 State upgrades remain in the existing state format. A missing monotonic revision is initialized to zero and persisted along with other safe normalization. If the state file cannot be parsed or validated, the kernel keeps the file and reports a state error instead of replacing user history. Existing completed messages, receipts, and worktrees remain available. Active work is marked interrupted and paused for explicit user follow-up.
 

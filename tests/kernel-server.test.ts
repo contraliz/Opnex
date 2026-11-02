@@ -11,7 +11,7 @@ const temporaryDirectories:string[]=[];
 const wait=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 
 async function temporaryDirectory(label:string){
-  const root=await mkdtemp(path.join(os.tmpdir(),`pseudoharness-${label}-`));
+  const root=await mkdtemp(path.join(os.tmpdir(),`opnex-${label}-`));
   temporaryDirectories.push(root);return root;
 }
 
@@ -19,7 +19,7 @@ function launchKernel(dataDirectory:string){
   let output='';
   const child=spawn(process.execPath,['--import','tsx','server/index.ts'],{
     cwd:process.cwd(),
-    env:{...process.env,NODE_ENV:'test',PORT:'0',PSEUDOHARNESS_DATA_DIR:dataDirectory,PSEUDOHARNESS_STARTUP_SECRET:randomBytes(32).toString('hex'),CODEX_HOME:path.join(dataDirectory,'codex-home')},
+    env:{...process.env,NODE_ENV:'test',PORT:'0',OPNEX_DATA_DIR:dataDirectory,OPNEX_STARTUP_SECRET:randomBytes(32).toString('hex'),CODEX_HOME:path.join(dataDirectory,'codex-home')},
     stdio:['ignore','pipe','pipe'],windowsHide:true
   });
   child.stdout?.on('data',chunk=>{output+=String(chunk);});
@@ -100,9 +100,11 @@ describe('headless kernel HTTP boundary',()=>{
     }));
 
     const kernel=await startKernel(dataDirectory);
-    const clientHeader={'x-pseudoharness-protocol-version':'1'};
+    const clientHeader={'x-opnex-protocol-version':'1'};
     const initialResponse=await fetch(`${kernel.origin}/api/v1/snapshot`,{headers:clientHeader});
     expect(initialResponse.status).toBe(200);
+    expect(initialResponse.headers.get('x-opnex-protocol-version')).toBe('1');
+    expect(initialResponse.headers.get('x-pseudoharness-protocol-version')).toBe('1');
     const initial=await initialResponse.json() as {protocolVersion:number;kernelInstanceId:string;cursor:number;csrf:string;state:{revision:number;tasks:{id:string;phase:string;messages:{text:string}[]}[]}};
     expect(initial).toMatchObject({protocolVersion:1,kernelInstanceId:kernel.instance.instanceId,cursor:0,state:{revision:0}});
     expect(initial.state.tasks.find(task=>task.id==='interrupted-task')?.phase).toBe('paused_after_restart');
@@ -134,7 +136,7 @@ describe('headless kernel HTTP boundary',()=>{
     expect(missingShutdownToken.status).toBe(403);
     const wrongShutdownToken=await fetch(`${kernel.origin}/api/v1/kernel/shutdown`,{method:'POST',headers:{...clientHeader,origin:kernel.origin,'content-type':'application/json','x-pseudoharness-token':'wrong'},body:JSON.stringify({confirm:'stop-kernel'})});
     expect(wrongShutdownToken.status).toBe(403);
-    const mutation=await fetch(`${kernel.origin}/api/v1/projects/select`,{method:'POST',headers:{...clientHeader,origin:kernel.origin,'content-type':'application/json','x-pseudoharness-token':initial.csrf},body:JSON.stringify({projectId:null})});
+    const mutation=await fetch(`${kernel.origin}/api/v1/projects/select`,{method:'POST',headers:{...clientHeader,origin:kernel.origin,'content-type':'application/json','x-opnex-token':initial.csrf},body:JSON.stringify({projectId:null})});
     expect(mutation.status).toBe(200);
     const resumedController=new AbortController();
     const resumedEvents=await fetch(`${kernel.origin}/api/v1/events?protocol=1`,{headers:{...clientHeader,origin:'http://127.0.0.1:5173','last-event-id':String(firstEvent.id)},signal:resumedController.signal});
@@ -149,7 +151,7 @@ describe('headless kernel HTTP boundary',()=>{
     expect((await (await fetch(`${kernel.origin}/api/v1/snapshot`,{headers:clientHeader})).json()).state.tasks).toHaveLength(4);
     await stopChild(duplicate.child);
 
-    const shutdown=await fetch(`${kernel.origin}/api/v1/kernel/shutdown`,{method:'POST',headers:{...clientHeader,origin:kernel.origin,'content-type':'application/json','x-pseudoharness-token':initial.csrf},body:JSON.stringify({confirm:'stop-kernel'})});
+    const shutdown=await fetch(`${kernel.origin}/api/v1/kernel/shutdown`,{method:'POST',headers:{...clientHeader,origin:kernel.origin,'content-type':'application/json','x-opnex-token':initial.csrf},body:JSON.stringify({confirm:'stop-kernel'})});
     expect(shutdown.status).toBe(202);
     await poll(async()=>kernel.child.exitCode===0?true:undefined,()=>kernel.getOutput()||'Kernel did not stop cleanly.');
     const persisted=JSON.parse(await readFile(path.join(dataDirectory,'state.json'),'utf8'));
@@ -175,7 +177,10 @@ describe('headless kernel HTTP boundary',()=>{
     const first=await startKernel(firstDirectory);
     const second=await startKernel(secondDirectory);
     expect(second.instance.instanceId).not.toBe(first.instance.instanceId);
-    const firstInfo=await (await fetch(`${first.origin}/api/v1/info`,{headers:{'x-pseudoharness-protocol-version':'1'}})).json();
+    const firstInfoResponse=await fetch(`${first.origin}/api/v1/info`,{headers:{'x-pseudoharness-protocol-version':'1'}});
+    expect(firstInfoResponse.headers.get('x-opnex-protocol-version')).toBe('1');
+    expect(firstInfoResponse.headers.get('x-pseudoharness-protocol-version')).toBe('1');
+    const firstInfo=await firstInfoResponse.json();
     const secondInfo=await (await fetch(`${second.origin}/api/v1/info`,{headers:{'x-pseudoharness-protocol-version':'1'}})).json();
     expect(firstInfo.kernelInstanceId).not.toBe(secondInfo.kernelInstanceId);
     for(const kernel of [first,second]){

@@ -13,8 +13,8 @@ const canRunGit=await gitAvailable();
 
 describe('per-turn workspace source snapshots',()=>{
   it.runIf(canRunGit)('distinguishes an unchanged workspace from text, binary, and committed source changes without storing contents',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-turn-source-'));
-    git(['init','--quiet'],temporary);git(['config','user.name','Pseudoharness test'],temporary);git(['config','user.email','test@example.invalid'],temporary);
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-turn-source-'));
+    git(['init','--quiet'],temporary);git(['config','user.name','Opnex test'],temporary);git(['config','user.email','test@example.invalid'],temporary);
     await writeFile(path.join(temporary,'src.ts'),'const answer = 1;\n');await writeFile(path.join(temporary,'asset.bin'),Buffer.from([0,1,2,3]));git(['add','.'],temporary);git(['commit','--quiet','-m','baseline'],temporary);
     const baseline=await captureTurnSourceFingerprint(temporary);expect(baseline.available).toBe(true);
     const unchanged=await captureTurnSourceFingerprint(temporary);expect(compareTurnSourceFingerprints(baseline,unchanged)).toMatchObject({status:'verified',changedPaths:[],repositoryRevisionChanged:false});
@@ -26,15 +26,15 @@ describe('per-turn workspace source snapshots',()=>{
   });
 
   it('fails closed for a workspace without a repository snapshot instead of treating it as unchanged',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-turn-source-no-git-'));
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-turn-source-no-git-'));
     const snapshot=await captureTurnSourceFingerprint(temporary);
     expect(snapshot.available).toBe(false);
     expect(compareTurnSourceFingerprints(snapshot,snapshot)).toMatchObject({status:'unavailable',reason:'This workspace is not inside a Git repository.'});
   });
 
   it.runIf(canRunGit)('audits the complete changed-path inventory even when the UI diff preview limit is exceeded',async()=>{
-    temporary=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-turn-source-many-'));
-    git(['init','--quiet'],temporary);git(['config','user.name','Pseudoharness test'],temporary);git(['config','user.email','test@example.invalid'],temporary);
+    temporary=await mkdtemp(path.join(os.tmpdir(),'opnex-turn-source-many-'));
+    git(['init','--quiet'],temporary);git(['config','user.name','Opnex test'],temporary);git(['config','user.email','test@example.invalid'],temporary);
     await mkdir(path.join(temporary,'src'),{recursive:true});await writeFile(path.join(temporary,'src','base.ts'),'export const base = true;\n');git(['add','.'],temporary);git(['commit','--quiet','-m','baseline'],temporary);
     await mkdir(path.join(temporary,'generated'),{recursive:true});
     for(let index=0;index<225;index++)await writeFile(path.join(temporary,'generated',`file-${index}.txt`),`value ${index}\n`);

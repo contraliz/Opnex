@@ -163,7 +163,7 @@ describe('Forge Codex provider contract', () => {
     await provider.start(request);
 
     await expect(provider.handleServerRequest(10, 'item/tool/call', {
-      threadId: 'thread-forge-1', turnId: 'turn-forge-1', namespace: 'pseudoharness', tool: 'workspace', arguments: { action: 'initialize_git_repository' },
+      threadId: 'thread-forge-1', turnId: 'turn-forge-1', namespace: 'opnex', tool: 'workspace', arguments: { action: 'initialize_git_repository' },
     })).resolves.toBe(true);
     expect(client.respondServerError).toHaveBeenCalledWith(10, -32601, expect.stringContaining('No application effect was applied'));
     expect(client.respondServerRequest).not.toHaveBeenCalled();

@@ -11,12 +11,38 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const temp=await mkdtemp(path.join(os.tmpdir(),'opnex-electron-annotation-'));
 const repo=path.join(temp,'fixture-repo');const data=path.join(temp,'electron-data');const output=process.env.OPNEX_ELECTRON_OUTPUT||process.env.PSEUDOHARNESS_ELECTRON_OUTPUT?path.resolve(process.env.OPNEX_ELECTRON_OUTPUT||process.env.PSEUDOHARNESS_ELECTRON_OUTPUT):await mkdtemp(path.join(os.tmpdir(),'opnex-electron-annotation-evidence-'));
 const keepAppOpen=(process.env.OPNEX_ELECTRON_KEEP_OPEN||process.env.PSEUDOHARNESS_ELECTRON_KEEP_OPEN)==='1';
+const annotationOnly=process.env.OPNEX_ELECTRON_ANNOTATION_ONLY==='1'||process.argv.includes('--annotation-only');
 let emulatedViewport=false;
 await mkdir(repo,{recursive:true});await mkdir(path.join(data,'local-state'),{recursive:true});await mkdir(output,{recursive:true});
 const git=(args)=>execFileSync('git',args,{cwd:repo,stdio:'ignore',windowsHide:true});
 function cdp(target){let id=0;const pending=new Map();const socket=new WebSocket(target.webSocketDebuggerUrl);return new Promise((resolve,reject)=>{socket.addEventListener('open',()=>resolve({socket,send(method,params={}){const callId=++id;return new Promise((done,fail)=>{pending.set(callId,{done,fail});socket.send(JSON.stringify({id:callId,method,params}));});},close(){socket.close();}}));socket.addEventListener('message',event=>{const message=JSON.parse(event.data);if(!message.id)return;const item=pending.get(message.id);if(!item)return;pending.delete(message.id);if(message.error)item.fail(new Error(message.error.message));else item.done(message.result);});socket.addEventListener('error',reject);});}
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function waitFor(read,condition,label,timeout=25_000){const end=Date.now()+timeout;let lastError;while(Date.now()<end){try{const value=await read();if(condition(value))return value;}catch(error){lastError=error;}if(child?.exitCode!==null&&child?.exitCode!==undefined)throw new Error(`Electron exited with code ${child.exitCode} while waiting for ${label}.`);await sleep(200);}throw new Error(`Timed out waiting for ${label}.${lastError?` Last error: ${lastError}`:''}`);}
+async function waitFor(read, condition, label, timeout = 25_000) {
+  const end = Date.now() + timeout;
+  let lastError;
+  let lastValue;
+
+  while (Date.now() < end) {
+    try {
+      lastValue = await read();
+      if (condition(lastValue)) return lastValue;
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (child?.exitCode !== null && child?.exitCode !== undefined) {
+      throw new Error(`Electron exited with code ${child.exitCode} while waiting for ${label}.`);
+    }
+
+    await sleep(200);
+  }
+
+  const details = [
+    lastError ? `Last error: ${lastError}` : undefined,
+    lastValue !== undefined ? `Last value: ${JSON.stringify(lastValue)}` : undefined,
+  ].filter(Boolean).join(' ');
+  throw new Error(`Timed out waiting for ${label}.${details ? ` ${details}` : ''}`);
+}
 async function resizeApp(client,width,height){
   const targetWidth=Math.max(720,width),targetHeight=Math.max(620,height);
   const emulate=async()=>{await client.send('Emulation.setDeviceMetricsOverride',{width:targetWidth,height:targetHeight,deviceScaleFactor:1,mobile:false});emulatedViewport=true;await waitFor(()=>evalValue(client,'innerWidth'),value=>value===targetWidth,`${width}×${height}px emulated Electron viewport`,3000);};
@@ -27,7 +53,7 @@ async function resizeApp(client,width,height){
   catch{await emulate();}
   await sleep(100);
 }
-async function evalValue(client,expression){const result=await client.send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,userGesture:true});if(result.exceptionDetails)throw new Error(result.exceptionDetails.text||'Renderer evaluation failed.');return result.result?.value;}
+async function evalValue(client,expression){const result=await client.send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,userGesture:true});if(result.exceptionDetails)throw new Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text||'Renderer evaluation failed.');return result.result?.value;}
 async function saveScreenshot(client,name){const capture=await client.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(path.join(output,name),Buffer.from(capture.data,'base64'));}
 async function measureSessionLayout(client,label){
   const value=await evalValue(client,`(()=>{
@@ -63,18 +89,16 @@ function assertSessionLayout(layout){
     for(const child of pane.readingChildren)if(child.centerError!==null&&child.centerError>2)throw new Error(`${layout.label}: ${child.className} is off-center in its conversation (${JSON.stringify(child)}).`);
   }
 }
-async function checkPassUsageTooltip(client,label){
-  const target=await evalValue(client,`(()=>{const datum=document.querySelector('.pane-body[data-tab-kind="session"]:not([hidden]) .pass-usage-datum'),body=datum?.closest('.pane-body');if(!body||!datum)return {error:'pass usage datum missing'};datum.scrollIntoView({block:'center',behavior:'instant'});const button=datum.getBoundingClientRect();return {x:button.left+button.width/2,y:button.top+button.height/2};})()`);
-  if(target.error)throw new Error(`${label}: ${target.error}.`);
-  await client.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:target.x,y:target.y});await sleep(120);
-  const tooltip=await evalValue(client,`(()=>{const datum=document.querySelector('.pane-body[data-tab-kind="session"]:not([hidden]) .pass-usage-datum'),body=datum?.closest('.pane-body'),element=datum?.querySelector('.pass-usage-tooltip');if(!body||!element)return {error:'pass usage tooltip missing'};const b=body.getBoundingClientRect(),t=element.getBoundingClientRect(),style=getComputedStyle(element);return {visibility:style.visibility,left:t.left,right:t.right,width:t.width,scrollWidth:element.scrollWidth,clientWidth:element.clientWidth,pane:{left:b.left,right:b.right}}})()`);
-  if(tooltip.error||tooltip.visibility!=='visible'||tooltip.left<tooltip.pane.left-1||tooltip.right>tooltip.pane.right+1||tooltip.scrollWidth>tooltip.clientWidth+1)throw new Error(`${label}: pass usage tooltip escapes its narrow pane (${JSON.stringify(tooltip)}).`);
-  await evalValue(client,"document.querySelector('.pane-body[data-tab-kind=\\\"session\\\"]:not([hidden]) .pass-usage-datum')?.closest('.conversation')?.scrollTo({top:0,behavior:'instant'});true");
-  await client.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:1,y:1});
-  return tooltip;
+async function checkPassUsageSummary(client,label){
+  const usage=await evalValue(client,`(()=>{const panes=[...document.querySelectorAll('.pane-body[data-tab-kind="session"]:not([hidden])')],pane=panes.find(item=>item.querySelector('.usage[aria-label="Usage summary for pass 1"]')),summary=pane?.querySelector('.usage[aria-label="Usage summary for pass 1"]');if(!pane||!summary)return {error:'pass token-usage summary missing',visibleSessionPanes:panes.length,summaryLabels:[...document.querySelectorAll('.usage')].map(item=>item.getAttribute('aria-label'))};summary.scrollIntoView({block:'center',behavior:'instant'});summary.querySelector('summary').click();const table=summary.querySelector('.usage-table'),details=summary.getBoundingClientRect(),body=pane.getBoundingClientRect();return {value:summary.querySelector('.usage-value')?.textContent||'',open:summary.open,table:table?{text:table.innerText,scrollWidth:table.scrollWidth,clientWidth:table.clientWidth}:null,details:{left:details.left,right:details.right},pane:{left:body.left,right:body.right}}})()`);
+  if(usage.error||!usage.open||!usage.table)throw new Error(`${label}: ${usage.error||'pass token-usage table did not open'} (${JSON.stringify(usage)}).`);
+  if(!usage.value.includes('14,549')||!usage.table.text.includes('orchestrator')||!usage.table.text.includes('worker'))throw new Error(`${label}: token totals or role rows were not rendered (${JSON.stringify(usage)}).`);
+  if(usage.details.left<usage.pane.left-1||usage.details.right>usage.pane.right+1||usage.table.scrollWidth>usage.table.clientWidth+1)throw new Error(`${label}: token-usage summary overflows its narrow pane (${JSON.stringify(usage)}).`);
+  await evalValue(client,"document.querySelector('.pane-body[data-tab-kind=\\\"session\\\"]:not([hidden]) .usage[aria-label=\\\"Usage summary for pass 1\\\"]')?.closest('.conversation')?.scrollTo({top:0,behavior:'instant'});true");
+  return usage;
 }
 async function measureNativeBrowser(client){
-  return await evalValue(client,`(async()=>{const shell=document.querySelector('.app-shell'),host=document.querySelector('.native-browser-page'),state=await window.pseudoharnessDesktop.interactionTest.state(),rect=host?.getBoundingClientRect(),style=getComputedStyle(shell);return {viewport:{width:innerWidth,height:innerHeight},sidebarCollapsed:shell.classList.contains('sidebar-collapsed'),transition:style.transition,transitionDuration:style.transitionDuration,transitionProperty:style.transitionProperty,transitioning:shell.getAnimations().some(animation=>animation.transitionProperty==='grid-template-columns'&&animation.playState==='running'),host:rect?{left:rect.left,top:rect.top,width:rect.width,height:rect.height}:null,browser:state.map(item=>({id:item.id,url:item.url,pane:item.pane,workspaceId:item.workspaceId,bounds:item.bounds}))}})()`);
+  return await evalValue(client,`(async()=>{const shell=document.querySelector('.app-shell'),host=document.querySelector('.native-browser-page'),state=await window.opnexDesktop.interactionTest.state(),rect=host?.getBoundingClientRect(),style=getComputedStyle(shell);return {viewport:{width:innerWidth,height:innerHeight},sidebarCollapsed:shell.classList.contains('sidebar-collapsed'),transition:style.transition,transitionDuration:style.transitionDuration,transitioning:shell.getAnimations().some(animation=>animation.transitionProperty==='grid-template-columns'&&animation.playState==='running'),host:rect?{left:rect.left,top:rect.top,width:rect.width,height:rect.height}:null,browser:state.map(item=>({id:item.id,url:item.url,pane:item.pane,workspaceId:item.workspaceId,bounds:item.bounds}))}})()`);
 }
 async function captureSidebarTransition(client,fixtureUrl,label,startCollapsed=false){
   const sample=()=>Promise.race([measureNativeBrowser(client),sleep(2500).then(()=>{throw new Error(`${label}: native bounds IPC did not return within 2.5 seconds.`);})]);
@@ -84,11 +108,15 @@ async function captureSidebarTransition(client,fixtureUrl,label,startCollapsed=f
   await sleep(80);const middle=await sample();
   await sleep(80);const late=await sample();
   await sleep(160);const after=await sample();
+  const settleStarted=Date.now();
+  const settled=await waitFor(sample,state=>{const browser=state.browser.find(candidate=>candidate.url.startsWith(fixtureUrl))?.bounds;return !state.transitioning&&state.sidebarCollapsed!==startCollapsed&&browser&&Math.abs(browser.x-state.host.left)<4&&Math.abs(browser.y-state.host.top)<4&&Math.abs(browser.width-state.host.width)<4&&Math.abs(browser.height-state.host.height)<4;},`${label} settled native BrowserView bounds`,1500);
+  const settledAfterMs=Date.now()-settleStarted;
   const frames=[middle,late,after],values=[before.host.width,...frames.map(item=>item.host.width)],minWidth=Math.min(...values),maxWidth=Math.max(...values);
   const hasIntermediate=frames.slice(0,2).some(item=>item.host.width>minWidth+2&&item.host.width<maxWidth-2);
-  const misaligned=frames.filter(item=>{const browser=item.browser.find(candidate=>candidate.url.startsWith(fixtureUrl))?.bounds;return !browser||Math.abs(browser.x-item.host.left)>4||Math.abs(browser.y-item.host.top)>4||Math.abs(browser.width-item.host.width)>4||Math.abs(browser.height-item.host.height)>4;});
-  const trace={label,before,started,frames,minWidth,maxWidth,maxBoundsError:Math.max(0,...frames.map(item=>{const browser=item.browser.find(candidate=>candidate.url.startsWith(fixtureUrl))?.bounds;return browser?Math.max(Math.abs(browser.x-item.host.left),Math.abs(browser.y-item.host.top),Math.abs(browser.width-item.host.width),Math.abs(browser.height-item.host.height)):Infinity;}))};
-  if(!started.transition.includes('grid-template-columns')||!started.transitionDuration.split(',').some(value=>parseFloat(value)>0)||!middle.transitioning||!late.transitioning||after.sidebarCollapsed===startCollapsed||!hasIntermediate||after.transitioning||misaligned.length)throw new Error(`${label}: animated sidebar or native BrowserView tracking failed (${JSON.stringify({...trace,misaligned})}).`);
+  const trace={label,before,started,frames,settled,minWidth,maxWidth,settledAfterMs,maxBoundsError:Math.max(0,...frames.map(item=>{const browser=item.browser.find(candidate=>candidate.url.startsWith(fixtureUrl))?.bounds;return browser?Math.max(Math.abs(browser.x-item.host.left),Math.abs(browser.y-item.host.top),Math.abs(browser.width-item.host.width),Math.abs(browser.height-item.host.height)):Infinity;}))};
+  if(!started.transition.includes('grid-template-columns')||!started.transitionDuration.split(',').some(value=>parseFloat(value)>0)||!middle.transitioning||!late.transitioning||after.sidebarCollapsed===startCollapsed||!hasIntermediate||after.transitioning||settled.sidebarCollapsed===startCollapsed||settledAfterMs>1000){
+    throw new Error(`${label}: animated sidebar or settled native BrowserView tracking failed (${JSON.stringify(trace)}).`);
+  }
   return trace;
 }
 async function hoverFixtureSessionActions(client,label){
@@ -175,35 +203,54 @@ try{
   fixtureServer=createServer((_request,response)=>{response.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});response.end('<!doctype html><meta name="viewport" content="width=device-width"><title>Local annotation fixture</title><main><h1 id="annotation-target">Fixture target heading</h1><p>Harmless local fixture text for annotation testing.</p><button id="fixture-button">Fixture click target</button></main><style>body{font:22px sans-serif;background:#fff;color:#111;margin:48px}main{max-width:820px;margin:auto;padding:24px;border:1px solid #aaa}button{padding:12px}</style>');});
   await new Promise((resolve,reject)=>{fixtureServer.once('error',reject);fixtureServer.listen(0,'127.0.0.1',resolve);});const fixtureUrl=`http://127.0.0.1:${fixtureServer.address().port}/page`;
   const portServer=net.createServer();await new Promise((resolve,reject)=>{portServer.once('error',reject);portServer.listen(0,'127.0.0.1',resolve);});const cdpPort=portServer.address().port;await new Promise(resolve=>portServer.close(resolve));
-  const electronExecutable=path.join(root,'node_modules','electron','dist',process.platform==='win32'?'electron.exe':'electron');child=spawn(electronExecutable,[path.join(root,'desktop','main.cjs')],{cwd:root,env:{...process.env,OPNEX_ELECTRON_DATA_DIR:data,PSEUDOHARNESS_ELECTRON_DATA_DIR:data,OPNEX_INTERACTION_TEST:'1',PSEUDOHARNESS_INTERACTION_TEST:'1',OPNEX_CDP_PORT:String(cdpPort),PSEUDOHARNESS_CDP_PORT:String(cdpPort)},stdio:keepAppOpen?'ignore':'inherit',windowsHide:true});if(keepAppOpen)child.unref();
+  const electronExecutable=path.join(root,'node_modules','electron','dist',process.platform==='win32'?'electron.exe':'electron');child=spawn(electronExecutable,[path.join(root,'desktop','main.cjs')],{cwd:root,env:{...process.env,OPNEX_ELECTRON_DATA_DIR:data,OPNEX_INTERACTION_TEST:'1',OPNEX_CDP_PORT:String(cdpPort),},stdio:keepAppOpen?'ignore':'inherit',windowsHide:true});if(keepAppOpen)child.unref();
   const targets=async()=>{const response=await fetch(`http://127.0.0.1:${cdpPort}/json/list`);return response.ok?response.json():[];};
   const list=await waitFor(targets,value=>value.some(target=>target.type==='page'&&target.url.startsWith('http://127.0.0.1:')),'Electron DevTools page');
   const appTarget=list.find(target=>target.type==='page'&&!target.url.includes(`/page`));appClient=await cdp(appTarget);await appClient.send('Runtime.enable');await appClient.send('Page.bringToFront');
   await waitFor(()=>evalValue(appClient,'document.body.innerText'),text=>text.includes('Fixture review session'),'fixture task in Electron');
+  const bridgeApi=await evalValue(appClient,"(async()=>({opnex:!!window.opnexDesktop,browserBounds:typeof window.opnexDesktop?.browser?.workspaceSetBounds==='function',commenting:typeof window.opnexDesktop?.browser?.workspaceSetCommenting==='function',interactionState:typeof window.opnexDesktop?.interactionTest?.state==='function',interactionFocus:typeof window.opnexDesktop?.interactionTest?.focus==='function',legacyAlias:!!window.pseudoharnessDesktop,legacyState:Array.isArray(await window.pseudoharnessDesktop?.interactionTest?.state?.())}))()");
+  if(!bridgeApi.opnex||!bridgeApi.browserBounds||!bridgeApi.commenting||!bridgeApi.interactionState||!bridgeApi.interactionFocus||!bridgeApi.legacyAlias||!bridgeApi.legacyState)throw new Error(`The renamed desktop bridge or its compatibility alias is incomplete (${JSON.stringify(bridgeApi)}).`);
+  const focusedWindow=await evalValue(appClient,'window.opnexDesktop.interactionTest.focus()');
+  if(!focusedWindow.visible||focusedWindow.minimized)throw new Error(`The isolated Electron window could not be shown for native layout checks (${JSON.stringify(focusedWindow)}).`);
+  await waitFor(()=>evalValue(appClient,'document.hasFocus()'),Boolean,'isolated Electron window focus');
   await waitFor(()=>evalValue(appClient,"!!document.querySelector('.pass-panel')"),Boolean,'fixture pass panel');
-  await evalValue(appClient,"[...document.querySelectorAll('.disclosure-head')].find(button=>button.textContent.includes('Run receipt')).click(); true");await waitFor(()=>evalValue(appClient,"!!document.querySelector('.receipt-git-toggle')"),Boolean,'pass-scoped Git diff receipt');
+  await evalValue(appClient,"[...document.querySelectorAll('.pass-panel .disclosure-head')].find(button=>button.textContent.trim().startsWith('Receipt')).click(); true");await waitFor(()=>evalValue(appClient,"!!document.querySelector('.receipt-git-toggle')"),Boolean,'pass-scoped Git diff receipt');
   await evalValue(appClient,"document.querySelector('.receipt-git-toggle').click(); true");await waitFor(()=>evalValue(appClient,"document.querySelector('.receipt-git-panel')?.innerText||''"),text=>text.includes('fixture.txt'),'rendered pass diff file');
   await evalValue(appClient,"document.querySelector('[aria-label=Browser]').click(); true");await sleep(700);
   await waitFor(()=>evalValue(appClient,"!!document.querySelector('.native-browser-address[role=search] [aria-label=\"Website address\"]')"),Boolean,'browser address bar');
-  await resizeApp(appClient,1280,800);await checkBrowserToolbar(appClient,'1280px toolbar');await saveScreenshot(appClient,'electron-browser-toolbar-1280.png');
-  await resizeApp(appClient,900,620);checkBrowserToolbar(appClient,'900px toolbar');await saveScreenshot(appClient,'electron-browser-toolbar-900.png');
-  await resizeApp(appClient,1280,800);
+  if(annotationOnly){
+    await checkBrowserToolbar(appClient,'native desktop toolbar');
+  }else{
+    await resizeApp(appClient,1280,800);await checkBrowserToolbar(appClient,'1280px toolbar');await saveScreenshot(appClient,'electron-browser-toolbar-1280.png');
+    await resizeApp(appClient,900,620);checkBrowserToolbar(appClient,'900px toolbar');await saveScreenshot(appClient,'electron-browser-toolbar-900.png');
+    await resizeApp(appClient,1280,800);
+  }
   await evalValue(appClient,`(()=>{const input=document.querySelector('[aria-label="Website address"]');const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;set.call(input,${JSON.stringify(fixtureUrl)});input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));input.closest('form').requestSubmit();return true})()`);
   const pageTargets=await waitFor(targets,value=>value.some(target=>target.type==='page'&&target.url.startsWith(fixtureUrl)),'fixture browser page');const pageTarget=pageTargets.find(target=>target.type==='page'&&target.url.startsWith(fixtureUrl));pageClient=await cdp(pageTarget);await pageClient.send('Runtime.enable');
   await waitFor(()=>evalValue(pageClient,'document.title'),title=>title==='Local annotation fixture','fixture page title');
   await saveScreenshot(pageClient,'electron-annotation-target.png');
-  checkBrowserToolbar(appClient,'loaded 1280px toolbar');await saveScreenshot(appClient,'electron-browser-toolbar-1280.png');await resizeApp(appClient,900,620);checkBrowserToolbar(appClient,'loaded 900px toolbar');await saveScreenshot(appClient,'electron-browser-toolbar-900.png');await resizeApp(appClient,1280,800);
+  if(annotationOnly){
+    await checkBrowserToolbar(appClient,'loaded native desktop toolbar');
+  }else{
+    checkBrowserToolbar(appClient,'loaded 1280px toolbar');await saveScreenshot(appClient,'electron-browser-toolbar-1280.png');await resizeApp(appClient,900,620);checkBrowserToolbar(appClient,'loaded 900px toolbar');await saveScreenshot(appClient,'electron-browser-toolbar-900.png');await resizeApp(appClient,1280,800);
+  }
   await checkBrowserToolbar(appClient,'embedded browser after fixture navigation');await saveScreenshot(appClient,'electron-browser-toolbar-peer.png');
-  if(emulatedViewport){await appClient.send('Emulation.clearDeviceMetricsOverride');emulatedViewport=false;}
-  await evalValue(appClient,'window.pseudoharnessDesktop.interactionTest.resize({width:1440,height:960})');
-  await waitFor(()=>evalValue(appClient,'({width:innerWidth,height:innerHeight})'),value=>value.width===1440&&Math.abs(value.height-960)<=3,'native 1440×960 browser-bounds viewport',5000);await sleep(250);
+   const leavingEmulation=emulatedViewport;
+   if(emulatedViewport){await appClient.send('Emulation.clearDeviceMetricsOverride');emulatedViewport=false;}
+   const nativeViewport=await evalValue(appClient,'({width:innerWidth,height:innerHeight,devicePixelRatio})');
+   if(nativeViewport.width<720||nativeViewport.height<560)throw new Error(`The native desktop viewport is too small for browser-bounds smoke (${JSON.stringify(nativeViewport)}).`);
+   if(leavingEmulation){
+     await evalValue(appClient,"window.dispatchEvent(new Event('resize'));true");
+     await waitFor(()=>measureNativeBrowser(appClient),state=>{const tab=state.browser.find(item=>item.url.startsWith(fixtureUrl));return tab&&Math.abs(tab.bounds.x-state.host.left)<3&&Math.abs(tab.bounds.y-state.host.top)<3&&Math.abs(tab.bounds.width-state.host.width)<3&&Math.abs(tab.bounds.height-state.host.height)<3;},'native BrowserView bounds after clearing CDP viewport emulation');
+   }
+   await sleep(250);
   if(emulatedViewport)throw new Error('Native BrowserView bounds must be checked without CDP viewport emulation.');
   const sidebarCollapsed=await evalValue(appClient,"document.querySelector('.app-shell').classList.contains('sidebar-collapsed')");if(sidebarCollapsed){await evalValue(appClient,"document.querySelector('.rail-toggle').click();true");await waitFor(()=>evalValue(appClient,"document.querySelector('.app-shell').classList.contains('sidebar-collapsed')"),value=>value===false,'browser sidebar expanded');}
   const nativeBrowserBeforeSidebar=await measureNativeBrowser(appClient);
    const sidebarCollapseTrace=await captureSidebarTransition(appClient,fixtureUrl,'native browser sidebar collapse');
   const nativeBrowserCollapsed=await waitFor(()=>measureNativeBrowser(appClient),state=>{const item=state.browser.find(browser=>browser.url.startsWith(fixtureUrl));return state.sidebarCollapsed&&state.host.width>nativeBrowserBeforeSidebar.host.width+100&&item&&Math.abs(item.bounds.x-state.host.left)<3&&Math.abs(item.bounds.width-state.host.width)<3;},'native BrowserView bounds after sidebar collapse');
   const collapsedBrowserCheck=nativeBrowserCollapsed.browser.find(item=>item.url.startsWith(fixtureUrl));if(nativeBrowserCollapsed.host.width<=nativeBrowserBeforeSidebar.host.width+100||!collapsedBrowserCheck||Math.abs(collapsedBrowserCheck.bounds.x-nativeBrowserCollapsed.host.left)>3||Math.abs(collapsedBrowserCheck.bounds.width-nativeBrowserCollapsed.host.width)>3)throw new Error(`Native BrowserView bounds did not follow sidebar collapse (${JSON.stringify({nativeBrowserBeforeSidebar,nativeBrowserCollapsed})}).`);
-  await saveScreenshot(appClient,'electron-browser-explorer-collapsed-native-1440.png');
+   await saveScreenshot(appClient,'electron-browser-explorer-collapsed-native.png');
    const sidebarExpandTrace=await captureSidebarTransition(appClient,fixtureUrl,'native browser sidebar reopen',true);
   const nativeBrowserExpanded=await waitFor(()=>measureNativeBrowser(appClient),state=>{const item=state.browser.find(browser=>browser.url.startsWith(fixtureUrl));return !state.sidebarCollapsed&&Math.abs(state.host.width-nativeBrowserBeforeSidebar.host.width)<2&&item&&Math.abs(item.bounds.x-state.host.left)<3&&Math.abs(item.bounds.width-state.host.width)<3;},'native BrowserView bounds after sidebar reopen');
   const expandedBrowser=nativeBrowserExpanded.browser.find(item=>item.url.startsWith(fixtureUrl)),collapsedBrowser=collapsedBrowserCheck;
@@ -224,7 +271,7 @@ try{
   await evalValue(pageClient,"document.querySelector('#annotation-target').click(); true");
   await waitFor(()=>evalValue(appClient,"!!document.querySelector('.browser-annotation textarea')"),Boolean,'native annotation form');
   const geometry=await evalValue(appClient,"(()=>{const form=document.querySelector('.browser-annotation').getBoundingClientRect();const host=document.querySelector('.native-browser-page').getBoundingClientRect();return {form:{top:form.top,bottom:form.bottom,left:form.left,right:form.right},host:{top:host.top,bottom:host.bottom,left:host.left,right:host.right}}})()");
-  const nativeState=await evalValue(appClient,'window.pseudoharnessDesktop.interactionTest.state()');const browserState=nativeState.find(item=>item.url.startsWith(fixtureUrl));if(!browserState?.annotationOverlay)throw new Error('Electron did not reserve browser space for the annotation form.');
+  const nativeState=await evalValue(appClient,'window.opnexDesktop.interactionTest.state()');const browserState=nativeState.find(item=>item.url.startsWith(fixtureUrl));if(!browserState?.annotationOverlay)throw new Error('Electron did not reserve browser space for the annotation form.');
   if(geometry.form.top<geometry.host.top+browserState.bounds.height-2)throw new Error(`Annotation form intersects the native browser surface: ${JSON.stringify({geometry,browserState})}`);
   await saveScreenshot(appClient,'electron-annotation.png');
   await evalValue(appClient,"document.querySelector('.browser-annotation textarea').focus(); true");await appClient.send('Input.insertText',{text:'Please inspect this exact heading.'});
@@ -235,6 +282,10 @@ try{
   await waitFor(()=>evalValue(appClient,"!document.querySelector('.tab-error')"),Boolean,'annotation notice dismissed');
   if(!draft.includes('Fixture target heading')||!draft.includes('User comment: Please inspect this exact heading.'))throw new Error(`Annotation was not routed into the unsent task draft: ${draft}`);
   const settings=await readFile(path.join(data,'local-state','state.json'),'utf8');if(settings.includes('Fixture target heading')||settings.includes('cookie'))throw new Error('Annotation or browser cookie data unexpectedly appeared in persisted task state.');
+   if(annotationOnly){
+     const maxBoundsError=Math.max(sidebarCollapseTrace.maxBoundsError,sidebarExpandTrace.maxBoundsError);
+     console.log(`Electron annotation smoke passed with the Opnex bridge at native viewport ${nativeViewport.width}×${nativeViewport.height}. Sidebar BrowserView bounds settled within ${Math.max(sidebarCollapseTrace.settledAfterMs,sidebarExpandTrace.settledAfterMs)} ms; maximum sampled animation offset ${maxBoundsError}px. Annotation capture, overlay geometry, task-composer routing, and local-state privacy checks passed. Screenshots: ${output}.`);
+   }else{
   await evalValue(appClient,"document.querySelector('[aria-label=Git]').click(); true");
   await waitFor(()=>evalValue(appClient,"document.querySelector('[aria-label=Git]')?.getAttribute('aria-current')==='page'"),Boolean,'Git workspace selected');await waitFor(()=>evalValue(appClient,"!!document.querySelector('.git-workspace')"),Boolean,'native Git overview');await waitFor(()=>evalValue(appClient,"document.querySelector('.git-view-tabs button[aria-current=page]')?.textContent.includes('Overview')"),Boolean,'overview selected');await waitFor(()=>evalValue(appClient,"document.querySelector('.git-auth-state')?.textContent||''"),status=>!!status&&!status.includes('loading'),'GitHub status settled');await sleep(250);await saveScreenshot(appClient,'electron-git-overview.png');
   await evalValue(appClient,"[...document.querySelectorAll('.git-view-tabs button')].find(button=>button.textContent.includes('Branches')).click(); true");await waitFor(()=>evalValue(appClient,"document.querySelector('.git-view-tabs button[aria-current=page]')?.textContent.includes('Branches')"),Boolean,'branches selected');await waitFor(()=>evalValue(appClient,"document.querySelectorAll('.git-branch-row').length"),value=>value===100,'branch page');await saveScreenshot(appClient,'electron-git-branches.png');
@@ -281,7 +332,7 @@ try{
     let current=await measureSessionLayout(appClient,`${width}px before sidebar close`);
     if(current.sidebarCollapsed){await evalValue(appClient,"document.querySelector('.rail-toggle').click();true");await sleep(260);}
     const expanded=await measureSessionLayout(appClient,`${width}px sidebar expanded`);assertSessionLayout(expanded);
-    if(width===900)await checkPassUsageTooltip(appClient,'900px sidebar expanded');
+    if(width===900)await checkPassUsageSummary(appClient,'900px sidebar expanded');
     await evalValue(appClient,"document.querySelector('.rail-toggle').click();true");
     const collapsed=await waitForSessionLayout(appClient,`${width}px sidebar collapsed`,layout=>layout.sidebarCollapsed&&layout.shell.animations.length===0&&layout.workspace.width>expanded.workspace.width+100);assertSessionLayout(collapsed);
     if(width===2048||width===900)await saveScreenshot(appClient,`electron-session-reflow-${width}-collapsed.png`);
@@ -336,18 +387,19 @@ try{
   await saveScreenshot(appClient,'electron-settings-900x620.png');
   await evalValue(appClient,"document.querySelector('[aria-label=\"Close settings\"]').click();true");
   await waitFor(()=>evalValue(appClient,"document.querySelector('.dialog-backdrop[data-open=false]')?.getAttribute('aria-hidden')==='true'"),Boolean,'settings closed');
-  if(emulatedViewport){await appClient.send('Emulation.clearDeviceMetricsOverride');emulatedViewport=false;}
-  await evalValue(appClient,'window.pseudoharnessDesktop.interactionTest.resize({width:1440,height:960})');
-  await waitFor(()=>evalValue(appClient,'({width:innerWidth,height:innerHeight})'),value=>value.width===1440&&Math.abs(value.height-960)<=3,'native 1440×960 inspection window',5000);
-  await sleep(500);
+   if(emulatedViewport){await appClient.send('Emulation.clearDeviceMetricsOverride');emulatedViewport=false;}
+   const finalNativeViewport=await evalValue(appClient,'({width:innerWidth,height:innerHeight,devicePixelRatio})');
+   if(finalNativeViewport.width<720||finalNativeViewport.height<560)throw new Error(`The final native viewport is too small to inspect (${JSON.stringify(finalNativeViewport)}).`);
+   await sleep(500);
   await evalValue(appClient,"[...document.querySelectorAll('.session-row .task-nav')].find(button=>button.textContent.includes('Fixture review session'))?.click();true");
   await waitFor(()=>evalValue(appClient,"!!document.querySelector('[data-workspace-tab=fixture-browser-task]:not([hidden]) .conversation')"),Boolean,'final fixture session selected');
   await evalValue(appClient,"document.querySelector('.rail-toggle').click();true");await sleep(350);
-  const finalSessionLayout=await measureSessionLayout(appClient,'final isolated inspection state');assertSessionLayout(finalSessionLayout);await saveScreenshot(appClient,'electron-final-session-sidebar-closed-native-1440.png');
+   const finalSessionLayout=await measureSessionLayout(appClient,'final isolated inspection state');assertSessionLayout(finalSessionLayout);await saveScreenshot(appClient,'electron-final-session-sidebar-closed-native.png');
   const actualTitle=await evalValue(appClient,'document.title');const currentSettings=JSON.parse(await readFile(path.join(data,'local-state','state.json'),'utf8')).settings;
   if(currentSettings.orchestratorModel!=='gpt-6.1-sol'||currentSettings.orchestratorEffort!=='low')throw new Error(`The isolated native check used unexpected orchestrator settings: ${JSON.stringify(currentSettings)}.`);
   console.log(`Electron interaction verified. Session reflow and collapse/reopen geometry: ${JSON.stringify(sessionLayouts)}; token HUD ${headsUpNormal.section.width}px/two columns at wide and ${headsUpNarrow.section.width}px/one column in a narrow split; sidebar motion ${JSON.stringify([sidebarCollapseTrace,sidebarExpandTrace].map(({label,transitionDuration,frames,minWidth,maxWidth,maxBoundsError})=>({label,transitionDuration,samples:frames.length,minWidth,maxWidth,maxBoundsError})))}; reduced-motion duration ${reducedSidebarDuration}, native widths ${reducedMotionCollapsed.host.width}px/${reducedMotionExpanded.host.width}px; direct resize ${JSON.stringify(sidebarDragTrace)}; icon boxes ${JSON.stringify({wide:wideIconGeometry.icons,narrow:narrowIconGeometry.icons})}; settings fit at 900×620. BrowserView host/bounds close and reopen at native ${nativeBrowserBeforeSidebar.viewport.width}×${nativeBrowserBeforeSidebar.viewport.height}; merge/filter/history pagination and row stability checked. Screenshots: ${output}.`);
   console.log(`Inspection state: title=${actualTitle}; pid=${child.pid}; rendererUrl=${appTarget.url}; CDP=127.0.0.1:${cdpPort}; appData=${data}; browserProfile=${path.join(data,'browser-profile')}; fixtureWorkspace=${repo}; settings=${currentSettings.orchestratorModel}/${currentSettings.orchestratorEffort}; appKeptOpen=${keepAppOpen}; emulatedViewport=${emulatedViewport}; innerWidth=${finalSessionLayout.viewport.width}; innerHeight=${finalSessionLayout.viewport.height}.`);
+   }
 }catch(error){console.error(error);process.exitCode=1;}finally{
   pageClient?.close();appClient?.close();if(child&&!child.killed&&!keepAppOpen){child.kill();await Promise.race([new Promise(resolve=>child.once('exit',resolve)),sleep(3000)]);if(child.exitCode===null)child.kill('SIGKILL');}if(fixtureServer)await new Promise(resolve=>fixtureServer.close(resolve));if(!keepAppOpen)await rm(temp,{recursive:true,force:true});
 }

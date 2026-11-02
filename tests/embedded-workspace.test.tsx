@@ -18,11 +18,11 @@ const gitWorkspace={available:true,authorizedRoot:'C:/repo',repositoryRoot:'C:/r
 beforeEach(()=>{
   vi.clearAllMocks();listeners.clear();
   (globalThis as any).ResizeObserver=class { observe(){} disconnect(){} };
-  (window as any).pseudoharnessDesktop={browser:bridge};
+  (window as any).opnexDesktop={browser:bridge};
   bridge.workspaceOpen.mockResolvedValue(page());bridge.workspaceGet.mockResolvedValue(page());bridge.workspaceRelease.mockResolvedValue(undefined);bridge.workspaceSetBounds.mockResolvedValue(undefined);bridge.workspaceNavigate.mockImplementation(async(_id,navigation)=>page(typeof navigation==='object'?{url:navigation.url,title:'Navigated'}:navigation==='back'?{url:'https://example.com/',title:'Example Domain'}:{}));bridge.workspaceSetCommenting.mockResolvedValue(undefined);bridge.workspaceAnnotationOverlay.mockResolvedValue(undefined);bridge.onEvent.mockImplementation(callback=>{listeners.add(callback);return()=>listeners.delete(callback);});
   vi.mocked(api).mockImplementation(async(url)=>String(url)==='/api/github/auth'?({state:'idle',cliAvailable:true,authenticated:false} as any):gitWorkspace as any);
 });
-afterEach(()=>{cleanup();delete (window as any).pseudoharnessDesktop;});
+afterEach(()=>{cleanup();delete (window as any).opnexDesktop;});
 
 describe('native embedded browser workspace',()=>{
   it('opens one persistent page per workspace ID and shows address suggestions without nested browser tabs',async()=>{

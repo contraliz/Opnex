@@ -7,15 +7,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 let temp='';let previous:string|undefined;
-async function setup(){previous=process.env.PSEUDOHARNESS_DATA_DIR;temp=await mkdtemp(path.join(os.tmpdir(),'pseudoharness-skills-test-'));process.env.PSEUDOHARNESS_DATA_DIR=temp;return await import('../server/skill-library.js');}
-afterEach(async()=>{const {closeSkillLibrary}=await import('../server/skill-library.js');closeSkillLibrary();if(previous===undefined)delete process.env.PSEUDOHARNESS_DATA_DIR;else process.env.PSEUDOHARNESS_DATA_DIR=previous;if(temp)await rm(temp,{recursive:true,force:true});temp='';});
+async function setup(){previous=process.env.OPNEX_DATA_DIR;temp=await mkdtemp(path.join(os.tmpdir(),'opnex-skills-test-'));process.env.OPNEX_DATA_DIR=temp;return await import('../server/skill-library.js');}
+afterEach(async()=>{const {closeSkillLibrary}=await import('../server/skill-library.js');closeSkillLibrary();if(previous===undefined)delete process.env.OPNEX_DATA_DIR;else process.env.OPNEX_DATA_DIR=previous;if(temp)await rm(temp,{recursive:true,force:true});temp='';});
 
 describe('application saved skills',()=>{
   it('keeps different local profile data directories completely separate',async()=>{
-    const library=await setup();const profileA=path.join(temp,'profile-a');const profileB=path.join(temp,'profile-b');process.env.PSEUDOHARNESS_DATA_DIR=profileA;
+    const library=await setup();const profileA=path.join(temp,'profile-a');const profileB=path.join(temp,'profile-b');process.env.OPNEX_DATA_DIR=profileA;
     const privateSkill=await library.createSkill({name:'Profile A only',description:'Local profile check',instructions:'Keep this in its owner profile.'});library.closeSkillLibrary();
-    process.env.PSEUDOHARNESS_DATA_DIR=profileB;expect(await library.listSkills()).toEqual([]);await library.createSkill({name:'Profile B only',description:'Local profile check',instructions:'This profile has its own library.'});library.closeSkillLibrary();
-    process.env.PSEUDOHARNESS_DATA_DIR=profileA;expect(await library.getSkill(privateSkill.id)).toMatchObject({name:'Profile A only',instructions:'Keep this in its owner profile.'});expect((await library.listSkills()).map(skill=>skill.name)).toEqual(['Profile A only']);
+    process.env.OPNEX_DATA_DIR=profileB;expect(await library.listSkills()).toEqual([]);await library.createSkill({name:'Profile B only',description:'Local profile check',instructions:'This profile has its own library.'});library.closeSkillLibrary();
+    process.env.OPNEX_DATA_DIR=profileA;expect(await library.getSkill(privateSkill.id)).toMatchObject({name:'Profile A only',instructions:'Keep this in its owner profile.'});expect((await library.listSkills()).map(skill=>skill.name)).toEqual(['Profile A only']);
   });
   it('persists across reopen, keeps immutable revisions and archived items searchable on request',async()=>{
     const library=await setup();const original=await library.createSkill({name:'Project notes',description:'Short guidance',instructions:'Keep source links.',source:'Created in the app'});const first=original.revision;
@@ -78,7 +78,7 @@ describe('application saved skills',()=>{
   it('restores task-scoped skills_save with active role, pass, provenance, and exact revision enforcement',async()=>{
     const library=await setup();const skill=await library.createSkill({name:'Useful skill',description:'Relevant methods',instructions:'Check assumptions before editing.'});const taskId='task-runtime';const passId='pass-runtime';const active={id:taskId,currentPassId:passId,phase:'simple_running',activeRole:'simple',activeTurnId:'turn-active',passes:[{id:passId,phase:'simple_running',activeRole:'simple',activeTurnId:'turn-active'}]};await writeFile(path.join(temp,'state.json'),JSON.stringify({tasks:[active]}));
     const gateway=path.resolve('server/skills-mcp-gateway.ts');
-    async function connect(role:string){const client=new Client({name:'skills-library-test',version:'1'});const transport=new StdioClientTransport({command:process.execPath,args:['--import','tsx',gateway],env:{...process.env,PSEUDOHARNESS_DATA_DIR:temp,PSEUDOHARNESS_SKILLS_TASK_ID:taskId,PSEUDOHARNESS_SKILLS_ROLE:role},stderr:'ignore'});await client.connect(transport);return client;}
+    async function connect(role:string){const client=new Client({name:'skills-library-test',version:'1'});const transport=new StdioClientTransport({command:process.execPath,args:['--import','tsx',gateway],env:{...process.env,OPNEX_DATA_DIR:temp,OPNEX_SKILLS_TASK_ID:taskId,OPNEX_SKILLS_ROLE:role},stderr:'ignore'});await client.connect(transport);return client;}
     const client=await connect('simple');
     try{
       const listed=await client.listTools();const toolNames=listed.tools.map(tool=>tool.name);expect(toolNames).toEqual(expect.arrayContaining(['skills_list','skills_search','skills_load','skills_read_file','skills_save']));
