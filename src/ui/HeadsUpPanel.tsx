@@ -441,7 +441,8 @@ export function HeadsUpPanel({ task, project, projects=[], settings, runtime, op
           <SettingRow label="Workspace" value={project?workspaceOptionLabel(project,projects):'Choose a workspace'}/>
           <SettingRow label="Working directory" value={project?.projectRoot || 'Not selected'}/>
           <SettingRow label="Approval" value={policyLabel[settings.approvalPolicy] || settings.approvalPolicy}/>
-          <SettingRow label="Orchestrator" value={`${settings.orchestratorModel} · ${settings.orchestratorEffort}`}/>
+          <SettingRow label="Orchestrator" value={`${settings.orchestratorModel} · ${settings.orchestratorEffort}${settings.orchestratorServiceTier?' · Fast':''}`}/>
+          <SettingRow label="Router" value={settings.routerProfile?`${settings.routerProfile.model} · ${settings.routerProfile.effort}${settings.routerProfile.serviceTier?' · Fast':''}`:'gpt-6-luna · low · Fast'}/>
           <SettingRow label="Worker" value="gpt-6-luna · high (app policy)"/>
           <button className="heads-up-settings-link" type="button" onClick={onOpenSettings}><Settings2 size={14}/>Open settings</button>
         </div>

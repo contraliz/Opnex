@@ -66,7 +66,8 @@ export default function ForgeSessionCreate({project,settings,models,onCreated,on
     return()=>{current=false;controller.abort();};
   },[project?.id,project?.projectRoot,project?.needsLocation,skillRefresh]);
 
-  const choices=useMemo(()=>codexModelChoices(models),[models]);
+  // Forge tickets store a model and effort only, so the Fast variants have nowhere to go.
+  const choices=useMemo(()=>codexModelChoices(models).filter(choice=>!choice.serviceTier),[models]);
   const selectedModel=choices.find(choice=>choice.id===orchestratorModel);
   const effortChoices=selectedModel?.efforts||[];
   const acceptanceCriteria=lines(acceptanceText),readScope=lines(readText),writeScope=lines(writeText);

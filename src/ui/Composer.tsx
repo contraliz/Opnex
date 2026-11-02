@@ -7,7 +7,7 @@ import { ACCESS_MODE_OPTIONS } from './access-mode.js';
 import type { AccessMode, ExecutionProfile, Runtime, TaskAttachment } from '../types';
 
 import type { SkillSummary } from './skills-types';
-import ModelPicker, { codexModelChoices } from './ModelPicker';
+import ModelPicker, { codexModelChoices, profileFromChoice } from './ModelPicker';
 
 type Choice={value:string;label:string};
 type Props={value:string;setValue:(s:string)=>void;submit:()=>void;disabled:boolean;hint:string;inputRef:any;executionProfile:ExecutionProfile;connectionState:'connected'|'offline';projectId?:string;accessMode:AccessMode;models:Runtime['codex']['models'];configDisabled:boolean;onExecutionProfileChange:(profile:ExecutionProfile)=>void;onAccessModeChange:(value:AccessMode)=>void;qaEnabled:boolean;onQaChange:(enabled:boolean)=>void;busy?:boolean;onStop?:()=>void;attachments:TaskAttachment[];onFiles:(files:FileList|null)=>void;onRemoveFile:(index:number)=>void;onOpenSkills:()=>void};
@@ -54,7 +54,7 @@ export default function Composer({value,setValue,submit,disabled,hint,inputRef,e
 
 function ExecutionModelPopover({profile,models,disabled,onChange}:{profile:ExecutionProfile;models:Runtime['codex']['models'];disabled:boolean;onChange:(profile:ExecutionProfile)=>void}){
   const choices=codexModelChoices(models);
-  return <ModelPicker label="Orchestrator model" providerKey="codex" model={profile.model} effort={profile.effort} choices={choices} disabled={disabled} onChange={(choice,effort)=>onChange({provider:'codex',model:choice.id,effort:effort as ExecutionProfile['effort']})}/>;
+  return <ModelPicker label="Orchestrator model" providerKey="codex" model={profile.model} effort={profile.effort} serviceTier={profile.serviceTier} choices={choices} disabled={disabled} onChange={(choice,effort)=>onChange(profileFromChoice({...choice,providerKey:'codex'},effort))}/>;
 }
 
 export function ChoicePopover({label,caption,value,options,disabled,onChange}:{label:string;caption:string;value:string;options:Choice[];disabled:boolean;onChange:(value:string)=>void}){

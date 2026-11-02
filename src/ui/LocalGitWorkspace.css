@@ -38,7 +38,7 @@
 .git-initial-commit-review input { width:100%; min-width:0; height:34px; padding:0 9px; border:1px solid #414047; border-radius:5px; background:#17171a; color:#eee; font-size:12px; }
 .git-initial-commit-review > ul { max-height:260px; overflow:auto; display:grid; gap:5px; margin:0; padding:0; list-style:none; }
 .git-initial-commit-review > ul li { min-width:0; display:flex; align-items:center; gap:12px; padding:5px 7px; border-radius:4px; background:#222126; }
-.git-initial-commit-review > ul code,.git-initial-commit-count code { min-width:0; overflow-wrap:anywhere; color:#ddd; font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.git-initial-commit-review > ul code,.git-initial-commit-count code { min-width:0; overflow-wrap:anywhere; color:#ddd; font:11px/1.45 var(--font-app); }
 .git-initial-commit-review > ul span { flex:0 0 auto; margin-left:auto; color:#a9a3b3; font-size:10px; }
 .git-initial-commit-count,.git-initial-commit-empty { margin:0; color:#bbb5c5; font-size:11px; line-height:1.45; }
 .git-initial-commit-empty { padding:12px; border:1px dashed #514765; border-radius:6px; }
@@ -106,7 +106,7 @@
 .github-device-panel.failed > svg,.github-device-panel.expired > svg { color: #d39298; }
 .github-device-panel.cancelled { background: #242424; border-color: #333; }
 .github-device-copy { flex: 1 1 auto; }
-.github-device-copy > code { width: fit-content; margin-top: 3px; padding: 6px 11px; border: 1px solid #4a4455; border-radius: 6px; background: #19171e; color: #f5edff; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 18px; letter-spacing: .13em; }
+.github-device-copy > code { width: fit-content; margin-top: 3px; padding: 6px 11px; border: 1px solid #4a4455; border-radius: 6px; background: #19171e; color: #f5edff; font-family: var(--font-app); font-size: 18px; letter-spacing: .13em; }
 .github-device-copy > small { color: #c4b9d2; font-size: 10px; }
 .github-device-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .github-device-actions button { min-height: 28px; background: #292630; }

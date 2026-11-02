@@ -2,7 +2,7 @@ import { AppServer, AppServerRequestError, approvalResponse, extractAssistantTex
 import { safeError } from './errors.js';
 import { assertTaskCanResumeInProject } from './project-identity.js';
 import { accessModeFromApproval, assignmentJsonSchema, directExecutorOutcomeSchema, initialOrchestratorJsonSchema, qaAuditJsonSchema, qaAuditOutcomeSchema, receiptSchema, recruitmentToolSchema, runtimeApprovalForAccess, recruitmentWorkersSchema, reviewSchema, routeDecisionSchema, simpleExecutorOutcomeSchema, workerOutcomeFailureSummary, workerOutcomeSchema, type Assignment, type Receipt } from './contracts.js';
-import { addMessage, beginPass, cancelRecruitmentTeamState, claimRecruitmentCompletion, claimRecruitmentIntegration, currentPass, deepSeekConversationStorageForSettings, executionProfileForSettings, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, recruitmentTeamsForPass, sealRecruitmentTeam, terminalRecruitmentWorkerStatuses, type AgentReceiptRecord, type DeepSeekConversationStoragePreference, type DeepSeekExecutionProfile, type DeepSeekPhaseRun, type DeepSeekProviderEventSummary, type ExecutionProfile, type QAAuditRound, type QAFinding, type QualityLoop, type ReceiptProvenance, type RecruitmentIntegration, type RecruitmentTeam, type RecruitmentWorker, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
+import { addMessage, beginPass, cancelRecruitmentTeamState, claimRecruitmentCompletion, claimRecruitmentIntegration, currentPass, deepSeekConversationStorageForSettings, executionProfileForSettings, getState, getTask, isCurrentPassThread, mutate, passForThread, passThreadRole, recruitmentTeamsForPass, routerProfileForSettings, sealRecruitmentTeam, terminalRecruitmentWorkerStatuses, type AgentReceiptRecord, type DeepSeekConversationStoragePreference, type DeepSeekExecutionProfile, type DeepSeekPhaseRun, type DeepSeekProviderEventSummary, type ExecutionProfile, type QAAuditRound, type QAFinding, type QualityLoop, type ReceiptProvenance, type RecruitmentIntegration, type RecruitmentTeam, type RecruitmentWorker, type RouteDecision, type SkillSaveRecord, type Task, type TaskPass, type WorkflowRole } from './state.js';
 import { assignmentWriteRoots, claimCompletion, correctionWorker, shouldWakeOrchestrator, simpleRouteWriteRoots } from './policy.js';
 import { buildOrchestratorInput, loadOwnedOrchestrationPolicy } from './orchestration-policy.js';
 import { applyCodexReasoningNotification, beginReasoningTurn } from './reasoning.js';
@@ -287,7 +287,10 @@ async function refreshModels(){try{catalog=await codex.models();codexState='conn
 async function verifySkillMcpAvailability(threadId:string){const rows=await agentCodex.mcpServerStatus(threadId,'pseudoharness_skills');const server=rows.find((row:any)=>String(row?.name||row?.serverName||'').toLowerCase()==='pseudoharness_skills');const tools=server?.tools;const names=Array.isArray(tools)?tools.map((tool:any)=>String(tool?.name||'')):Object.keys(tools||{});if(!['skills_list','skills_search','skills_load','skills_read_file','skills_save'].every(name=>names.includes(name))){const catalog=rows.map((row:any)=>{const rowTools=row?.tools;const count=Array.isArray(rowTools)?rowTools.length:Object.keys(rowTools||{}).length;const state=JSON.stringify(row?.runtimeStatus??row?.status??'status unavailable').replace(/[A-Za-z]:\\[^\s"']+/g,'<path>').slice(0,160);const error=String(row?.toolsError||'').replace(/[A-Za-z]:\\[^\s"']+/g,'<path>').slice(0,160);return `${String(row?.name||row?.serverName||'unknown')} (runtime ${state}, ${count} tools${error?`, ${error}`:''})`;}).join(', ')||'no MCP servers were reported';throw new Error(`The Opnex saved-skills library tools are not available in this execution thread. Refresh the app-server MCP catalog; no execution turn was started. MCP catalog: ${catalog}.`);}}
 function model(id:string){return catalog.find(m=>m.id===id);}
 function requireModel(id:string,effort:string){const found=model(id);if(!found)throw new Error(`Model ${id} is not in the local Codex model catalog.`);if(!effortList(found).includes(effort))throw new Error(`Model ${id} does not advertise ${effort} reasoning effort.`);}
-function requireRouterModel(){requireModel('gpt-6-luna','low');const found=model('gpt-6-luna')!;if(!serviceTierList(found).includes('priority'))throw new Error('GPT-6 Luna does not advertise its Fast service tier (priority). Routing cannot start without the required Fast capability.');}
+function requireRouterModel(profile:ExecutionProfile){requireModel(profile.model,profile.effort);if(profile.serviceTier&&!serviceTierList(model(profile.model)!).includes(profile.serviceTier))throw new Error(`${profile.model} does not advertise its Fast service tier (${profile.serviceTier}). Routing cannot start without the required Fast capability.`);}
+// Only advertise a service tier the selected model actually supports; the catalog can drift.
+function serviceTierFor(modelId:string,tier?:string){const found=model(modelId);return tier&&found&&serviceTierList(found).includes(tier)?tier:undefined;}
+function routeSpeed(profile:ExecutionProfile){return profile.serviceTier==='priority'?'Fast':'Standard';}
 function jsonFromTurn(turn:any){const raw=extractAssistantText(turn); if(!raw)throw new Error('The worker completed without a structured final message.'); try{return parseWorkerStructuredOutput(raw);}catch{throw new Error('The worker final message was not valid JSON. No follow-up work was scheduled.');}}
 const stageConfig={router:{effort:'low',phase:'routing'},direct:{effort:'high',phase:'direct_running'},simple:{effort:'xhigh',phase:'simple_running'}} as const;
 function executionDisplay(profile:ExecutionProfile,deepSeek?:DeepSeekExecutionProfile){
@@ -312,14 +315,15 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   }
   const selectedProfile=pass.executionProfile||executionProfileForSettings(getState().settings);
   const orchestratorSettings=getState().settings;
-  const roleProfile:ExecutionProfile=role==='direct'?{provider:'codex',model:orchestratorSettings.orchestratorModel,effort:orchestratorSettings.orchestratorEffort}:selectedProfile;
-  if(role==='router')requireRouterModel();else if(roleProfile.provider==='codex')requireModel(roleProfile.model,roleProfile.effort);else{await startDeepSeekRoutedTurn(task,role,roleProfile,simpleWriteRoots||[]);return;}
+  const routerProfile=routerProfileForSettings(orchestratorSettings);
+  const roleProfile:ExecutionProfile=role==='router'?routerProfile:role==='direct'?{provider:'codex',model:orchestratorSettings.orchestratorModel,effort:orchestratorSettings.orchestratorEffort,serviceTier:orchestratorSettings.orchestratorServiceTier}:selectedProfile;
+  if(role==='router')requireRouterModel(roleProfile);else if(roleProfile.provider==='codex')requireModel(roleProfile.model,roleProfile.effort);else{await startDeepSeekRoutedTurn(task,role,roleProfile,simpleWriteRoots||[]);return;}
   await ensureAgentAuth();
   if(pass.agentContextVersion!==1)throw new Error('This pass predates the current Opnex role configuration. Send a follow-up to start a fresh pass.');
   const skillsConfig=role==='router'?undefined:skillLibraryMcpServerConfig({taskId:task.id,role});
   const registeredMcp=codexMcpServerConfigs(pass.mcpServers||[],role,task.userRoot);
   const client=agentCodex;
-  const modelId=role==='router'?'gpt-6-luna':roleProfile.model,effort=role==='router'?stageConfig.router.effort:roleProfile.effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
+  const modelId=roleProfile.model,effort=roleProfile.effort,threadKey=`${role}ThreadId` as 'routerThreadId'|'directThreadId'|'simpleThreadId';
   const approvalPolicy=pass.approvalPolicy??runtimeApprovalForAccess(getState().settings.accessMode??accessModeFromApproval(getState().settings.approvalPolicy));
   let threadId=task[threadKey];
   const dynamicTools=role==='simple'?workerWorkspaceTool:undefined;
@@ -338,7 +342,7 @@ async function startRoutedTurn(task:Task,role:'router'|'direct'|'simple',continu
   const selected=role==='router'?'':pass.selectedSkills?.length?`\n\nHUMAN-SELECTED APPLICATION SKILLS (explicitly authorized for this pass; immutable snapshots):\n${skillSnapshotsText(pass.selectedSkills)}`:'';
   const finalPrompt=`${continuation?`${prompt}\n\nThis is an update to the same active task. Preserve relevant context and completed actions from this thread. Re-check current state and continue only what remains; do not replay completed side effects.`:prompt}${selected}`;
   const root=task.userRoot,writeRoots=pass.accessMode==='read-only'?[]:role==='simple'?simpleWriteRoots!:[];
-  const serviceTier=role==='router'?'priority':undefined;
+  const serviceTier=serviceTierFor(modelId,roleProfile.serviceTier);
   const carried=attachmentUserInput(pass.attachments||[]);
   const response=await awaitCurrentPassOperation(()=>client.startTurn(threadId!,`${finalPrompt}${carried.text}`,role,modelId,effort,root,writeRoots,approvalPolicy,undefined,serviceTier,carried.images),()=>routedPassIsCurrent(task.id,pass.id),async stale=>{const turnId=stale.turn?.id||stale.turnId;if(turnId)try{await client.interrupt(threadId!,turnId);}catch{}});
   if(!response)return;
@@ -465,7 +469,7 @@ async function startOrchestrator(task:Task,payload:string,action:'assignment'|'r
   if(qaCorrectionGuard){let dispatchRecorded=false;await mutate(s=>{const owner=s.tasks.find(row=>row.id===task.id),correctionPass=owner?.passes?.find(row=>row.id===qaCorrectionGuard.passId),loop=correctionPass?.qualityLoop,planner=loop?.correctionPlanner;if(!owner||!correctionPass||!loop||!planner||planner.roundId!==qaCorrectionGuard.roundId||planner.status!=='preflight'||!qualityCorrectionLaunchIsCurrent(owner,qaCorrectionGuard))return;planner.status='dispatch_unknown';planner.threadId=orchestratorThreadId;dispatchRecorded=true;});if(!dispatchRecorded)return;if(!isExpectedLaunchCurrent()){await mutate(s=>{const planner=s.tasks.find(row=>row.id===task.id)?.passes?.find(row=>row.id===qaCorrectionGuard.passId)?.qualityLoop?.correctionPlanner;if(planner?.roundId===qaCorrectionGuard.roundId&&planner.status==='dispatch_unknown'&&!planner.turnId){planner.status='preflight';planner.threadId=undefined;}});return;}const pending=qualityCorrectionClaims.get(qualityCorrectionLaunchKey(task.id,qaCorrectionGuard.passId,qaCorrectionGuard.roundId));if(pending)pending.stage='turn_start_sent';}
   const response=action==='review'
     ? await agentCodex.reviewTurn(orchestratorThreadId,enrichedInput,modelId,state.settings.orchestratorEffort,approvalPolicy,carried.images)
-    : await agentCodex.startTurn(orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,launchTask.userRoot,[],approvalPolicy,recruitmentEnabled?null:allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,undefined,carried.images);
+    : await agentCodex.startTurn(orchestratorThreadId,enrichedInput,'orchestrator',modelId,state.settings.orchestratorEffort,launchTask.userRoot,[],approvalPolicy,recruitmentEnabled?null:allowDirectResponse?initialOrchestratorJsonSchema:assignmentJsonSchema,serviceTierFor(modelId,state.settings.orchestratorServiceTier),carried.images);
   const responseTurnId=response.turn?.id||response.turnId;
   const correctionTurnState=qaCorrectionGuard&&responseTurnId?await recordQualityCorrectionTurnStarted(task.id,qaCorrectionGuard.passId,qaCorrectionGuard.roundId,orchestratorThreadId,responseTurnId):'unmatched';
   if(qaCorrectionGuard&&!isExpectedLaunchCurrent()){if(responseTurnId&&correctionTurnState!=='terminal')await interruptStaleOrchestratorTurn(task.id,orchestratorThreadId,responseTurnId);return;}
@@ -510,7 +514,7 @@ async function startWorkerStage(task:Task,assignment:Assignment){
   allowanceBaselines.set(task.workerThreadId,await readAllowanceSnapshot());
   if(!workerPassIsCurrent(task.id,passId))return;
   const carried=attachmentUserInput(pass.attachments||[]);
-  const response=await agentCodex.startTurn(task.workerThreadId,`${workerPrompt}${carried.text}`,'worker',selectedProfile.model,selectedProfile.effort,task.userRoot,stageWriteRoots,approvalPolicy,undefined,undefined,carried.images);
+  const response=await agentCodex.startTurn(task.workerThreadId,`${workerPrompt}${carried.text}`,'worker',selectedProfile.model,selectedProfile.effort,task.userRoot,stageWriteRoots,approvalPolicy,undefined,serviceTierFor(selectedProfile.model,selectedProfile.serviceTier),carried.images);
   if(!workerPassIsCurrent(task.id,passId)){const id=response.turn?.id||response.turnId;if(id)try{await agentCodex.interrupt(task.workerThreadId,id);}catch{}return;}
   const id=response.turn?.id||response.turnId;
   await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id)!;if(t.phase==='cancelled')return;t.activeTurnId=id;t.activeRole='worker';if(id)beginReasoningTurn(t,'worker',task.workerThreadId!,id,selectedProfile.model,selectedProfile.effort,'codex');});
@@ -855,7 +859,7 @@ async function startCodexRecruitmentStageInner(task:Task,pass:TaskPass,team:Recr
   await verifySkillMcpAvailability(threadId);
   const now=new Date().toISOString();await mutate(state=>{const current=state.tasks.find(row=>row.id===task.id),currentPassRow=current?.passes?.find(row=>row.id===pass.id),currentTeam=currentPassRow?.recruitmentTeam,target=integration?currentTeam?.integration:currentTeam?.workers.find(row=>row.workerId===workerId);if(!current||!currentPassRow||!currentTeam||!target||current.currentPassId!==pass.id||current.phase==='cancelled')return;currentTeam.status=integration?'integrating':'running';target.threadId=threadId;target.activeTurnId=undefined;target.workerStage='execute';target.status='running';target.startedAt??=now;target.executionStartedAt=now;});
   const target=getTask(task.id);if(!target||target.currentPassId!==pass.id||target.phase!=='worker_running')return;
-  const response=await agentCodex.startTurn(threadId,`${prompt}${carried.text}`,runtimeRole,profile.model,profile.effort,workspace,writeScope,approvalPolicy,undefined,undefined,carried.images);
+  const response=await agentCodex.startTurn(threadId,`${prompt}${carried.text}`,runtimeRole,profile.model,profile.effort,workspace,writeScope,approvalPolicy,undefined,serviceTierFor(profile.model,profile.serviceTier),carried.images);
   if(!getTask(task.id)||getTask(task.id)!.currentPassId!==pass.id||getTask(task.id)!.phase==='cancelled'){const id=response.turn?.id||response.turnId;if(id)try{await agentCodex.interrupt(threadId,id);}catch{}return;}
   const turnId=response.turn?.id||response.turnId;await mutate(state=>{const current=state.tasks.find(row=>row.id===task.id),currentPassRow=current?.passes?.find(row=>row.id===pass.id);if(!current||!currentPassRow)return;const currentTeam=currentPassRow.recruitmentTeam,target=integration?currentTeam?.integration:currentTeam?.workers.find(row=>row.workerId===workerId);if(!target||target.threadId!==threadId)return;if(turnId){target.activeTurnId=turnId;beginReasoningTurn(current,'worker',threadId,turnId,profile.model,profile.effort,'codex');}});if(turnId)await processDeferred(task.id,turnId);
 }
@@ -1239,13 +1243,15 @@ async function completeDirectAnswer(task:Task,answer:string,policyBasis:string){
 }
 async function applyRouteDecision(task:Task,value:unknown,fallbackReason?:string){
   const pass=currentPass(task);if(!pass||task.phase==='cancelled')return;
+  const router=routerProfileForSettings(getState().settings);
+  const decided={model:router.model,effort:router.effort,speed:routeSpeed(router),decidedAt:new Date().toISOString()};
   let parsed:RouteDecision;
   if(fallbackReason){
-    parsed={route:'hard_task',rule_id:'hard_significant_uncertainty',justification:`Conservative hard fallback: ${fallbackReason}`.slice(0,400),model:'gpt-6-luna',effort:'low',speed:'Fast',decidedAt:new Date().toISOString(),fallback:true};
+    parsed={route:'hard_task',rule_id:'hard_significant_uncertainty',justification:`Conservative hard fallback: ${fallbackReason}`.slice(0,400),...decided,fallback:true};
   }else{
     const result=routeDecisionSchema.safeParse(value);
     if(!result.success){await applyRouteDecision(task,null,`The router output failed validation: ${result.error.issues.map(issue=>issue.path.join('.')||'result').join(', ')}.`);return;}
-    parsed={...result.data,model:'gpt-6-luna',effort:'low',speed:'Fast',decidedAt:new Date().toISOString()};
+    parsed={...result.data,...decided};
   }
   if(task.routerThreadId&&routerToolViolations.has(task.routerThreadId)){
     routerToolViolations.delete(task.routerThreadId);
@@ -1253,7 +1259,7 @@ async function applyRouteDecision(task:Task,value:unknown,fallbackReason?:string
   }
   const effectiveRoute=task.executionEscalation?.to||parsed.route;
   parsed.effectiveRoute=effectiveRoute;
-  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.routeDecision=parsed;t.phase='intake';t.activeRole=undefined;t.activeTurnId=undefined;t.error=undefined;addMessage(t,'system',`Routed to ${effectiveRoute.replaceAll('_',' ')} · ${parsed.rule_id}: ${parsed.justification}${parsed.fallback?' (conservative fallback)':''}`);});
+  await mutate(s=>{const t=s.tasks.find(x=>x.id===task.id);if(!t||t.phase==='cancelled'||t.currentPassId!==pass.id)return;t.routeDecision=parsed;t.phase='intake';t.activeRole=undefined;t.activeTurnId=undefined;t.error=undefined;});
   const live=getTask(task.id);if(!live||live.phase==='cancelled'||live.currentPassId!==pass.id)return;
   if(effectiveRoute==='hard_task'){await startHardRoute(live,parsed.fallback?parsed.justification:undefined);return;}
   await startRoutedTurn(live,effectiveRoute==='direct_answer'?'direct':'simple');

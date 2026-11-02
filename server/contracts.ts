@@ -268,9 +268,14 @@ export function runtimeApprovalForAccess(mode:AccessMode):ApprovalPolicy{
 export function accessModeFromApproval(policy:ApprovalPolicy|undefined):AccessMode{
   return policy==='full-access'?'full-access':policy==='never'?'workspace-write':'workspace-write-approval';
 }
+export const executionEffortSchema=z.enum(['low','medium','high','xhigh','max','ultra']);
+export const executionProfileSchema=z.object({provider:z.enum(['codex','deepseek']),model:z.string().trim().min(1).max(200),effort:executionEffortSchema,serviceTier:z.enum(['priority']).optional()}).strict();
 export const settingsSchema = z.object({
-  orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
-  executionProfile:z.object({provider:z.enum(['codex','deepseek']),model:z.string().trim().min(1).max(200),effort:z.enum(['low','medium','high','xhigh','max','ultra'])}).strict().optional(),
+  orchestratorModel: z.string().trim().min(1).max(200), orchestratorEffort: executionEffortSchema,
+  orchestratorServiceTier:z.enum(['priority']).optional(),
+  routerProfile:executionProfileSchema.optional(),
+  fontFamily:z.enum(['sans','mono']).default('sans'),
+  executionProfile:executionProfileSchema.optional(),
   deepseekProvider:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('opencode-go'),deepseekModel:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('deepseek-v4.1-flash'),deepseekReasoningEffort:z.string().trim().min(1).max(160).refine(value=>!value.includes('\r')&&!value.includes('\n')&&!value.includes(String.fromCharCode(0))).default('max'),
   deepseekConversationStorageMode:z.enum(['native','isolated']).default('isolated'),
   deepseekConversationStorageDirectory:z.string().trim().min(1).max(1024).refine(value=>![...value].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127)).optional(),

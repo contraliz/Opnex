@@ -3,8 +3,7 @@ import { ChevronRight, X } from 'lucide-react';
 import { api } from './api';
 import { ChoicePopover } from './Composer';
 import { ACCESS_MODE_OPTIONS, accessModeFromApproval, runtimeApprovalForAccess } from './access-mode.js';
-import ModelPicker, { modelChoiceName } from './ModelPicker';
-import type { ModelChoice } from './ModelPicker';
+import ModelPicker, { codexModelChoices, profileFromChoice, workerModelChoices } from './ModelPicker';
 import type { AccessMode, AppState, ExecutionProfile, Runtime } from '../types';
 import { codexMcpRoles, deepSeekMcpRoles, type McpServerRegistration } from '../../server/mcp-registration.js';
 import { DirectoryPicker } from './DirectoryPicker';
@@ -13,18 +12,23 @@ type Settings=AppState['settings'];
 type SettingsDialogProps={open:boolean;settings:Settings;models:Runtime['codex']['models'];runtime:Runtime|null;close:()=>void;saved:(settings:Settings)=>Promise<boolean>;reconnect:()=>Promise<void>};
 
 function workerProfile(value:Settings):ExecutionProfile{return value.executionProfile||{provider:'codex',model:'gpt-6-luna',effort:'max'};}
+function routerProfile(value:Settings):ExecutionProfile{return value.routerProfile||{provider:'codex',model:'gpt-6-luna',effort:'low',serviceTier:'priority'};}
 function WorkerExecutionSettings({value,set,models,disabled}:{value:Settings;set:(value:Settings)=>void;models:Runtime['codex']['models'];disabled:boolean}){
-  const profile=workerProfile(value),codex=models.find(model=>model.id==='gpt-6-luna'),codexEfforts=(codex?.efforts||[]).filter(effort=>['low','medium','high','xhigh','max','ultra'].includes(effort));
-  const choices:ModelChoice[]=[
-    {providerKey:'codex',provider:'Codex · OpenAI',id:'gpt-6-luna',name:modelChoiceName('gpt-6-luna',codex?.displayName),efforts:codexEfforts,available:!!codex&&codexEfforts.length>0,availabilityNote:codex&&codexEfforts.length?undefined:'GPT-6 Luna is not available in the local Codex model catalog.'},
-    {providerKey:'deepseek',provider:'DeepSeek Harness · OpenCode Go',id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',efforts:['max'],available:true,availabilityNote:'Runtime and authentication are checked before launch; no fallback is used.'},
-  ];
-  if(!choices.some(choice=>choice.providerKey===profile.provider&&choice.id===profile.model))choices.push({providerKey:profile.provider,provider:`Saved ${profile.provider} profile`,id:profile.model,name:profile.model,efforts:[profile.effort],available:false,availabilityNote:'This saved profile is not one of the currently configured worker choices.'});
+  const profile=workerProfile(value),choices=workerModelChoices(models);
+  if(!choices.some(choice=>choice.providerKey===profile.provider&&choice.id===profile.model&&choice.serviceTier===profile.serviceTier))choices.push({providerKey:profile.provider,provider:`Saved ${profile.provider} profile`,id:profile.model,name:profile.model,efforts:[profile.effort],available:false,availabilityNote:'This saved profile is not one of the currently configured worker choices.'});
   const updateProfile=(next:ExecutionProfile)=>set({...value,executionProfile:next,...(next.provider==='deepseek'?{deepseekProvider:'opencode-go',deepseekModel:next.model,deepseekReasoningEffort:next.effort}:{})});
   return <fieldset className="settings-help settings-provider-group"><legend>Worker execution profile</legend>
-    <div className="settings-select-row"><span>Worker model</span><ModelPicker label="Worker model" providerKey={profile.provider} model={profile.model} effort={profile.effort} choices={choices} disabled={disabled} onChange={(choice,effort)=>updateProfile({provider:choice.providerKey as ExecutionProfile['provider'],model:choice.id,effort:effort as ExecutionProfile['effort']})}/></div>
-    <small>New passes use this model and effort for workers, integration, corrections, and simple implementation. Choose the reasoning level in the model picker. Direct answers use the composer’s orchestrator selection. Existing passes keep their saved profile.</small>
+    <div className="settings-select-row"><span>Worker model</span><ModelPicker label="Worker model" providerKey={profile.provider} model={profile.model} effort={profile.effort} serviceTier={profile.serviceTier} choices={choices} disabled={disabled} onChange={(choice,effort)=>updateProfile(profileFromChoice(choice,effort))}/></div>
+    <small>New passes use this model and effort for workers, integration, corrections, and simple implementation. Choose the reasoning level in the model picker; a Fast entry uses the runtime’s priority service tier. Direct answers use the composer’s orchestrator selection. Existing passes keep their saved profile.</small>
     {profile.provider==='deepseek'&&<small>DeepSeek runs through OpenCode Go with V4.1 Flash. Opnex requests max effort and checks provider availability before launch; DSH may not report the effective effort.</small>}
+  </fieldset>;
+}
+
+function RouterExecutionSettings({value,set,models,disabled}:{value:Settings;set:(value:Settings)=>void;models:Runtime['codex']['models'];disabled:boolean}){
+  const profile=routerProfile(value);
+  return <fieldset className="settings-help settings-provider-group"><legend>Router</legend>
+    <div className="settings-select-row"><span>Router model</span><ModelPicker label="Router model" providerKey={profile.provider} model={profile.model} effort={profile.effort} serviceTier={profile.serviceTier} choices={codexModelChoices(models)} disabled={disabled} onChange={(choice,effort)=>set({...value,routerProfile:profileFromChoice(choice,effort)})}/></div>
+    <small>Every new request is classified by this model before any other role starts. The Fast variant requests the runtime’s priority service tier; routing refuses to start if the selected model stops advertising it.</small>
   </fieldset>;
 }
 
@@ -100,6 +104,9 @@ function SettingsDialog({open,settings,models,runtime,close,saved,reconnect}:Set
   return <div className="dialog-backdrop" data-open={open} aria-hidden={!open} inert={!open} onMouseDown={event=>event.target===event.currentTarget&&!saving&&!reconnecting&&!stoppingKernel&&close()}><section ref={dialog} className="settings-dialog" data-open={open} role="dialog" aria-modal="true" aria-labelledby="settings-title" onKeyDown={trapDialogTab}>
     <header><div><h2 id="settings-title">Settings</h2><p>Application defaults</p></div><button ref={first} className="icon-btn" onClick={close} aria-label="Close settings" disabled={saving||reconnecting||stoppingKernel}><X size={16}/></button></header>
     <WorkerExecutionSettings value={value} set={set} models={models} disabled={saving||reconnecting||stoppingKernel||directoryPickerOpen}/>
+    <RouterExecutionSettings value={value} set={set} models={models} disabled={saving||reconnecting||stoppingKernel||directoryPickerOpen}/>
+    <div className="settings-select-row"><span>Font</span><select aria-label="Font family" value={value.fontFamily||'sans'} disabled={saving||stoppingKernel} onChange={event=>set({...value,fontFamily:event.target.value as 'sans'|'mono'})}><option value="sans">Sans</option><option value="mono">Mono</option></select></div>
+    <small className="settings-help">The whole application uses one font family; this picks between the sans and monospace stacks.</small>
     {workerProfile(value).provider==='deepseek'&&<DeepSeekConversationStorageSettings value={value} set={set} runtime={runtime} disabled={saving||reconnecting||stoppingKernel} pickerOpen={directoryPickerOpen} setPickerOpen={setDirectoryPickerOpen} onBusyChange={setDirectoryPickerBusy}/>}
     <div className="settings-select-row"><span>Access mode</span><ChoicePopover label="Access mode" caption="" value={value.accessMode||accessModeFromApproval(value.approvalPolicy||'on-request')} disabled={saving||stoppingKernel} options={[...ACCESS_MODE_OPTIONS]} onChange={mode=>set({...value,accessMode:mode as AccessMode,approvalPolicy:runtimeApprovalForAccess(mode as AccessMode)})}/></div>
     <small className="settings-help">Access mode applies to every Conversation task. Read-only blocks every write; auto-block stops at the sandbox edge without prompting; approval waits for you there; full access removes the sandbox. Router and direct-answer roles stay read-only; workspace selection controls the working directory.</small>
@@ -108,6 +115,6 @@ function SettingsDialog({open,settings,models,runtime,close,saved,reconnect}:Set
   </section></div>;
 }
 
-const sameSettings=(a:Settings,b:Settings)=>a.orchestratorModel===b.orchestratorModel&&a.orchestratorEffort===b.orchestratorEffort&&a.approvalPolicy===b.approvalPolicy&&a.accessMode===b.accessMode&&JSON.stringify(a.executionProfile)===JSON.stringify(b.executionProfile)&&a.deepseekProvider===b.deepseekProvider&&a.deepseekModel===b.deepseekModel&&a.deepseekReasoningEffort===b.deepseekReasoningEffort&&a.deepseekConversationStorageMode===b.deepseekConversationStorageMode&&a.deepseekConversationStorageDirectory===b.deepseekConversationStorageDirectory&&JSON.stringify(a.mcpServers||[])===JSON.stringify(b.mcpServers||[]);
-const sameModels=(a:Runtime['codex']['models'],b:Runtime['codex']['models'])=>a.length===b.length&&a.every((model,index)=>{const other=b[index];return model.id===other.id&&model.displayName===other.displayName&&model.efforts.length===other.efforts.length&&model.efforts.every((effort,i)=>effort===other.efforts[i]);});
+const sameSettings=(a:Settings,b:Settings)=>a.orchestratorModel===b.orchestratorModel&&a.orchestratorEffort===b.orchestratorEffort&&a.orchestratorServiceTier===b.orchestratorServiceTier&&a.fontFamily===b.fontFamily&&JSON.stringify(a.routerProfile)===JSON.stringify(b.routerProfile)&&a.approvalPolicy===b.approvalPolicy&&a.accessMode===b.accessMode&&JSON.stringify(a.executionProfile)===JSON.stringify(b.executionProfile)&&a.deepseekProvider===b.deepseekProvider&&a.deepseekModel===b.deepseekModel&&a.deepseekReasoningEffort===b.deepseekReasoningEffort&&a.deepseekConversationStorageMode===b.deepseekConversationStorageMode&&a.deepseekConversationStorageDirectory===b.deepseekConversationStorageDirectory&&JSON.stringify(a.mcpServers||[])===JSON.stringify(b.mcpServers||[]);
+const sameModels=(a:Runtime['codex']['models'],b:Runtime['codex']['models'])=>a.length===b.length&&a.every((model,index)=>{const other=b[index];return model.id===other.id&&model.displayName===other.displayName&&model.efforts.length===other.efforts.length&&model.efforts.every((effort,i)=>effort===other.efforts[i])&&(model.serviceTiers||[]).join()===(other.serviceTiers||[]).join();});
 export default memo(SettingsDialog,(a,b)=>a.open===b.open&&sameSettings(a.settings,b.settings)&&sameModels(a.models,b.models)&&a.runtime?.codex.state===b.runtime?.codex.state&&a.runtime?.codex.error===b.runtime?.codex.error&&a.runtime?.deepseekConversationStorage?.defaultHome===b.runtime?.deepseekConversationStorage?.defaultHome&&a.runtime?.deepseekConversationStorage?.nativeHome===b.runtime?.deepseekConversationStorage?.nativeHome);
