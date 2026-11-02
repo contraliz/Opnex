@@ -1862,7 +1862,7 @@ body { min-width: 640px; min-height: 520px; }
 
 /* Routing decision and its plain reason */
 .route-line { max-width:820px; display:flex; align-items:baseline; gap:7px; margin:14px 0 3px; font:10.5px/1.5 var(--font-app); }
-.route-line b { color:#dedee1; font-size:10.5px; font-weight:600; }
+.route-line b { color:#e6e6e8; font-size:13px; font-weight:600; line-height:1.35; }
 .route-sep { color:#5b5b60; }
 
 .pass-panel .turn-activity { max-width:820px; margin:0 0 16px; padding:0; border-left:0; }
@@ -1876,16 +1876,17 @@ body { min-width: 640px; min-height: 520px; }
 .pass-panel .turn-activity .markdown-body { color:#cfcfd2; font-size:12.5px; line-height:1.62; }
 .pass-panel .turn-activity[data-role="worker"] { margin:10px 0 12px; padding-left:10px; border-left:1px solid var(--st-line); }
 
-/* Sections read as markdown headings with a hairline rule and [+]/[−] */
-.pass-panel .disclosure { max-width:820px; overflow:visible; margin:14px 0 0; border:0; border-top:1px solid var(--st-line); border-radius:0; background:transparent; }
-.pass-panel .disclosure-head { width:100%; min-height:30px; display:flex; align-items:baseline; gap:8px; padding:10px 0; border:0; background:transparent; text-align:left; cursor:pointer; }
+/* Sections read as markdown headings with a hairline rule and an arrow toggle.
+   No vertical margin: the rule is the only separator, with equal 12px insets around the text. */
+.pass-panel .disclosure { max-width:820px; overflow:visible; margin:0; border:0; border-top:1px solid var(--st-line); border-radius:0; background:transparent; }
+.pass-panel .disclosure-head { width:100%; min-height:30px; display:flex; align-items:baseline; gap:8px; padding:12px 0; border:0; background:transparent; text-align:left; cursor:pointer; }
 .pass-panel .disclosure-head:hover { background:transparent; }
 .pass-panel .disclosure-head strong { min-width:0; flex:1 1 auto; color:#e4e4e6; font:600 12px/1.5 var(--font-app); overflow-wrap:anywhere; }
 .pass-panel .disclosure-head:hover strong { color:#f2f2f4; }
 .pass-panel .disclosure-toggle { flex:0 0 auto; color:#6f6f74; font:10.5px/1.5 var(--font-app); }
-.pass-panel .disclosure-content { padding:0 0 10px 15px; border-top:0; }
-.pass-panel .workers-panel > .disclosure-head { min-height:30px; padding:10px 0; }
-.pass-panel .workers-panel .disclosure-content { padding:0 0 10px 15px; }
+.pass-panel .disclosure-content { padding:0 0 12px 15px; border-top:0; }
+.pass-panel .workers-panel > .disclosure-head { min-height:30px; padding:12px 0; }
+.pass-panel .workers-panel .disclosure-content { padding:0 0 12px 15px; }
 
 /* Tool calls as a compact mono list */
 .pass-panel .tool-call-log,.pass-panel .tool-call-coverage-unknown { padding:0; color:#8f8f95; font-size:10.5px; }
@@ -1902,7 +1903,7 @@ body { min-width: 640px; min-height: 520px; }
 .pass-panel .escalation-card,.pass-panel .error-card,.pass-panel .approval-card,.pass-panel .worker-status,.pass-panel .legacy-association-note { max-width:820px; margin-left:0; }
 
 /* Final output is the last document block; token usage closes it */
-.pass-panel .final-artifact { max-width:820px; margin:18px 0 0; padding:12px 0 0; border:0; border-top:1px solid var(--st-line); border-radius:0; background:transparent; }
+.pass-panel .final-artifact { max-width:820px; margin:0; padding:12px 0; border:0; border-top:1px solid var(--st-line); border-radius:0; background:transparent; }
 .pass-panel .final-artifact > header { min-height:24px; gap:8px; padding:0; border:0; margin:0 0 2px; }
 .pass-panel .final-artifact > header strong { color:#ececed; font:600 12.5px/1.5 var(--font-app); }
 .pass-panel .final-artifact > header span { color:#76767a; font:9.5px/1.5 var(--font-app); }
@@ -1911,7 +1912,7 @@ body { min-width: 640px; min-height: 520px; }
 .pass-panel .final-artifact-body { max-height:none; overflow:visible; padding:6px 0 0; }
 
 /* Token usage: totals when collapsed, per-model rows when expanded */
-.usage { max-width:820px; margin:10px 0 0; padding-top:6px; border-top:1px solid #232325; color:#8f8f95; }
+.usage { max-width:820px; margin:0; padding:10px 0 0; border-top:1px solid var(--st-line); color:#8f8f95; }
 .usage > summary { display:flex; align-items:baseline; gap:7px; padding:2px 0; list-style:none; cursor:pointer; }
 .usage > summary::-webkit-details-marker { display:none; }
 .usage > summary::after { margin-left:auto; color:#6f6f74; content:"▸"; font:10.5px/1.5 var(--font-app); }
